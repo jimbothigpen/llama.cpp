@@ -30,6 +30,15 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_TQ3_1S:
             mul_mat_q_case<GGML_TYPE_TQ3_1S>(ctx, args, stream);
             break;
+        case GGML_TYPE_TQ3_4S:
+            mul_mat_q_case<GGML_TYPE_TQ3_4S>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q4_0_TQ:
+            mul_mat_q_case<GGML_TYPE_Q4_0_TQ>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q4_1_TQ:
+            mul_mat_q_case<GGML_TYPE_Q4_1_TQ>(ctx, args, stream);
+            break;
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, args, stream);
             break;
@@ -136,7 +145,7 @@ void ggml_cuda_mul_mat_q(
             const int64_t s13 = src1->nb[3] / ts_src1;
             const float * src1_quant = src1_d;
             ggml_cuda_pool_alloc<float> src1_rot(ctx.pool());
-            if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
+            if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S) {
                 const int64_t n_act = ne13 * ne12 * ne11 * ne10;
                 src1_rot.alloc(n_act);
                 CUDA_CHECK(cudaMemcpyAsync(src1_rot.get(), src1_d, n_act*sizeof(float), cudaMemcpyDeviceToDevice, stream));
@@ -209,7 +218,7 @@ void ggml_cuda_mul_mat_q(
         const int64_t s13 = src1->nb[3] / ts_src1;
         const float * src1_quant = src1_d;
         ggml_cuda_pool_alloc<float> src1_rot(ctx.pool());
-        if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
+        if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S || src0->type == GGML_TYPE_TQ3_4S) {
             const int64_t n_act = ne13 * ne12 * ne11 * ne10;
             src1_rot.alloc(n_act);
             CUDA_CHECK(cudaMemcpyAsync(src1_rot.get(), src1_d, n_act*sizeof(float), cudaMemcpyDeviceToDevice, stream));
@@ -289,9 +298,23 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
 
-    // TQ3_0/TQ3_1S: use MMQ for prefill (ne11 >= 64) on NVIDIA tensor-core GPUs.
+    // TQ3_0/TQ3_1S/TQ3_4S: use MMQ for prefill (ne11 >= 64) on NVIDIA tensor-core GPUs.
     // Contiguity guard in ggml_cuda_mul_mat ensures KV cache views use cuBLAS.
-    if ((type == GGML_TYPE_TQ3_0 || type == GGML_TYPE_TQ3_1S) &&
+    if ((type == GGML_TYPE_TQ3_0 || type == GGML_TYPE_TQ3_1S || type == GGML_TYPE_TQ3_4S) &&
+        GGML_CUDA_CC_IS_NVIDIA(cc) &&
+        fp16_mma_hardware_available(cc) &&
+        n_experts == 0) {
+        return ne11 >= 64;
+    }
+
+    if (type == GGML_TYPE_Q4_0_TQ &&
+        GGML_CUDA_CC_IS_NVIDIA(cc) &&
+        fp16_mma_hardware_available(cc) &&
+        n_experts == 0) {
+        return ne11 >= 64;
+    }
+
+    if (type == GGML_TYPE_Q4_1_TQ &&
         GGML_CUDA_CC_IS_NVIDIA(cc) &&
         fp16_mma_hardware_available(cc) &&
         n_experts == 0) {
@@ -309,6 +332,9 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ3_4S:
+        case GGML_TYPE_Q4_0_TQ:
+        case GGML_TYPE_Q4_1_TQ:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
