@@ -1383,7 +1383,31 @@ static void ggml_cuda_op_mul_mat_cublas(
         && src0->type != GGML_TYPE_TQ3_0
         && src0->type != GGML_TYPE_TQ3_1S;
 
-    if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
+    if (src0->type == GGML_TYPE_TQ3_0 && ggml_cuda_tq3_native_prefill_debug_enabled() && src1->type == GGML_TYPE_F32) {
+        if (src1_ncols >= TQ3_PREFILL_MIN_TOKENS) {
+            tq3_prefill_launch(
+                (const block_tq3_0 *) src0_dd_i,
+                src1_ddf_i,
+                dst_dd_i,
+                ne00, row_diff, src1_ncols,
+                stream);
+        } else {
+            ggml_cuda_pool_alloc<float> src0_as_f32(ctx.pool(id), row_diff*ne00);
+            const to_fp32_cuda_t to_fp32_src0 = ggml_get_to_fp32_cuda(src0->type);
+            GGML_ASSERT(to_fp32_src0 != nullptr);
+            to_fp32_src0(src0_dd_i, src0_as_f32.get(), row_diff*ne00, stream);
+
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+            CUBLAS_CHECK(
+                cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                        row_diff, src1_ncols, ne10,
+                        &alpha, src0_as_f32.get(), ne00,
+                                src1_ddf_i,         ne10,
+                        &beta,  dst_dd_i,         ldc));
+        }
+    } else if (src0->type == GGML_TYPE_TQ3_0 || src0->type == GGML_TYPE_TQ3_1S) {
         ggml_cuda_pool_alloc<float> src0_as_f32(ctx.pool(id), row_diff*ne00);
         const to_fp32_cuda_t to_fp32_src0 = ggml_get_to_fp32_cuda(src0->type);
         GGML_ASSERT(to_fp32_src0 != nullptr);
@@ -2378,6 +2402,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src0->type != GGML_TYPE_TQ3_4S;
     bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && tq3_mmq_ok && tq3_1s_mmq_ok;
+
+    if (src0->type == GGML_TYPE_TQ3_0 && ggml_cuda_tq3_native_prefill_debug_enabled()) {
+        use_mul_mat_q = false;
+    }
 
 
     bool any_gpus_with_slow_fp16 = false;
