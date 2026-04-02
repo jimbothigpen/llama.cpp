@@ -1230,16 +1230,6 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_tq3_1s_cuda;
         case GGML_TYPE_TQ3_4S:
             return dequantize_row_tq3_4s_cuda;
-        case GGML_TYPE_TQ3_4SE:
-            return dequantize_row_tq3_4se_cuda;
-        case GGML_TYPE_TQ3_4SV:
-            return dequantize_row_tq3_4sv_cuda;
-        case GGML_TYPE_TQ3_1S_AP1:
-            return dequantize_row_tq3_1s_ap1_cuda;
-        case GGML_TYPE_Q4_0_TQ:
-            return dequantize_row_q4_0_tq_cuda;
-        case GGML_TYPE_Q4_1_TQ:
-            return dequantize_row_q4_1_tq_cuda;
         default:
             return nullptr;
     }
@@ -1299,16 +1289,6 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_tq3_1s_cuda;
         case GGML_TYPE_TQ3_4S:
             return dequantize_row_tq3_4s_cuda;
-        case GGML_TYPE_TQ3_4SE:
-            return dequantize_row_tq3_4se_cuda;
-        case GGML_TYPE_TQ3_4SV:
-            return dequantize_row_tq3_4sv_cuda;
-        case GGML_TYPE_TQ3_1S_AP1:
-            return dequantize_row_tq3_1s_ap1_cuda;
-        case GGML_TYPE_Q4_0_TQ:
-            return dequantize_row_q4_0_tq_cuda;
-        case GGML_TYPE_Q4_1_TQ:
-            return dequantize_row_q4_1_tq_cuda;
         default:
             return nullptr;
     }

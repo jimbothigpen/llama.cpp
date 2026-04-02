@@ -89,9 +89,6 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_TQ3_0:
         case GGML_TYPE_TQ3_1S:
         case GGML_TYPE_TQ3_4S:
-        case GGML_TYPE_Q4_0_TQ:
-        case GGML_TYPE_Q4_1_TQ:
-            return MMQ_Q8_1_DS_LAYOUT_D4;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -182,7 +179,6 @@ static constexpr __device__ int get_mmq_y_device() {
 #define MMQ_DP4A_TXS_Q8_1    tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K*2/QI8_1 + mmq_y/(QI8_1/2), 0}
 #define MMQ_DP4A_TXS_Q2_K    tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K         + mmq_y,           0}
 #define MMQ_DP4A_TXS_Q3_K    tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y,                                         mmq_y*MMQ_TILE_NE_K/8 + mmq_y/8}
-#define MMQ_DP4A_TXS_Q4_0_TQ tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K         + mmq_y,           0}
 #define MMQ_DP4A_TXS_Q4_K    tile_x_sizes{mmq_y*MMQ_TILE_NE_K   + mmq_y, mmq_y*MMQ_TILE_NE_K/QI4_K,                     mmq_y*MMQ_TILE_NE_K/8 + mmq_y/8}
 #define MMQ_DP4A_TXS_Q5_K    tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K/QI5_K   + mmq_y/QI5_K,     mmq_y*MMQ_TILE_NE_K/8 + mmq_y/8}
 #define MMQ_DP4A_TXS_Q6_K    tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K/QI6_K   + mmq_y/QI6_K,     mmq_y*MMQ_TILE_NE_K/8 + mmq_y/8}
@@ -210,8 +206,6 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_IQ4_NL:  return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_TQ3_0:   return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_TQ3_1S:  return MMQ_DP4A_TXS_Q8_0;
-        case GGML_TYPE_Q4_0_TQ: return MMQ_DP4A_TXS_Q4_0_TQ;
-        case GGML_TYPE_Q4_1_TQ: return MMQ_DP4A_TXS_Q4_0_TQ;
         default:                return tile_x_sizes{0, 0, 0};
     }
 }
@@ -256,8 +250,6 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_TQ3_0:   return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_TQ3_1S:  return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_TQ3_4S:  return MMQ_MMA_TILE_X_K_Q8_0;
-        case GGML_TYPE_Q4_0_TQ: return MMQ_MMA_TILE_X_K_Q3_K;
-        case GGML_TYPE_Q4_1_TQ: return MMQ_MMA_TILE_X_K_Q3_K;
         default:                return 0;
     }
 }
@@ -879,7 +871,7 @@ static __device__ __forceinline__ void vec_dot_q4_0_tq_q8_1_dp4a(
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_0_TQ, mmq_y);
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_RESERVED_32, mmq_y);
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + txs.qs;
     const int   * y_qs = (const int   *) y + 4;
@@ -915,7 +907,7 @@ static __device__ __forceinline__ void vec_dot_q4_0_tq_v1_q8_1_dp4a(
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q4_0_TQ;
+    constexpr tile_x_sizes txs = tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K + mmq_y, 0};
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + txs.qs;
     const int   * y_qs = (const int   *) y + 4;
@@ -3609,7 +3601,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + 2*MMQ_TILE_NE_K);
 #else
-    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_0_TQ, mmq_y);
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_RESERVED_32, mmq_y);
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + txs.qs);
 #endif
@@ -3676,7 +3668,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + 2*MMQ_TILE_NE_K);
 #else
-    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q4_0_TQ;
+    constexpr tile_x_sizes txs = tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K + mmq_y, 0};
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + txs.qs);
 #endif
@@ -3815,7 +3807,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_TQ3_4S> {
 };
 
 template <int mmq_x, int mmq_y, bool need_check>
-struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_0_TQ> {
+struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_RESERVED_32> {
     static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q4_0_tq_packed<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
@@ -3823,7 +3815,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_0_TQ> {
 };
 
 template <int mmq_x, int mmq_y, bool need_check>
-struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_1_TQ> {
+struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_RESERVED_33> {
     static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q4_0_tq_v1_packed<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
@@ -4645,8 +4637,6 @@ extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_TQ3_0);
 extern DECL_MMQ_CASE(GGML_TYPE_TQ3_1S);
 extern DECL_MMQ_CASE(GGML_TYPE_TQ3_4S);
-extern DECL_MMQ_CASE(GGML_TYPE_Q4_0_TQ);
-extern DECL_MMQ_CASE(GGML_TYPE_Q4_1_TQ);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);

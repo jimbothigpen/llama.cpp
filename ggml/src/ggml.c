@@ -852,24 +852,9 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
     },
-    [31] = { // GGML_TYPE_Q4_0_4_4
-        .type_name                = "TYPE_Q4_0_4_4 REMOVED, use Q4_0 with runtime repacking",
-        .blck_size                = 0,
-        .type_size                = 0,
-        .is_quantized             = false,
-    },
-    [32] = { // GGML_TYPE_Q4_0_4_8
-        .type_name                = "TYPE_Q4_0_4_8 REMOVED, use Q4_0 with runtime repacking",
-        .blck_size                = 0,
-        .type_size                = 0,
-        .is_quantized             = false,
-    },
-    [33] = { // GGML_TYPE_Q4_0_8_8
-        .type_name                = "TYPE_Q4_0_8_8 REMOVED, use Q4_0 with runtime repacking",
-        .blck_size                = 0,
-        .type_size                = 0,
-        .is_quantized             = false,
-    },
+    [GGML_TYPE_RESERVED_31] = { .type_name = "reserved_31", .blck_size = 0, .type_size = 0, .is_quantized = false, },
+    [GGML_TYPE_RESERVED_32] = { .type_name = "reserved_32", .blck_size = 0, .type_size = 0, .is_quantized = false, },
+    [GGML_TYPE_RESERVED_33] = { .type_name = "reserved_33", .blck_size = 0, .type_size = 0, .is_quantized = false, },
     [GGML_TYPE_TQ1_0] = {
         .type_name                = "tq1_0",
         .blck_size                = QK_K,
@@ -910,18 +895,8 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_tq3_4s,
         .from_float_ref           = NULL,
     },
-    [36] = { // GGML_TYPE_IQ4_NL_4_4
-        .type_name                = "TYPE_IQ4_NL_4_4 REMOVED, use IQ4_NL with runtime repacking",
-        .blck_size                = 0,
-        .type_size                = 0,
-        .is_quantized             = false,
-    },
-    [37] = { // GGML_TYPE_IQ4_NL_4_8
-        .type_name                = "TYPE_IQ4_NL_4_8 REMOVED, use IQ4_NL with runtime repacking",
-        .blck_size                = 0,
-        .type_size                = 0,
-        .is_quantized             = false,
-    },
+    [GGML_TYPE_RESERVED_36] = { .type_name = "reserved_36", .blck_size = 0, .type_size = 0, .is_quantized = false, },
+    [GGML_TYPE_RESERVED_37] = { .type_name = "reserved_37", .blck_size = 0, .type_size = 0, .is_quantized = false, },
     [38] = { // GGML_TYPE_IQ4_NL_8_8
         .type_name                = "TYPE_IQ4_NL_8_8 REMOVED, use IQ4_NL with runtime repacking",
         .blck_size                = 0,
