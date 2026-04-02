@@ -108,8 +108,7 @@ llama_kv_cache::llama_kv_cache(
     };
 
     if (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0) {
-        LLAMA_LOG_WARN("%s: turbo2/turbo3/turbo4 K cache is not yet validated in this CUDA fork; falling back to q8_0 for K\n", __func__);
-        type_k = GGML_TYPE_Q8_0;
+        throw std::runtime_error("turbo2/turbo3/turbo4 K cache is not supported in this CUDA fork; use -ctk q8_0 and turbo cache only on V");
     }
 
     const int adaptive_mode = []() {
