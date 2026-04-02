@@ -2058,8 +2058,26 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
+    if (k->type == GGML_TYPE_TURBO2_0 || k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+        if (q->ne[0] % 128 == 0) {
+            if (!ggml_is_contiguous(q)) {
+                q = ggml_cont(ctx0, q);
+            }
+            q = ggml_turbo_wht(ctx0, q, 0);
+        }
+    }
+
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
+
+    if (v->type == GGML_TYPE_TURBO2_0 || v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0) {
+        if (cur->ne[0] % 128 == 0) {
+            if (!ggml_is_contiguous(cur)) {
+                cur = ggml_cont(ctx0, cur);
+            }
+            cur = ggml_turbo_wht(ctx0, cur, 1);
+        }
+    }
 
     if (wo) {
         cur = build_lora_mm(wo, cur);

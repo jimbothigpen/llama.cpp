@@ -11119,10 +11119,12 @@ void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_ten
     const float * src_data = (const float *)src->data;
     float * dst_data = (float *)dst->data;
 
-    const int gs = 32;  // QK_TQ3_0 — always 32
+    const int gs = (int) src->ne[0];
+    GGML_ASSERT((gs & (gs - 1)) == 0);
     const int64_t n_total = ggml_nelements(src);
     const int64_t n_groups = n_total / gs;
     const float inv_sqrt = 1.0f / sqrtf((float)gs);
+    const int direction = ggml_get_op_params_i32(dst, 0);
 
     const int64_t ith = params->ith;
     const int64_t nth = params->nth;
@@ -11132,12 +11134,11 @@ void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_ten
     for (int64_t g = g0; g < g1; g++) {
         const float * in = src_data + g * gs;
         float * out = dst_data + g * gs;
-        float x[32];
-        // Apply sign flips
+        float x[128];
         for (int i = 0; i < gs; i++) {
-            x[i] = in[i] * (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
+            const float sign = (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
+            x[i] = direction == 0 ? in[i] * sign : in[i];
         }
-        // WHT butterfly
         for (int h = 1; h < gs; h *= 2) {
             for (int i = 0; i < gs; i += h * 2) {
                 for (int j = i; j < i + h; j++) {
@@ -11146,7 +11147,10 @@ void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_ten
                 }
             }
         }
-        for (int i = 0; i < gs; i++) out[i] = x[i] * inv_sqrt;
+        for (int i = 0; i < gs; i++) {
+            const float sign = (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
+            out[i] = x[i] * inv_sqrt * (direction == 0 ? 1.0f : sign);
+        }
     }
 }
 

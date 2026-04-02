@@ -63,7 +63,7 @@
 #include "ggml-cuda/fill.cuh"
 #include "ggml-quants.h"
 #include "ggml-cuda/tq3-native.cuh"
-static void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+#include "ggml-cuda/turbo-quant.cuh"
 #include "ggml-cuda/tq3-prefill.cuh"
 #include "ggml.h"
 
@@ -2315,8 +2315,9 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
+    const bool is_turbo = (src0->type == GGML_TYPE_TURBO2_0 || src0->type == GGML_TYPE_TURBO3_0 || src0->type == GGML_TYPE_TURBO4_0);
     const bool tq3_vec_prefill_ok = (src0->type != GGML_TYPE_TQ3_0 && src0->type != GGML_TYPE_TQ3_1S) || src1->ne[1] == 1;
-    const bool use_mul_mat_vec_q = tq3_vec_prefill_ok
+    const bool use_mul_mat_vec_q = tq3_vec_prefill_ok && !is_turbo
         && ggml_cuda_can_use_mul_mat_vec_q(src0->type, src1->type, dst->type, src1->ne[1], bad_padding_clear);
     const bool use_mul_mat_vec_q_direct = use_mul_mat_vec_q
         && (src0->type != GGML_TYPE_TQ3_0 || ggml_is_contiguous(src0))
@@ -2362,8 +2363,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+    const bool is_turbo = (src0->type == GGML_TYPE_TURBO2_0 || src0->type == GGML_TYPE_TURBO3_0 || src0->type == GGML_TYPE_TURBO4_0);
     const bool tq3_vec_prefill_ok = (src0->type != GGML_TYPE_TQ3_0 && src0->type != GGML_TYPE_TQ3_1S) || src1->ne[1] == 1;
-    const bool use_mul_mat_vec_q = tq3_vec_prefill_ok
+    const bool use_mul_mat_vec_q = tq3_vec_prefill_ok && !is_turbo
         && ggml_cuda_can_use_mul_mat_vec_q(src0->type, src1->type, dst->type, src1->ne[1], bad_padding_clear);
     const bool use_mul_mat_vec_q_direct = use_mul_mat_vec_q
         && (src0->type != GGML_TYPE_TQ3_0 || ggml_is_contiguous(src0))
@@ -4936,6 +4938,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
+                    case GGML_TYPE_TURBO2_0:
+                    case GGML_TYPE_TURBO3_0:
+                    case GGML_TYPE_TURBO4_0:
                     case GGML_TYPE_TQ3_0:
                     case GGML_TYPE_TQ3_1S:
                     case GGML_TYPE_TQ3_4S:
@@ -4958,6 +4963,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_TURBO2_0:
+                    case GGML_TYPE_TURBO3_0:
+                    case GGML_TYPE_TURBO4_0:
                     case GGML_TYPE_TQ3_0:
                     case GGML_TYPE_TQ3_1S:
                     case GGML_TYPE_TQ3_4S:
@@ -4975,6 +4983,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                        op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
                        op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL ||
+                       op->type == GGML_TYPE_TURBO2_0 || op->type == GGML_TYPE_TURBO3_0 || op->type == GGML_TYPE_TURBO4_0 ||
                        op->type == GGML_TYPE_TQ3_0) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);

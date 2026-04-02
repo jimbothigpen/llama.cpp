@@ -852,9 +852,30 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
     },
-    [GGML_TYPE_RESERVED_31] = { .type_name = "reserved_31", .blck_size = 0, .type_size = 0, .is_quantized = false, },
-    [GGML_TYPE_RESERVED_32] = { .type_name = "reserved_32", .blck_size = 0, .type_size = 0, .is_quantized = false, },
-    [GGML_TYPE_RESERVED_33] = { .type_name = "reserved_33", .blck_size = 0, .type_size = 0, .is_quantized = false, },
+    [GGML_TYPE_TURBO2_0] = {
+        .type_name                = "turbo2_0",
+        .blck_size                = QK_TURBO2,
+        .type_size                = sizeof(block_turbo2_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo2_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turbo2_0_ref,
+    },
+    [GGML_TYPE_TURBO3_0] = {
+        .type_name                = "turbo3_0",
+        .blck_size                = QK_TURBO3,
+        .type_size                = sizeof(block_turbo3_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo3_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turbo3_0_ref,
+    },
+    [GGML_TYPE_TURBO4_0] = {
+        .type_name                = "turbo4_0",
+        .blck_size                = QK_TURBO4,
+        .type_size                = sizeof(block_turbo4_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo4_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turbo4_0_ref,
+    },
     [GGML_TYPE_TQ1_0] = {
         .type_name                = "tq1_0",
         .blck_size                = QK_K,
@@ -6061,10 +6082,11 @@ struct ggml_tensor * ggml_cross_entropy_loss_back(
 
 // turbo_wht
 
-struct ggml_tensor * ggml_turbo_wht(struct ggml_context * ctx, struct ggml_tensor * a) {
+struct ggml_tensor * ggml_turbo_wht(struct ggml_context * ctx, struct ggml_tensor * a, int direction) {
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
     result->op     = GGML_OP_TURBO_WHT;
     result->src[0] = a;
+    ggml_set_op_params_i32(result, 0, direction);
     return result;
 }
 
@@ -7676,6 +7698,9 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q6_K:    result = quantize_q6_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ1_0:   result = quantize_tq1_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ2_0:   result = quantize_tq2_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBO2_0: result = quantize_turbo2_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBO3_0: result = quantize_turbo3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBO4_0: result = quantize_turbo4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ3_0:   result = quantize_tq3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ3_1S:  result = quantize_tq3_1s(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_XXS: result = quantize_iq2_xxs(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

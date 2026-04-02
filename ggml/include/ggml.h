@@ -418,9 +418,9 @@ extern "C" {
         GGML_TYPE_F64     = 28,
         GGML_TYPE_IQ1_M   = 29,
         GGML_TYPE_BF16    = 30,
-        GGML_TYPE_RESERVED_31 = 31, // reserved
-        GGML_TYPE_RESERVED_32 = 32, // reserved
-        GGML_TYPE_RESERVED_33 = 33, // reserved
+        GGML_TYPE_TURBO2_0 = 31, // TurboQuant 2-bit KV cache: 2-bit PolarQuant (no QJL)
+        GGML_TYPE_TURBO3_0 = 32, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
+        GGML_TYPE_TURBO4_0 = 33, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TQ1_0   = 34,
         GGML_TYPE_TQ2_0   = 35,
         GGML_TYPE_RESERVED_36 = 36, // reserved
@@ -2579,11 +2579,12 @@ extern "C" {
             struct ggml_tensor  * b,  // labels
             struct ggml_tensor  * c); // gradients of cross_entropy_loss result
 
-    // TurboQuant WHT rotation: out[i] = WHT(sign*in)[i] / sqrt(block_size)
-    // Applied to activations before TQ3_0 weight matmul to eliminate WHT from kernels
+    // TurboQuant Walsh-Hadamard Transform for KV cache graph-side rotation.
+    // direction: 0 = forward, 1 = inverse.
     GGML_API struct ggml_tensor * ggml_turbo_wht(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a);
+            struct ggml_tensor  * a,
+            int                   direction);
 
     // AdamW optimizer step
     // Paper: https://arxiv.org/pdf/1711.05101v3.pdf

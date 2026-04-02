@@ -275,6 +275,32 @@ typedef struct {
 } block_tq3_0;
 static_assert(sizeof(block_tq3_0) == sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_0 block size/padding");
 
+// TurboQuant KV-cache blocks
+#define QK_TURBO2 32
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_TURBO2 / 4];
+} block_turbo2_0;
+static_assert(sizeof(block_turbo2_0) == sizeof(ggml_half) + QK_TURBO2 / 4, "wrong turbo2_0 block size");
+
+#define QK_TURBO3 32
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_TURBO3 / 4];
+    uint8_t    signs[QK_TURBO3 / 8];
+    uint8_t    pad[2];
+} block_turbo3_0;
+static_assert(sizeof(block_turbo3_0) == 16, "turbo3_0 block must be 16 bytes");
+
+#define QK_TURBO4 128
+typedef struct {
+    ggml_half  norm;
+    ggml_half  rnorm;
+    uint8_t    qs[QK_TURBO4 * 3 / 8];
+    uint8_t    signs[QK_TURBO4 / 8];
+} block_turbo4_0;
+static_assert(sizeof(block_turbo4_0) == 2*sizeof(ggml_half) + QK_TURBO4*3/8 + QK_TURBO4/8, "wrong turbo4_0 block size");
+
 // TurboQuant 3-bit with two half-block scales (4.0 bpw)
 typedef struct {
     ggml_half d0;
