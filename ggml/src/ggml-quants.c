@@ -3557,7 +3557,8 @@ void dequantize_row_tq3_4sv(const block_tq3_4sv * GGML_RESTRICT x, float * GGML_
 
 size_t quantize_tq3_4sv(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void) quant_weights;
-    const size_t row_size = ggml_row_size(GGML_TYPE_RESERVED_37, n_per_row);
+    assert(n_per_row % QK_TQ3_0 == 0);
+    const size_t row_size = sizeof(block_tq3_4sv) * n_per_row / QK_TQ3_0;
     quantize_row_tq3_4sv_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
@@ -3565,13 +3566,14 @@ size_t quantize_tq3_4sv(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
 size_t quantize_tq3_1s_ap1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void) quant_weights;
     assert(n_per_row % QK_TQ3_1S_AP1 == 0);
-    const size_t row_size = ggml_row_size(GGML_TYPE_RESERVED_31, n_per_row);
+    const size_t row_size = sizeof(block_tq3_1s_ap1) * n_per_row / QK_TQ3_1S_AP1;
     quantize_row_tq3_1s_ap1_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
 
 size_t quantize_q4_0_tq_v0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    const size_t row_size = ggml_row_size(GGML_TYPE_RESERVED_32, n_per_row);
+    assert(n_per_row % QK4_0 == 0);
+    const size_t row_size = sizeof(block_q4_0_tq_v0) * n_per_row / QK4_0;
     if (!quant_weights) {
         quantize_row_q4_0_tq_v0_ref(src, dst, (int64_t) nrow * n_per_row);
         return nrow * row_size;
@@ -3582,7 +3584,8 @@ size_t quantize_q4_0_tq_v0(const float * GGML_RESTRICT src, void * GGML_RESTRICT
 }
 
 size_t quantize_q4_1_tq_v1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    const size_t row_size = ggml_row_size(GGML_TYPE_RESERVED_33, n_per_row);
+    assert(n_per_row % QK4_1 == 0);
+    const size_t row_size = sizeof(block_q4_0_tq_v1) * n_per_row / QK4_1;
     if (!quant_weights) {
         quantize_row_q4_0_tq_v1_ref(src, dst, (int64_t) nrow * n_per_row);
         return nrow * row_size;

@@ -101,8 +101,15 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     const auto is_turbo_kv_type = [](ggml_type type) {
-        return type == GGML_TYPE_TQ3_0;
+        return type == GGML_TYPE_TQ3_0 ||
+               type == GGML_TYPE_TURBO2_0 ||
+               type == GGML_TYPE_TURBO3_0 ||
+               type == GGML_TYPE_TURBO4_0;
     };
+
+    if (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0) {
+        throw std::runtime_error("turbo2/turbo3/turbo4 K cache is not supported in this CUDA fork; use -ctk q8_0 and turbo cache only on V");
+    }
 
     const int adaptive_mode = []() {
         const char * env = std::getenv("TURBO_LAYER_ADAPTIVE");
@@ -156,14 +163,17 @@ llama_kv_cache::llama_kv_cache(
 
         const bool cpu_bound_layer = ggml_backend_buft_is_host(buft);
         if (cpu_bound_layer) {
-            const bool layer_has_turbo =
-                is_turbo_kv_type(layer_type_k) || is_turbo_kv_type(layer_type_v);
+            const bool layer_has_turbo = is_turbo_kv_type(layer_type_k) || is_turbo_kv_type(layer_type_v);
             if (layer_has_turbo) {
-                layer_type_k = GGML_TYPE_Q8_0;
-                layer_type_v = GGML_TYPE_Q8_0;
-                if (!warned_cpu_fallback) {
-                    LLAMA_LOG_WARN("%s: TQ3_0 KV cache falling back to q8_0 for CPU-bound layers (partial offload)\n", __func__);
-                    warned_cpu_fallback = true;
+                if (layer_type_k == GGML_TYPE_TQ3_0 || layer_type_v == GGML_TYPE_TQ3_0) {
+                    layer_type_k = GGML_TYPE_Q8_0;
+                    layer_type_v = GGML_TYPE_Q8_0;
+                    if (!warned_cpu_fallback) {
+                        LLAMA_LOG_WARN("%s: TQ3_0 KV cache falling back to q8_0 for CPU-bound layers (partial offload)\n", __func__);
+                        warned_cpu_fallback = true;
+                    }
+                } else {
+                    throw std::runtime_error("turbo2/turbo3/turbo4 KV cache requires all layers on GPU. Use -ngl 99.");
                 }
             }
         }

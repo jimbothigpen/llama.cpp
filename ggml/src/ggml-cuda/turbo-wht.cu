@@ -1,54 +1,46 @@
 #include "common.cuh"
 
-// Dynamic Walsh-Hadamard Transform — supports any power-of-2 group size
-// Group size = head_dim, passed via op_params[1]
-// Uses shared memory for groups > 32 (warp size)
+static __device__ __constant__ float turbo_wht_s1[128] = {-1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1};
+static __device__ __constant__ float turbo_wht_s2[128] = {1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1};
+static __device__ __constant__ float turbo_wht_s1_v[128] = {1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,1,-1,-1,-1,1,-1,1,-1,-1,1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,1,1,-1};
+static __device__ __constant__ float turbo_wht_s2_v[128] = {-1,1,1,-1,1,-1,-1,-1,1,-1,1,1,1,1,1,1,1,1,1,1,-1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,1,-1,-1,-1,1,-1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,-1,1,1,-1,1,1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,1};
 
-// Sign pattern from golden ratio hash
-static __device__ float turbo_sign(int i) {
-    return ((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f;
-}
-
-static __global__ void turbo_wht_kernel(const float * __restrict__ src, float * __restrict__ dst,
-                                         const int64_t n_total, const int group_size, const int direction) {
-    extern __shared__ float smem[];
-
-    const int64_t group_id = blockIdx.x;
-    const int tid = threadIdx.x;
-    const int64_t base = group_id * group_size;
-
-    if (base + tid >= n_total) return;
-
-    // Load + apply first signs (forward) or just load (inverse)
-    float val;
-    if (direction == 0) {
-        val = src[base + tid] * turbo_sign(tid);
-    } else {
-        val = src[base + tid];
+static __global__ void turbo_wht_kernel(
+        const float * __restrict__ src,
+        float * __restrict__ dst,
+        const int64_t n_total,
+        const int direction) {
+    const int64_t group_idx = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t n_groups = n_total / 128;
+    if (group_idx >= n_groups) {
+        return;
     }
-    smem[tid] = val;
-    __syncthreads();
 
-    // WHT butterfly in shared memory
-    for (int step = 1; step < group_size; step <<= 1) {
-        int partner = tid ^ step;
-        float other = smem[partner];
-        __syncthreads();
-        if (tid & step) {
-            smem[tid] = other - val;
-        } else {
-            smem[tid] = other + val;
+    const float * in = src + group_idx * 128;
+    float * out = dst + group_idx * 128;
+
+    float x[128];
+    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2_v;
+    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1_v;
+
+    for (int i = 0; i < 128; ++i) {
+        x[i] = in[i] * s_first[i];
+    }
+
+    for (int h = 1; h < 128; h *= 2) {
+        for (int i = 0; i < 128; i += h * 2) {
+            for (int j = i; j < i + h; ++j) {
+                const float a = x[j];
+                const float b = x[j + h];
+                x[j] = a + b;
+                x[j + h] = a - b;
+            }
         }
-        val = smem[tid];
-        __syncthreads();
     }
 
-    // Normalize + apply second signs (inverse) or just normalize (forward)
-    float norm = 1.0f / sqrtf((float)group_size);
-    if (direction == 0) {
-        dst[base + tid] = val * norm;
-    } else {
-        dst[base + tid] = val * norm * turbo_sign(tid);
+    constexpr float inv_sqrt_128 = 0.08838834764831845f;
+    for (int i = 0; i < 128; ++i) {
+        out[i] = x[i] * inv_sqrt_128 * s_second[i];
     }
 }
 
@@ -56,20 +48,19 @@ void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src = dst->src[0];
     GGML_ASSERT(src->type == GGML_TYPE_F32);
 
-    const float * src_d = (const float *)src->data;
-    float * dst_d = (float *)dst->data;
+    const float * src_d = (const float *) src->data;
+    float * dst_d = (float *) dst->data;
 
-    int32_t params[2];
-    memcpy(params, dst->op_params, sizeof(params));
-    const int direction = params[0];
-    // Group size from ne[0] (head_dim) — must be power of 2
-    const int group_size = (int)src->ne[0];
-    GGML_ASSERT((group_size & (group_size - 1)) == 0); // power of 2
+    int32_t direction = 0;
+    memcpy(&direction, dst->op_params, sizeof(direction));
 
     const int64_t n_total = ggml_nelements(src);
-    const int64_t n_groups = n_total / group_size;
+    GGML_ASSERT(n_total % 128 == 0);
+    const int64_t n_groups = n_total / 128;
 
-    cudaStream_t stream = ctx.stream();
-    turbo_wht_kernel<<<n_groups, group_size, group_size * sizeof(float), stream>>>(
-        src_d, dst_d, n_total, group_size, direction);
+    const int threads = 256;
+    const int blocks = (n_groups + threads - 1) / threads;
+
+    turbo_wht_kernel<<<blocks, threads, 0, ctx.stream()>>>(
+            src_d, dst_d, n_total, direction);
 }

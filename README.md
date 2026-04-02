@@ -69,7 +69,7 @@ For the cleanest baseline, run with normal KV cache:
   --port 8090
 ```
 
-For the TurboQuant KV-cache path used in local experiments, use:
+For the validated TurboQuant KV-cache path on this branch, use:
 
 ```bash
 ./build/bin/llama-server \
@@ -77,13 +77,14 @@ For the TurboQuant KV-cache path used in local experiments, use:
   -ngl 99 \
   -fa on \
   -c 8192 \
-  -ctk tq3_0 \
-  -ctv tq3_0 \
+  -ctk q8_0 \
+  -ctv turbo3_0 \
   --port 8090
 ```
 
 Notes:
-- `-ctk tq3_0 -ctv tq3_0` is the currently supported TurboQuant KV-cache setting in this fork.
+- `-ctk q8_0 -ctv turbo3_0` is the currently supported TurboQuant KV-cache setting on the KV branch.
+- `turbo2_0/turbo3_0/turbo4_0` for `K` are not supported in this CUDA fork.
 - Keep weight-format and KV-cache experiments separate when benchmarking.
 - If you want the exact weight-format baseline, leave KV cache at the default types.
 

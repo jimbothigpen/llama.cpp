@@ -871,7 +871,7 @@ static __device__ __forceinline__ void vec_dot_q4_0_tq_q8_1_dp4a(
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_RESERVED_32, mmq_y);
+    constexpr tile_x_sizes txs = tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K + mmq_y, 0};
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + txs.qs;
     const int   * y_qs = (const int   *) y + 4;
@@ -3601,7 +3601,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + 2*MMQ_TILE_NE_K);
 #else
-    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_RESERVED_32, mmq_y);
+    constexpr tile_x_sizes txs = tile_x_sizes{mmq_y*MMQ_TILE_NE_K*2 + mmq_y, mmq_y*MMQ_TILE_NE_K + mmq_y, 0};
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + txs.qs);
 #endif
@@ -3804,22 +3804,6 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_TQ3_4S> {
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq3_4s<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
-};
-
-template <int mmq_x, int mmq_y, bool need_check>
-struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_RESERVED_32> {
-    static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q4_0_tq_packed<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
-    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q4_0_tq_q8_1_dp4a<mmq_x, mmq_y>;
-};
-
-template <int mmq_x, int mmq_y, bool need_check>
-struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_RESERVED_33> {
-    static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q4_0_tq_v1_packed<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
-    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q4_0_tq_v1_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
 template <int mmq_x, int mmq_y, bool need_check>

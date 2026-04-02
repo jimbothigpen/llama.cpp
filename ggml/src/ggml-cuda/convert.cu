@@ -3,6 +3,13 @@
 
 #include <cstdint>
 
+extern void dequantize_row_turbo3_0_fp16_cuda(const void * vx, half * y, int64_t k, cudaStream_t stream);
+extern void dequantize_row_turbo3_0_fp32_cuda(const void * vx, float * y, int64_t k, cudaStream_t stream);
+extern void dequantize_row_turbo3_0_bf16_cuda(const void * vx, nv_bfloat16 * y, int64_t k, cudaStream_t stream);
+extern void dequantize_row_turbo3_0_fp16_nc_cuda(const void * vx, half * y, int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03, int64_t s01, int64_t s02, int64_t s03, cudaStream_t stream);
+extern void dequantize_row_turbo3_0_fp32_nc_cuda(const void * vx, float * y, int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03, int64_t s01, int64_t s02, int64_t s03, cudaStream_t stream);
+extern void dequantize_row_turbo3_0_bf16_nc_cuda(const void * vx, nv_bfloat16 * y, int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03, int64_t s01, int64_t s02, int64_t s03, cudaStream_t stream);
+
 #define CUDA_Q8_0_NE_ALIGN 2048
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
@@ -1224,6 +1231,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
             return convert_unary_cont_cuda<nv_bfloat16>;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_fp16_cuda;
         case GGML_TYPE_TQ3_0:
             return dequantize_row_tq3_0_cuda;
         case GGML_TYPE_TQ3_1S:
@@ -1289,6 +1298,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_tq3_1s_cuda;
         case GGML_TYPE_TQ3_4S:
             return dequantize_row_tq3_4s_cuda;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_fp32_cuda;
         default:
             return nullptr;
     }
@@ -1308,6 +1319,8 @@ to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK5_1, QR5_1, dequantize_q5_1>;
         case GGML_TYPE_Q8_0:
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_fp16_nc_cuda;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16>;
         default:
@@ -1329,6 +1342,8 @@ to_bf16_nc_cuda_t ggml_get_to_bf16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK5_1, QR5_1, dequantize_q5_1>;
         case GGML_TYPE_Q8_0:
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_bf16_nc_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cuda<half, nv_bfloat16>;
         default:
@@ -1350,6 +1365,8 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK5_1, QR5_1, dequantize_q5_1>;
         case GGML_TYPE_Q8_0:
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
+        case GGML_TYPE_TURBO3_0:
+            return dequantize_row_turbo3_0_fp32_nc_cuda;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16, float>;
         default:

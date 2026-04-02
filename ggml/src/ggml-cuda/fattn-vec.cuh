@@ -75,17 +75,17 @@ static __global__ void flash_attn_ext_vec(
 #endif // GGML_USE_HIP
 
     constexpr int nthreads    = ggml_cuda_fattn_vec_get_nthreads_device();
-    constexpr int nthreads_KQ = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_KQ_q;
-    constexpr int nthreads_V  = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_V_q;
+    constexpr int nthreads_KQ = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_TURBO2_0 || type_K == GGML_TYPE_TURBO3_0 || type_K == GGML_TYPE_TURBO4_0) ? 128 / cpy_nb : nthreads_KQ_q;
+    constexpr int nthreads_V  = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_TURBO2_0 || type_V == GGML_TYPE_TURBO3_0 || type_V == GGML_TYPE_TURBO4_0) ? 128 / cpy_nb : nthreads_V_q;
 
     static_assert(WARP_SIZE % nthreads_KQ == 0, "bad nthreads_K");
     static_assert(WARP_SIZE % nthreads_V  == 0, "bad nthreads_V");
 
-    constexpr int V_rows_per_thread = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16) ? 2*cpy_ne : 4;
+    constexpr int V_rows_per_thread = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_TURBO2_0 || type_V == GGML_TYPE_TURBO3_0) ? 2*cpy_ne : 4;
     constexpr int V_cols_per_iter   = WARP_SIZE / nthreads_V;
 
     constexpr vec_dot_KQ_t vec_dot_KQ = get_vec_dot_KQ<type_K, D, nthreads_KQ>();
-    constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16 && type_K != GGML_TYPE_BF16;
+    constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16 && type_K != GGML_TYPE_TURBO2_0 && type_K != GGML_TYPE_TURBO3_0;
 #ifdef V_DOT2_F32_F16_AVAILABLE
     constexpr dequantize_V_t dequantize_V = get_dequantize_V<type_V, half,  V_rows_per_thread>();
 #else
@@ -284,10 +284,10 @@ static __global__ void flash_attn_ext_vec(
             for (int offset = nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[j], offset, WARP_SIZE));
             }
-            const float KQ_max_scale = expf(KQ_max[j] - KQ_max_new[j]);
+            const float KQ_max_scale = __expf(KQ_max[j] - KQ_max_new[j]);
             KQ_max[j] = KQ_max_new[j];
 
-            KQ_reg[j] = expf(KQ_reg[j] - KQ_max[j]);
+            KQ_reg[j] = __expf(KQ_reg[j] - KQ_max[j]);
             KQ_sum[j] = KQ_sum[j]*KQ_max_scale + KQ_reg[j];
             KQ[j*nthreads + tid] = KQ_reg[j];
 
@@ -320,21 +320,24 @@ static __global__ void flash_attn_ext_vec(
             for (int j = 0; j < ncols; ++j) {
                 KQ_k[j] = __half2half2(KQ[j*nthreads + k]);
             }
+
+            // Sparse V: skip V dequant+accumulate when all attention weights are negligible.
+            // At 32K context, 90%+ of positions have weight < 1e-6. Skipping them eliminates
+            // V memory reads + dequant compute for those positions. Zero quality impact.
+            // TheTom validated: 1e-4 through 1e-8 all give identical PPL.
+            {
+                bool all_neg = true;
+                for (int j = 0; j < ncols; ++j) {
+                    if (__hgt(__low2half(KQ_k[j]), __float2half(1e-4f))) { all_neg = false; break; }
+                }
+                if (all_neg) continue;
+            }
+
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
                 half2 tmp[V_rows_per_thread/2];
-                if constexpr (type_V == GGML_TYPE_BF16) {
-                    float2 tmp_f[V_rows_per_thread/2];
-                    dequantize_V(V + k*nb21, tmp_f,
-                        2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
-#pragma unroll
-                    for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
-                        tmp[i_VKQ_1] = __float22half2_rn(tmp_f[i_VKQ_1]);
-                    }
-                } else {
-                    dequantize_V(V + k*nb21, tmp,
-                        2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
-                }
+                dequantize_V(V + k*nb21, tmp,
+                    2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
 #pragma unroll
                 for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
 #pragma unroll
@@ -349,6 +352,16 @@ static __global__ void flash_attn_ext_vec(
             for (int j = 0; j < ncols; ++j) {
                 KQ_k[j] = KQ[j*nthreads + k];
             }
+
+            // Sparse V: skip V dequant+accumulate when all attention weights are negligible.
+            {
+                bool all_neg = true;
+                for (int j = 0; j < ncols; ++j) {
+                    if (KQ_k[j] > 1e-4f) { all_neg = false; break; }
+                }
+                if (all_neg) continue;
+            }
+
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
                 float2 tmp[V_rows_per_thread/2];
@@ -379,10 +392,10 @@ static __global__ void flash_attn_ext_vec(
             }
 
             const float kqmax_new_j = fmaxf(sink, KQ_max[j]);
-            const float KQ_max_scale = expf(KQ_max[j] - kqmax_new_j);
+            const float KQ_max_scale = __expf(KQ_max[j] - kqmax_new_j);
             KQ_max[j] = kqmax_new_j;
 
-            KQ_sum[j] = KQ_sum[j]*KQ_max_scale + (threadIdx.x == 0 ? expf(sink - KQ_max[j]) : 0.0f);
+            KQ_sum[j] = KQ_sum[j]*KQ_max_scale + (threadIdx.x == 0 ? __expf(sink - KQ_max[j]) : 0.0f);
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
@@ -428,7 +441,7 @@ static __global__ void flash_attn_ext_vec(
 
         float kqmax_new = KQ_max_shared[j_VKQ][threadIdx.x];
         kqmax_new = warp_reduce_max(kqmax_new);
-        const float kqmax_scale = expf(KQ_max[j_VKQ] - kqmax_new);
+        const float kqmax_scale = __expf(KQ_max[j_VKQ] - kqmax_new);
         KQ_max[j_VKQ] = kqmax_new;
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
@@ -566,14 +579,17 @@ void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_ten
     template void ggml_cuda_flash_attn_ext_vec_case                         \
     <D, type_K, type_V>(ggml_backend_cuda_context & ctx, ggml_tensor * dst) \
 
-#define EXTERN_DECL_FATTN_VEC_CASES(D, type_K)             \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_F16);  \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q4_0); \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q4_1); \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_0); \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_1); \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q8_0); \
-    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_BF16); \
+#define EXTERN_DECL_FATTN_VEC_CASES(D, type_K)                \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_F16);     \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q4_0);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q4_1);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_0);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_1);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q8_0);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_BF16);    \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_TURBO2_0);\
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_TURBO3_0);\
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_TURBO4_0);\
 
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q4_0)
@@ -582,6 +598,9 @@ EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q8_0)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_BF16)
+EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_TURBO2_0)
+EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_TURBO3_0)
+EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_TURBO4_0)
 
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q4_0)
@@ -590,6 +609,9 @@ EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q8_0)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_BF16)
+EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_TURBO2_0)
+EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_TURBO3_0)
+EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_TURBO4_0)
 
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q4_0)
@@ -598,3 +620,6 @@ EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q8_0)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_BF16)
+EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_TURBO2_0)
+EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_TURBO3_0)
+EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_TURBO4_0)
