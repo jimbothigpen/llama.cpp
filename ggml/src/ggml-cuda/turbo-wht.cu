@@ -1,45 +1,47 @@
 #include "common.cuh"
 
-static __device__ float turbo_sign(int i) {
-    return ((((unsigned) i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f;
-}
+static __device__ __constant__ float turbo_wht_s1[128] = {-1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1};
+static __device__ __constant__ float turbo_wht_s2[128] = {1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1};
+static __device__ __constant__ float turbo_wht_s1_v[128] = {1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,1,-1,-1,-1,1,-1,1,-1,-1,1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,1,1,-1};
+static __device__ __constant__ float turbo_wht_s2_v[128] = {-1,1,1,-1,1,-1,-1,-1,1,-1,1,1,1,1,1,1,1,1,1,1,-1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,1,-1,-1,-1,1,-1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,-1,1,1,-1,1,1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,1};
 
 static __global__ void turbo_wht_kernel(
         const float * __restrict__ src,
         float * __restrict__ dst,
         const int64_t n_total,
         const int direction) {
-    extern __shared__ float smem[];
-
-    const int64_t group_id = blockIdx.x;
-    const int tid = threadIdx.x;
-    const int64_t base = group_id * 128;
-
-    if (base + tid >= n_total) {
+    const int64_t group_idx = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t n_groups = n_total / 128;
+    if (group_idx >= n_groups) {
         return;
     }
 
-    float val = src[base + tid];
-    if (direction == 0) {
-        val *= turbo_sign(tid);
-    }
-    smem[tid] = val;
-    __syncthreads();
+    const float * in = src + group_idx * 128;
+    float * out = dst + group_idx * 128;
 
-    for (int step = 1; step < 128; step <<= 1) {
-        const int partner = tid ^ step;
-        const float other = smem[partner];
-        __syncthreads();
-        smem[tid] = (tid & step) ? (other - val) : (other + val);
-        val = smem[tid];
-        __syncthreads();
+    float x[128];
+    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2_v;
+    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1_v;
+
+    for (int i = 0; i < 128; ++i) {
+        x[i] = in[i] * s_first[i];
     }
 
-    float out = val * (1.0f / sqrtf(128.0f));
-    if (direction != 0) {
-        out *= turbo_sign(tid);
+    for (int h = 1; h < 128; h *= 2) {
+        for (int i = 0; i < 128; i += h * 2) {
+            for (int j = i; j < i + h; ++j) {
+                const float a = x[j];
+                const float b = x[j + h];
+                x[j] = a + b;
+                x[j + h] = a - b;
+            }
+        }
     }
-    dst[base + tid] = out;
+
+    constexpr float inv_sqrt_128 = 0.08838834764831845f;
+    for (int i = 0; i < 128; ++i) {
+        out[i] = x[i] * inv_sqrt_128 * s_second[i];
+    }
 }
 
 void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -49,14 +51,16 @@ void ggml_cuda_op_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const float * src_d = (const float *) src->data;
     float * dst_d = (float *) dst->data;
 
-    int32_t params[1];
-    memcpy(params, dst->op_params, sizeof(params));
-    const int direction = params[0];
+    int32_t direction = 0;
+    memcpy(&direction, dst->op_params, sizeof(direction));
 
     const int64_t n_total = ggml_nelements(src);
     GGML_ASSERT(n_total % 128 == 0);
     const int64_t n_groups = n_total / 128;
 
-    turbo_wht_kernel<<<n_groups, 128, 128 * sizeof(float), ctx.stream()>>>(
+    const int threads = 256;
+    const int blocks = (n_groups + threads - 1) / threads;
+
+    turbo_wht_kernel<<<blocks, threads, 0, ctx.stream()>>>(
             src_d, dst_d, n_total, direction);
 }

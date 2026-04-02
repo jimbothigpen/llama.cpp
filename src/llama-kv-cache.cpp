@@ -107,6 +107,11 @@ llama_kv_cache::llama_kv_cache(
                type == GGML_TYPE_TURBO4_0;
     };
 
+    if (type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0) {
+        LLAMA_LOG_WARN("%s: turbo2/turbo3/turbo4 K cache is not yet validated in this CUDA fork; falling back to q8_0 for K\n", __func__);
+        type_k = GGML_TYPE_Q8_0;
+    }
+
     const int adaptive_mode = []() {
         const char * env = std::getenv("TURBO_LAYER_ADAPTIVE");
         const int mode = env ? std::atoi(env) : 0;

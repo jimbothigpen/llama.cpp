@@ -11113,18 +11113,24 @@ void ggml_compute_forward_cross_entropy_loss_back(
 
 // ggml_compute_forward_turbo_wht
 
+static const float turbo_wht_s1[128] = {-1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1};
+static const float turbo_wht_s2[128] = {1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1};
+static const float turbo_wht_s1_v[128] = {1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,1,-1,-1,-1,1,-1,1,-1,-1,1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,1,1,-1};
+static const float turbo_wht_s2_v[128] = {-1,1,1,-1,1,-1,-1,-1,1,-1,1,1,1,1,1,1,1,1,1,1,-1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,1,-1,-1,-1,1,-1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,1,1,-1,1,-1,1,1,-1,1,1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,1};
+
 void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
     GGML_ASSERT(src->type == GGML_TYPE_F32);
     const float * src_data = (const float *)src->data;
     float * dst_data = (float *)dst->data;
 
-    const int gs = (int) src->ne[0];
-    GGML_ASSERT((gs & (gs - 1)) == 0);
     const int64_t n_total = ggml_nelements(src);
-    const int64_t n_groups = n_total / gs;
-    const float inv_sqrt = 1.0f / sqrtf((float)gs);
+    GGML_ASSERT(n_total % 128 == 0);
+    const int64_t n_groups = n_total / 128;
+    const float inv_sqrt_128 = 0.08838834764831845f;
     const int direction = ggml_get_op_params_i32(dst, 0);
+    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2_v;
+    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1_v;
 
     const int64_t ith = params->ith;
     const int64_t nth = params->nth;
@@ -11132,24 +11138,23 @@ void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_ten
     const int64_t g1 = (n_groups * (ith + 1)) / nth;
 
     for (int64_t g = g0; g < g1; g++) {
-        const float * in = src_data + g * gs;
-        float * out = dst_data + g * gs;
+        const float * in = src_data + g * 128;
+        float * out = dst_data + g * 128;
         float x[128];
-        for (int i = 0; i < gs; i++) {
-            const float sign = (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
-            x[i] = direction == 0 ? in[i] * sign : in[i];
+        for (int i = 0; i < 128; i++) {
+            x[i] = in[i] * s_first[i];
         }
-        for (int h = 1; h < gs; h *= 2) {
-            for (int i = 0; i < gs; i += h * 2) {
+        for (int h = 1; h < 128; h *= 2) {
+            for (int i = 0; i < 128; i += h * 2) {
                 for (int j = i; j < i + h; j++) {
                     float a = x[j], b = x[j + h];
-                    x[j] = a + b; x[j + h] = a - b;
+                    x[j] = a + b;
+                    x[j + h] = a - b;
                 }
             }
         }
-        for (int i = 0; i < gs; i++) {
-            const float sign = (((((unsigned)i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f);
-            out[i] = x[i] * inv_sqrt * (direction == 0 ? 1.0f : sign);
+        for (int i = 0; i < 128; i++) {
+            out[i] = x[i] * inv_sqrt_128 * s_second[i];
         }
     }
 }
