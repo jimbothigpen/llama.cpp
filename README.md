@@ -88,6 +88,23 @@ Notes:
 - Keep weight-format and KV-cache experiments separate when benchmarking.
 - If you want the exact weight-format baseline, leave KV cache at the default types.
 
+For the current `Qwen3.5-27B TQ3_4S` public build on a `16 GB` GPU, the more practical server profile is:
+
+```bash
+./build/bin/llama-server \
+  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
+  -ngl 99 \
+  -fa on \
+  -c 32768 \
+  -ctk q8_0 \
+  -ctv turbo3_0 \
+  --cache-ram 0 \
+  --reasoning off \
+  --port 8090
+```
+
+This avoids the search-time CUDA OOM we hit with larger contexts once Open WebUI inflated the prompt.
+
 ## Benchmark
 
 ```bash
