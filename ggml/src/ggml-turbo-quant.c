@@ -6,6 +6,8 @@
  * for use as --cache-type-k turbo3 --cache-type-v turbo3 in llama-server.
  */
 
+#define _USE_MATH_DEFINES
+
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"
@@ -14,6 +16,10 @@
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 /* ---------- constants ---------- */
 
