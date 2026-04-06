@@ -816,9 +816,6 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_K:    return GGML_TYPE_Q6_K;
         case LLAMA_FTYPE_MOSTLY_TQ1_0:   return GGML_TYPE_TQ1_0;
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
-        case LLAMA_FTYPE_MOSTLY_TQ3_0:   return GGML_TYPE_TQ3_0;
-        case LLAMA_FTYPE_MOSTLY_TQ3_1S:  return GGML_TYPE_TQ3_1S;
-        case LLAMA_FTYPE_MOSTLY_TQ3_4S:  return GGML_TYPE_TQ3_4S;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_XS;
@@ -830,6 +827,9 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
+        case LLAMA_FTYPE_MOSTLY_TQ3_0:   return GGML_TYPE_TQ3_0;
+        case LLAMA_FTYPE_MOSTLY_TQ3_1S:  return GGML_TYPE_TQ3_1S;
+        case LLAMA_FTYPE_MOSTLY_TQ3_4S:  return GGML_TYPE_TQ3_4S;
 
         default: return GGML_TYPE_COUNT;
     }
@@ -1327,78 +1327,3 @@ quantize_state_impl * llama_quant_init(
     return new quantize_state_impl(*model, params);
 }
 
-void llama_quant_free(quantize_state_impl * qs) {
-    delete qs;
-}
-
-llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * desc) {
-    struct llama_model_params mparams = llama_model_default_params();
-    auto * model = new llama_model(mparams);
-
-    model->arch = llm_arch_from_string(desc->architecture);
-
-    // infer llm_type: only LLM_TYPE_70B matters for quantization logic
-    if (model->arch == LLM_ARCH_LLAMA && desc->n_layer == 80 && desc->n_head != desc->n_head_kv) {
-        model->type = LLM_TYPE_70B;
-    }
-
-    model->hparams.n_embd             = desc->n_embd;
-    model->hparams.n_embd_head_k_full = desc->n_embd_head_k;
-    model->hparams.n_embd_head_v_full = desc->n_embd_head_v;
-    model->hparams.n_layer            = desc->n_layer;
-    model->hparams.n_expert           = desc->n_expert;
-
-    for (uint32_t i = 0; i < desc->n_layer; i++) {
-        model->hparams.n_head_arr[i]    = desc->n_head;
-        model->hparams.n_head_kv_arr[i] = desc->n_head_kv;
-        model->hparams.n_ff_arr[i]      = desc->n_ff;
-    }
-
-    return model;
-}
-
-bool llama_quant_tensor_allows_quantization(
-        const quantize_state_impl * qs,
-        const ggml_tensor * tensor) {
-    return tensor_allows_quantization(qs->params, qs->model.arch, tensor);
-}
-
-void llama_quant_compute_types(
-        quantize_state_impl * qs,
-        llama_ftype ftype,
-        ggml_tensor ** tensors,
-        ggml_type * result_types,
-        size_t n_tensors) {
-    // reset per-computation state
-    qs->n_attention_wv      = 0;
-    qs->n_ffn_down          = 0;
-    qs->n_ffn_gate          = 0;
-    qs->n_ffn_up            = 0;
-    qs->i_attention_wv      = 0;
-    qs->i_ffn_down          = 0;
-    qs->i_ffn_gate          = 0;
-    qs->i_ffn_up            = 0;
-    qs->n_fallback          = 0;
-    qs->has_imatrix         = false;
-    qs->has_tied_embeddings = true;
-
-    // build metadata from tensor names
-    std::vector<tensor_metadata> metadata(n_tensors);
-    for (size_t i = 0; i < n_tensors; i++) {
-        metadata[i].name = ggml_get_name(tensors[i]);
-    }
-
-    // initialize counters and categories
-    init_quantize_state_counters(*qs, metadata);
-
-    // use a local copy of params with the requested ftype
-    llama_model_quantize_params local_params = *qs->params;
-    local_params.ftype = ftype;
-
-    ggml_type default_type = llama_ftype_get_default_type(ftype);
-
-    // compute types
-    for (size_t i = 0; i < n_tensors; i++) {
-        result_types[i] = llama_tensor_get_type(*qs, &local_params, tensors[i], default_type, metadata[i]);
-    }
-}

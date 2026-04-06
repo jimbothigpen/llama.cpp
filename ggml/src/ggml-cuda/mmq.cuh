@@ -3989,13 +3989,6 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_TURBO3_0> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q4_0_tq_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
- {
-    static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q4_0_tq_v1_packed<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
-    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q4_0_tq_v1_q8_1_dp4a<mmq_x, mmq_y>;
-};
-
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q2_K> {
     static constexpr int              vdr          = VDR_Q2_K_Q8_1_MMQ;
