@@ -1,6 +1,7 @@
 #include "getrows.cuh"
 #include "dequantize.cuh"
 #include "convert.cuh"
+#include "tq3_4s_scale.cuh"
 
 __constant__ static const float tq3_0_centroids_getrows_cuda[8] = {
     -1.996684f, -1.291398f, -0.740341f, -0.247508f,
@@ -360,18 +361,11 @@ static __global__ void k_get_rows_tq3_4s(
     const block_tq3_4s * x = (const block_tq3_4s *) src0_row + block;
     dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
 
-    auto ratio4s = [] __device__ (uint8_t byte) -> float {
-        if (byte == 0) return 0.0f;
-        const int exp = (byte >> 5) - 9;
-        const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
-        return ldexpf(mantissa, exp);
-    };
-
     const float ds[4] = {
-        ratio4s(x->d[0]),
-        ratio4s(x->d[1]),
-        ratio4s(x->d[2]),
-        ratio4s(x->d[3]),
+        tq3_4s_scale_decode(x->d[0]),
+        tq3_4s_scale_decode(x->d[1]),
+        tq3_4s_scale_decode(x->d[2]),
+        tq3_4s_scale_decode(x->d[3]),
     };
 
     const int g = lane / 8;
@@ -579,6 +573,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_TQ3_4S:
             get_rows_cuda_tq3_4s(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TQ3_1S_AP1:
+            get_rows_cuda_tq3_1s_ap1(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         default:

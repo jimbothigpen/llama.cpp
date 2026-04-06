@@ -1,4 +1,5 @@
 #include "quantize.cuh"
+#include "tq3-native.cuh"
 #include <cstdint>
 
 __launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
@@ -314,6 +315,67 @@ void quantize_mmq_q8_1_cuda(
             GGML_ABORT("fatal error");
             break;
     }
+}
+
+static __global__ void quantize_mmq_q8_1_tq3_d4(
+        const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int ne1, const int ne2) {
+    const int lane = threadIdx.x;
+    const int warp = threadIdx.y;
+
+    const int64_t block128 = blockIdx.y;
+    const int64_t i0_base = (block128 * 4 + warp) * QK8_1;
+    if (i0_base >= ne0) {
+        return;
+    }
+
+    const int64_t i1 = blockIdx.x;
+    const int64_t i2 = blockIdx.z % ne2;
+    const int64_t i3 = blockIdx.z / ne2;
+    const int64_t i01 = ids ? ids[i1] : i1;
+
+    const int64_t i00 = i0_base + lane;
+    const float xi = i00 < ne00 ? x[i3*s03 + i2*s02 + i01*s01 + i00] : 0.0f;
+
+    float val = xi * ggml_cuda_tq3_sign(lane);
+#pragma unroll
+    for (int step = 1; step < QK_TQ3_0; step <<= 1) {
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        val = (lane & step) ? (other - val) : (other + val);
+    }
+    val /= sqrtf((float) QK_TQ3_0);
+
+    float amax = fabsf(val);
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
+    }
+
+    const float d_inv = amax == 0.0f ? 0.0f : 127.0f / amax;
+    const int8_t q = amax == 0.0f ? 0 : (int8_t) roundf(val * d_inv);
+
+    block_q8_1_mmq * y = (block_q8_1_mmq *) vy;
+    const int64_t ib0 = blockIdx.z * ((int64_t) ne1 * gridDim.y);
+    const int64_t ib = ib0 + blockIdx.y * ne1 + blockIdx.x;
+
+    y[ib].qs[warp * QK8_1 + lane] = q;
+    if (lane == 0) {
+        y[ib].d4[warp] = amax == 0.0f ? 0.0f : 1.0f / d_inv;
+    }
+}
+
+void quantize_mmq_q8_1_cuda_tq3(
+        const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(mmq_get_q8_1_ds_layout(type_src0) == MMQ_Q8_1_DS_LAYOUT_D4);
+    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
+
+    const int64_t block_num_y = (ne0 + 4*QK8_1 - 1) / (4*QK8_1);
+    const dim3 num_blocks(ne1, block_num_y, ne2*ne3);
+    const dim3 block_size(QK8_1, 4, 1);
+    quantize_mmq_q8_1_tq3_d4<<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
 }
 
 void quantize_mmq_mxfp4_cuda(const float *                    x,
