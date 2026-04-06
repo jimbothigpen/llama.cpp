@@ -575,7 +575,6 @@ static void ggml_cuda_get_rows_switch_src0_type(
             get_rows_cuda_tq3_4s(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
-        case GGML_TYPE_TQ3_1S_AP1:
             get_rows_cuda_tq3_1s_ap1(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;

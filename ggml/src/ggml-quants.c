@@ -3275,7 +3275,7 @@ void dequantize_row_tq3_4se(const block_tq3_4se * GGML_RESTRICT x, float * GGML_
 
 size_t quantize_tq3_4se(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void) quant_weights;
-    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4SE, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4S, n_per_row);
     quantize_row_tq3_4se_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
@@ -3557,7 +3557,7 @@ void dequantize_row_tq3_4sv(const block_tq3_4sv * GGML_RESTRICT x, float * GGML_
 
 size_t quantize_tq3_4sv(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void) quant_weights;
-    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4SV, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_4S, n_per_row);
     quantize_row_tq3_4sv_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
@@ -3565,13 +3565,13 @@ size_t quantize_tq3_4sv(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
 size_t quantize_tq3_1s_ap1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void) quant_weights;
     assert(n_per_row % QK_TQ3_1S_AP1 == 0);
-    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_1S_AP1, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_1S, n_per_row);
     quantize_row_tq3_1s_ap1_ref(src, dst, (int64_t) nrow * n_per_row);
     return nrow * row_size;
 }
 
 size_t quantize_q4_0_tq_v0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_0_TQ, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TURBO3_0, n_per_row);
     if (!quant_weights) {
         quantize_row_q4_0_tq_v0_ref(src, dst, (int64_t) nrow * n_per_row);
         return nrow * row_size;
@@ -3582,7 +3582,7 @@ size_t quantize_q4_0_tq_v0(const float * GGML_RESTRICT src, void * GGML_RESTRICT
 }
 
 size_t quantize_q4_1_tq_v1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_1_TQ, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TURBO3_0, n_per_row);
     if (!quant_weights) {
         quantize_row_q4_0_tq_v1_ref(src, dst, (int64_t) nrow * n_per_row);
         return nrow * row_size;
@@ -6680,31 +6680,14 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                     }
                 }
             } break;
-        case GGML_TYPE_TQ3_1S_AP1:
-            {
-                const block_tq3_1s_ap1 * q = (const block_tq3_1s_ap1 *) data;
-                for (size_t i = 0; i < nb; ++i) {
-                    if (__builtin_popcount((unsigned) q[i].mask) != 1) {
-                        return false;
-                    }
-                }
-            } break;
+        
         case GGML_TYPE_TQ3_4S:
-        case GGML_TYPE_TQ3_4SE:
-        case GGML_TYPE_TQ3_4SV:
-            // u8 scales can't be NaN/Inf — nothing to validate
-            break;
-        case GGML_TYPE_Q4_0_TQ:
+                case GGML_TYPE_TURBO3_0:
             {
                 GGML_UNUSED(data);
                 GGML_UNUSED(nb);
             } break;
-        case GGML_TYPE_Q4_1_TQ:
-            {
-                GGML_UNUSED(data);
-                GGML_UNUSED(nb);
-            } break;
-        case GGML_TYPE_IQ1_S:
+                case GGML_TYPE_IQ1_S:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq1_s, data, nb);
             } break;
