@@ -403,3 +403,62 @@ void quantize_mmq_mxfp4_cuda(const float *                    x,
 
     quantize_mmq_mxfp4<<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
 }
+
+// Fused WHT rotation + q8_1 quantization for MMVQ decode path.
+// Eliminates temp buffer, memcpy, and separate rotation kernel.
+static __global__ void quantize_q8_1_tq3_fused(
+        const float * __restrict__ x, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const uint3 ne2_fastdiv) {
+    const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+    if (i0 >= ne0) return;
+
+    const int64_t i23 = blockIdx.z;
+    const int64_t i2 = i23 % ne2_fastdiv.x;
+    const int64_t i3 = i23 / ne2_fastdiv.x;
+    const int64_t i1 = blockIdx.y;
+
+    block_q8_1 * y = (block_q8_1 *) vy;
+    const int64_t ib = i23*ne1*(ne0/QK8_1) + i1*(ne0/QK8_1) + i0/QK8_1;
+    const int lane = i0 % QK8_1;
+
+    // Load activation
+    const int64_t i00 = i0 % ne00;
+    const float xi = x[i3*s03 + i2*s02 + i1*s01 + i00];
+
+    // WHT rotation in-register using warp shuffles
+    float val = xi * (((((unsigned)(i00 % 32)) * 0x9E3779B9u) >> 31) & 1 ? -1.0f : 1.0f);
+    #pragma unroll
+    for (int step = 1; step < 32; step <<= 1) {
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        val = (lane & step) ? (other - val) : (other + val);
+    }
+    val /= sqrtf(32.0f);
+
+    // Quantize
+    float amax = fabsf(val);
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset));
+    }
+    const float d = amax / 127.0f;
+    const int8_t q = d > 0.0f ? (int8_t)roundf(val / d) : 0;
+
+    y[ib].qs[lane] = q;
+    if (lane == 0) {
+        y[ib].ds.x = __float2half(d);
+        y[ib].ds.y = __float2half(0.0f);  // sum not needed for TQ3 MMVQ
+    }
+}
+
+void quantize_row_q8_1_cuda_tq3_fused(
+        const float * x, void * vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % QK8_1 == 0);
+    const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
+    const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    quantize_q8_1_tq3_fused<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+}
