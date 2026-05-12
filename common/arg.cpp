@@ -945,6 +945,18 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
+        if (ctx_arg.params.list_sidecar_types) {
+            common_load_sidecar_plugins(ctx_arg.params.sidecar_plugin_paths);
+            const auto types = llama_sidecar_list_types();
+            if (types.empty()) {
+                printf("(no sidecar handler types registered)\n");
+            } else {
+                for (const auto & t : types) {
+                    printf("%s\n", t.c_str());
+                }
+            }
+            exit(0);
+        }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
@@ -2515,6 +2527,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("whether to offload host tensor operations to device (default: %s)", params.no_op_offload ? "false" : "true"),
         [](common_params & params, bool value) {
             params.no_op_offload = !value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--sidecar-load-plugin"}, "PATH.so",
+        "dlopen() an out-of-tree sidecar handler plugin (.so on Linux) and call its\n"
+        "llama_sidecar_plugin_init() to register additional handler types.\n"
+        "Repeatable. Plugins load in argument order before any sidecar GGUF is opened.",
+        [](common_params & params, const std::string & value) {
+            params.sidecar_plugin_paths.push_back(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--list-sidecar-types"},
+        "print all registered sidecar handler types and exit",
+        [](common_params & params) {
+            params.list_sidecar_types = true;
         }
     ));
     add_opt(common_arg(

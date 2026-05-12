@@ -167,6 +167,7 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
         cur = ggml_add(ctx0, cur_mlp, ffn_inp);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

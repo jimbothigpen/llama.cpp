@@ -296,6 +296,7 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_layer_ffn(ggml_tensor *  
     cb(cur, "ffn_out", il);
 
     cur = build_cvec(cur, il);
+    cur = build_sidecar(cur, il);
     cb(cur, "l_out", il);
 
     return cur;

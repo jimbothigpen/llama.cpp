@@ -5,6 +5,7 @@
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#include "llama-sidecar.h"
 #include "llama-impl.h"
 
 #include "ggml-cpp.h"
@@ -117,6 +118,8 @@ struct llama_context {
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
+
+    void set_sidecars(std::vector<llama_sidecar_handler_ptr> chain);
 
     bool set_adapter_cvec(
             const float * data,
@@ -270,6 +273,14 @@ private:
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
+    std::unique_ptr<std::vector<llama_sidecar_handler_ptr>> sidecars;
+
+    // Sidecar-owned LoRA adapters (populated by set_adapter_sidecar, empty until GGUF loading added).
+    // Preserved across set_adapters_lora calls so user --lora flags cannot clobber them.
+    std::map<llama_adapter_lora *, float> sidecar_owned_loras;
+
+    bool sidecars_post_compute_pending   = false;
+    int  sidecars_post_compute_n_outputs = 0;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

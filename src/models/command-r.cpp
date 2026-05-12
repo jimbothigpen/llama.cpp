@@ -118,6 +118,7 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
         cur = ggml_add(ctx0, cur, attn_out);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

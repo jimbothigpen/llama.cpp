@@ -1,4 +1,5 @@
 #include "llama-graph.h"
+#include "llama-sidecar.h"
 
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -965,6 +966,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
     loras            (params.loras),
+    sidecars         (params.sidecars),
     mctx             (params.mctx),
     cross            (params.cross),
     samplers         (params.samplers),
@@ -985,6 +987,35 @@ ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
                  int   il) const {
     return cvec->apply_to(ctx0, cur, il);
+}
+
+ggml_tensor * llm_graph_context::build_sidecar(
+         ggml_tensor * cur,
+                 int   il) const {
+    if (!sidecars || sidecars->empty()) {
+        return cur;
+    }
+    for (const auto & h : *sidecars) {
+        if (h) {
+            cur = h->apply_to(ctx0, cur, il);
+        }
+    }
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_sidecar_expert(
+         ggml_tensor * experts,
+         ggml_tensor * selected_experts,
+                 int   il) const {
+    if (!sidecars || sidecars->empty()) {
+        return experts;
+    }
+    for (const auto & h : *sidecars) {
+        if (h) {
+            experts = h->apply_to_expert(ctx0, experts, selected_experts, il);
+        }
+    }
+    return experts;
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm(
@@ -1680,6 +1711,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         experts = ggml_mul(ctx0, experts, s);
         cb(experts, "ffn_moe_down_scaled", il);
     }
+
+    experts = build_sidecar_expert(experts, selected_experts, il);
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);
