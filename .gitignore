@@ -44,6 +44,9 @@
 /tags
 /.build/
 /build*
+
+# Companion project symlinks (local-path; set up manually per README)
+/tools/quantize-cost
 /release
 /debug
 /libllama.so
