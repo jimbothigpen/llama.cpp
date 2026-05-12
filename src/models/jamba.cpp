@@ -177,6 +177,7 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
         cur = ggml_add(ctx0, ffn_inp, cur);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

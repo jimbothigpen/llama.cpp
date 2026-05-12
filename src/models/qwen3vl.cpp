@@ -141,6 +141,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
         cur = ggml_add(ctx0, cur, ffn_inp);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         if (il < (int) n_deepstack_layers) {

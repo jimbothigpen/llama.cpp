@@ -1382,6 +1382,12 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         }
     }
 
+    if (!params.sidecar_plugin_paths.empty()) {
+        if (!common_load_sidecar_plugins(params.sidecar_plugin_paths)) {
+            return res;
+        }
+    }
+
     if (!params.lora_init_without_apply) {
         common_set_adapter_lora(lctx, params.lora_adapters);
     }
@@ -1517,6 +1523,55 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
 
     llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
 }
+
+#if defined(_WIN32)
+
+bool common_load_sidecar_plugins(const std::vector<std::string> & paths) {
+    if (paths.empty()) return true;
+    LOG_ERR("%s: --sidecar-load-plugin is not supported on Windows\n", __func__);
+    return false;
+}
+
+#else
+
+#include <dlfcn.h>
+
+bool common_load_sidecar_plugins(const std::vector<std::string> & paths) {
+    using plugin_init_fn = int (*)(void);
+
+    for (const auto & path : paths) {
+        LOG_INF("%s: loading sidecar plugin '%s' ...\n", __func__, path.c_str());
+
+        void * h = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        if (!h) {
+            LOG_ERR("%s: dlopen failed for '%s': %s\n", __func__, path.c_str(), dlerror());
+            return false;
+        }
+
+        dlerror();
+        plugin_init_fn init = reinterpret_cast<plugin_init_fn>(
+                dlsym(h, "llama_sidecar_plugin_init"));
+        const char * sym_err = dlerror();
+        if (!init || sym_err) {
+            LOG_ERR("%s: plugin '%s' missing 'llama_sidecar_plugin_init' (dlsym: %s)\n",
+                    __func__, path.c_str(), sym_err ? sym_err : "null pointer");
+            dlclose(h);
+            return false;
+        }
+
+        const int rc = init();
+        if (rc != 0) {
+            LOG_ERR("%s: plugin '%s' init returned %d\n", __func__, path.c_str(), rc);
+            return false;
+        }
+
+        // Intentionally leak the handle — plugin code must remain mapped.
+        (void) h;
+    }
+    return true;
+}
+
+#endif
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {
     auto mparams = llama_model_default_params();

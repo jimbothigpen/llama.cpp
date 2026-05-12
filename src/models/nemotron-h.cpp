@@ -252,6 +252,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
     }
 
     cur = build_cvec(cur, il);
+    cur = build_sidecar(cur, il);
     cb(cur, "l_out", il);
 
     return cur;

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "llama-cpp.h"
+#include "llama-sidecar.h"
 
 #include "ggml-opt.h"
 #include "ggml.h"
@@ -501,6 +502,9 @@ struct common_params {
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
     std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
 
+    std::vector<std::string> sidecar_plugin_paths; // paths to .so plugins (dlopen'd before model load)
+    bool list_sidecar_types = false;               // print registered sidecar types and exit
+
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
@@ -882,6 +886,10 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const commo
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
+
+// dlopen() each plugin .so and call its llama_sidecar_plugin_init() to register handlers.
+// Returns false (and logs) on first failure; callers should treat this as fatal.
+bool common_load_sidecar_plugins(const std::vector<std::string> & paths);
 
 // model endpoint from env
 std::string common_get_model_endpoint();

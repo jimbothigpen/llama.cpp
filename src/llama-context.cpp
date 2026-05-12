@@ -36,6 +36,7 @@ llama_context::llama_context(
     model(model),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
+    sidecars(std::make_unique<std::vector<llama_sidecar_handler_ptr>>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
     // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
     //     may need to be backend-dependent
@@ -658,6 +659,17 @@ void llama_context::synchronize() {
 
     ggml_backend_sched_synchronize(sched.get());
 
+    if (sidecars_post_compute_pending && logits.data && sidecars_post_compute_n_outputs > 0) {
+        const int n_vocab = model.vocab.n_tokens();
+        for (const auto & h : *sidecars) {
+            if (h) {
+                h->post_compute_logits(logits.data, n_vocab, sidecars_post_compute_n_outputs);
+            }
+        }
+    }
+    sidecars_post_compute_pending   = false;
+    sidecars_post_compute_n_outputs = 0;
+
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
     // this should only happen when using batch size 1 to evaluate a batch
@@ -1194,6 +1206,16 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
         return;
     }
 
+    // Stash sidecar-owned adapters so this call cannot clobber them.
+    // They will be re-merged after the user's adapters are applied.
+    std::vector<std::pair<llama_adapter_lora *, float>> preserved;
+    for (const auto & kv : sidecar_owned_loras) {
+        auto it = loras->find(kv.first);
+        if (it != loras->end()) {
+            preserved.emplace_back(kv.first, it->second);
+        }
+    }
+
     loras.reset(new llama_adapter_loras());
 
     for (size_t i = 0; i < n_adapters; i ++) {
@@ -1202,6 +1224,15 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
         }
     }
 
+    for (const auto & kv : preserved) {
+        loras->insert(kv);
+    }
+
+    sched_need_reserve = true;
+}
+
+void llama_context::set_sidecars(std::vector<llama_sidecar_handler_ptr> chain) {
+    sidecars.reset(new std::vector<llama_sidecar_handler_ptr>(std::move(chain)));
     sched_need_reserve = true;
 }
 
@@ -1842,6 +1873,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                if (!sidecars->empty()) {
+                    sidecars_post_compute_pending = true;
+                }
             }
         }
 
@@ -1943,6 +1977,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
+    sidecars_post_compute_n_outputs = (int) n_outputs_all;
 
     // set output mappings
     if (n_outputs > 0) {
@@ -2295,6 +2330,7 @@ llm_graph_params llama_context::graph_params(
         /*.backend_cpu =*/ backend_cpu,
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
+        /*.sidecars    =*/ sidecars.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.samplers    =*/ sampling.samplers,

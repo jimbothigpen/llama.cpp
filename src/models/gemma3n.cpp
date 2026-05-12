@@ -255,6 +255,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
         }
         cur = corrected;                                                       // [n_embd, n_tokens, n_altup]
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

@@ -175,6 +175,7 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
         cb(cur, "ffn_residual", il);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer
