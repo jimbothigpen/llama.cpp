@@ -165,6 +165,7 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
             cur = ggml_scale(ctx0, cur, 0.5F);
         }
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

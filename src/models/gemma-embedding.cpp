@@ -161,6 +161,7 @@ llama_model_gemma_embedding::graph::graph(const llama_model & model, const llm_g
         cur = ggml_add(ctx0, cur, sa_out);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

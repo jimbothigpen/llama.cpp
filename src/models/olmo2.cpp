@@ -183,6 +183,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
         cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

@@ -249,6 +249,7 @@ llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_p
         cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer
@@ -351,6 +352,7 @@ llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

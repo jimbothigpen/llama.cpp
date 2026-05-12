@@ -139,6 +139,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
         // Residual connection
         inpL = ggml_add(ctx0, cur, ffn_inp);
         inpL = build_cvec(inpL, il);
+        inpL = build_sidecar(inpL, il);
         cb(inpL, "l_out", il);
     }
 

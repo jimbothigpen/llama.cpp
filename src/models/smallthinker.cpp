@@ -166,6 +166,7 @@ llama_model_smallthinker::graph<iswa>::graph(const llama_model & model, const ll
         cur = ggml_add(ctx0, cur, ffn_inp);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

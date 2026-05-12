@@ -255,6 +255,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cur = ggml_add(ctx0, cur, ffn_out);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
     }
 

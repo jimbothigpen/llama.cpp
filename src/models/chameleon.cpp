@@ -165,6 +165,7 @@ llama_model_chameleon::graph::graph(const llama_model & model, const llm_graph_p
         cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
+        cur = build_sidecar(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer
