@@ -562,6 +562,11 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
 
+    // Select the backend buffer type for tensors at layer il. Used by sidecar
+    // plugins that allocate per-layer tensors and need them on the right device.
+    // Returns nullptr if model is null or il is out of range.
+    LLAMA_API ggml_backend_buffer_type_t llama_model_select_buft(const struct llama_model * model, int32_t il);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 

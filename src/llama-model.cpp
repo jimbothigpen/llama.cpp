@@ -2196,6 +2196,12 @@ int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
 
+ggml_backend_buffer_type_t llama_model_select_buft(const llama_model * model, int32_t il) {
+    if (!model || il < 0 || il >= (int32_t) model->hparams.n_layer) {
+        return nullptr;
+    }
+    return model->select_buft(il);
+}
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
