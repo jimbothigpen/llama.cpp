@@ -98,6 +98,7 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define FA_TYPE_Q5_1      7u
 #define FA_TYPE_Q8_0      8u
 #define FA_TYPE_Q1_0     41u
+#define FA_TYPE_TURBOQ2_0 60u
 #define FA_TYPE_TURBOQ3_0 61u
 #define FA_TYPE_TURBOQ4_0 62u
 
@@ -114,6 +115,7 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_Q5_1:     return uint(QUANT_K_Q5_1);
         case FA_TYPE_Q8_0:     return uint(QUANT_K_Q8_0);
         case FA_TYPE_Q1_0:     return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        case FA_TYPE_TURBOQ2_0: return uint(QUANT_K_TURBOQ2_0);
         case FA_TYPE_TURBOQ3_0: return uint(QUANT_K_TURBOQ3_0);
         case FA_TYPE_TURBOQ4_0: return uint(QUANT_K_TURBOQ4_0);
         default:               return 1u;
