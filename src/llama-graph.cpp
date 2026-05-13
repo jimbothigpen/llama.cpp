@@ -2030,6 +2030,15 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
+        // TurboQuant: inverse WHT on FA output when V values are WHT-rotated.
+        // The FA kernel does inline V dequant but does NOT un-rotate; that's done here.
+        if (v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0) {
+            if (cur->ne[0] % 128 == 0) {
+                if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
+                cur = ggml_turbo_wht(ctx0, cur, 1);  // 1 = inverse
+            }
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -2095,6 +2104,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
         cb(kqv, "kqv", il);
+
+        // TurboQuant: inverse WHT on attention output (non-FA path)
+        if (v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0) {
+            if (kqv->ne[0] % 128 == 0) {
+                if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
+                kqv = ggml_turbo_wht(ctx0, kqv, 1);
+            }
+        }
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
         if (v_mla) {
@@ -2272,6 +2289,14 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    // TurboQuant pre-rotate-queries: O(d log d) WHT rotation via custom op
+    // When K is WHT-rotated (turboq3/turboq4), Q must also be rotated for
+    // <Q_rot, K_rot> = <Q, K> to hold and produce correct attention scores.
+    if (k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0) {
+        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+        q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
+    }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
