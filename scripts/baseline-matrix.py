@@ -124,7 +124,11 @@ def run_perplexity(
 def run_bench(
     host: str, backend: str, model: Path, ctk: str, ctv: str, timeout: int,
 ) -> tuple[Optional[dict], str, int]:
+    # Wrap under the per-host advisory file lock so concurrent compile
+    # jobs don't skew throughput numbers. run_perplexity() is
+    # compile-tolerant and does NOT use the wrapper.
     cmd = [
+        str(REPO_ROOT / "scripts/with-bench-mutex.sh"),
         binary_path(backend, "llama-bench"),
         "-m", str(model),
         "-ngl", "999",
