@@ -3127,6 +3127,14 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         path = FA_COOPMAT2;
     }
 
+    // TURBOQ3_0 K/V uses a struct binding (block_turboq3_0) wired into the
+    // flash_attn_dequant.glsl aliased-SSBO-view abstraction, which is only
+    // included by the FA_SCALAR shader. cm1/cm2 turboq3 support will land
+    // with the WHT/MLA work in a later phase.
+    if (k_type == GGML_TYPE_TURBOQ3_0 || v_type == GGML_TYPE_TURBOQ3_0) {
+        path = FA_SCALAR;
+    }
+
     switch (path) {
     case FA_SCALAR:
         return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
@@ -4620,7 +4628,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_Q5_0], "set_rows_q5_0" #itype, set_rows_q5_0 ## itype ## _len, set_rows_q5_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_Q5_1], "set_rows_q5_1" #itype, set_rows_q5_1 ## itype ## _len, set_rows_q5_1 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_Q8_0], "set_rows_q8_0" #itype, set_rows_q8_0 ## itype ## _len, set_rows_q8_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
-        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_IQ4_NL], "set_rows_iq4_nl" #itype, set_rows_iq4_nl ## itype ## _len, set_rows_iq4_nl ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_IQ4_NL], "set_rows_iq4_nl" #itype, set_rows_iq4_nl ## itype ## _len, set_rows_iq4_nl ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_0], "set_rows_turboq3_0" #itype, set_rows_turboq3_0 ## itype ## _len, set_rows_turboq3_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ4_0], "set_rows_turboq4_0" #itype, set_rows_turboq4_0 ## itype ## _len, set_rows_turboq4_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
 
     SET_ROWS(_i32)
     SET_ROWS(_i64)
@@ -10440,7 +10450,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_SET_ROWS:
         {
             uint32_t ne = ggml_nelements(src0);
-            if (ggml_is_quantized(dst->type)) {
+            if (dst->type == GGML_TYPE_TURBOQ3_0 ||
+                dst->type == GGML_TYPE_TURBOQ4_0) {
+                // turbo SET_ROWS uses 128 threads per block (WHT needs full
+                // workgroup-wide reductions); one workgroup per block.
+                ne = CEIL_DIV(ne, ggml_blck_size(dst->type));
+            } else if (ggml_is_quantized(dst->type)) {
                 // quants run 32 threads each doing QUANT_K elements
                 ne = CEIL_DIV(ne, 32 * ggml_blck_size(dst->type));
             } else {
@@ -16020,6 +16035,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_TURBOQ3_0:
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
@@ -16083,6 +16099,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_TURBOQ3_0:
+                    case GGML_TYPE_TURBOQ4_0:
                         return true;
                     default:
                         return false;
@@ -16107,6 +16125,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_IQ4_NL:
+                        // GGML_TYPE_TURBOQ{3,4}_0 NOT supported here: the
+                        // non-SET_ROWS quantize() path doesn't apply WHT;
+                        // KV cache writes route through SET_ROWS instead.
                         return true;
                     default:
                         break;
