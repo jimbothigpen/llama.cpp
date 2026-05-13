@@ -7,6 +7,7 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
+#include "ggml-quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
@@ -208,6 +209,14 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
+// Forward declarations — defined below, after utility functions
+static void ggml_vec_dot_turboq3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_turboq4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
@@ -402,6 +411,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
+    },
+    [GGML_TYPE_TURBOQ3_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turboq3_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turboq3_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBOQ4_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turboq4_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turboq4_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
     },
 };
 
@@ -3383,6 +3404,48 @@ enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct g
     cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
 
     return ggml_graph_compute(cgraph, &cplan);
+}
+
+// TurboQuant3 vec_dot: dequantize turboq3 block to f32, then dot with f32 operand.
+// Used by CPU flash attention for models with D not supported by CUDA FA (e.g. D=192).
+// Heap-allocates the temp buffer so it works for n > 4096 (b1a6f79b3).
+static void ggml_vec_dot_turboq3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+
+    float * tmp = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp != NULL);
+    ggml_get_type_traits(GGML_TYPE_TURBOQ3_0)->to_float(vx, tmp, n);
+
+    const float * y = (const float *)vy;
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += tmp[i] * y[i];
+    }
+    free(tmp);
+    *s = sum;
+}
+
+// TurboQuant4 vec_dot: dequantize turboq4 block to f32, then dot with f32 operand.
+static void ggml_vec_dot_turboq4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+
+    float * tmp = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp != NULL);
+    ggml_get_type_traits(GGML_TYPE_TURBOQ4_0)->to_float(vx, tmp, n);
+
+    const float * y = (const float *)vy;
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += tmp[i] * y[i];
+    }
+    free(tmp);
+    *s = sum;
 }
 
 void ggml_cpu_fp32_to_fp32(const float * x, float * y, int64_t n) {
