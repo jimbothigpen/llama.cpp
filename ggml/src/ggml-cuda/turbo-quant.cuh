@@ -403,13 +403,13 @@ static __device__ __forceinline__ uint8_t turbo_nearest_centroid_2bit(float val)
 // Phase 1 Step 3 scope (see recon/08). Re-introduce when TURBOQ2_0 enum lands.
 
 // ============================================================================
-// Weight compression types (TQ3_1S, TQ4_1S)
+// Weight compression types (WHT3_0, WHT4_0)
 // These use N(0,1) centroids (NOT N(0,1/128) like KV cache types)
 // and require inverse WHT (RHT) after centroid lookup.
 // ============================================================================
 
-#define QR_TQ4_1S 1  // dequantize produces 2 consecutive elements
-#define QR_TQ3_1S 1
+#define QR_WHT4_0 1  // dequantize produces 2 consecutive elements
+#define QR_WHT3_0 1
 
 // ---- Weight centroids: Lloyd-Max for N(0,1) ----
 
