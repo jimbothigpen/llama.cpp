@@ -39,6 +39,7 @@ def main() -> int:
             "weight_quant":     (d.get("model") or {}).get("weight_quant_tag"),
             "ctk":              (d.get("kv_cache") or {}).get("ctk"),
             "ctv":              (d.get("kv_cache") or {}).get("ctv"),
+            "adaptive_mode":    d.get("adaptive_mode"),
             "ppl":              ppl_block.get("ppl"),
             "ppl_stddev":       ppl_block.get("stddev"),
             "ppl_chunks":       d.get("ppl_chunks"),
@@ -87,7 +88,7 @@ def main() -> int:
                   "PP tps | dPP%vs_best | TG tps | dTG%vs_best | imatrix |")
         md.append("|---|---|---|---|---|---|---|---|---|")
         # Sort within cell: weight quant, then ctk, then ctv
-        for r in sorted(rs, key=lambda x: (x["weight_quant"] or "", x["ctk"] or "", x["ctv"] or "")):
+        for r in sorted(rs, key=lambda x: (x["weight_quant"] or "", x["ctk"] or "", x["ctv"] or "", x.get("adaptive_mode") or 0)):
             dppl = (f"{(r['ppl']-best_ppl)/best_ppl*100:+.2f}%"
                     if r["ppl"] is not None and best_ppl else "")
             dpp  = (f"{(r['pp_tps']-best_pp)/best_pp*100:+.2f}%"
@@ -97,7 +98,9 @@ def main() -> int:
             ppl_str = f"{r['ppl']:.4f}" if r['ppl'] is not None else "—"
             pp_str  = f"{r['pp_tps']:.2f}" if r['pp_tps'] is not None else "—"
             tg_str  = f"{r['tg_tps']:.2f}" if r['tg_tps'] is not None else "—"
-            md.append(f"| {r['weight_quant']} | {r['ctk']}/{r['ctv']} | "
+            la = r.get("adaptive_mode")
+            kv_label = f"{r['ctk']}/{r['ctv']}" + (f"  la{la}" if la else "")
+            md.append(f"| {r['weight_quant']} | {kv_label} | "
                       f"{ppl_str} | {dppl} | {pp_str} | {dpp} | "
                       f"{tg_str} | {dtg} | "
                       f"{'yes' if r['imatrix'] else 'no'} |")
