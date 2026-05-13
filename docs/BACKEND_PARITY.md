@@ -210,7 +210,7 @@ quants where imatrix is not optional.
 
 Initial backend coverage audit performed against fork tips:
 
-- thetom/feature/alpha-scaling
+- thetom/feature/turboquant-kv-cache (originally measured against `feature/alpha-scaling`; TQ-KV is a strict superset — see `recon/06-thetom-branches.md`. Re-audit Vulkan shader counts after Phase 1 cherry-pick.)
 - buun/master
 - carlosfundora/1-bit-turbo
 - turbotan/main + turbotan/experiment/hip-tq3-support
