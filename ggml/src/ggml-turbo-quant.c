@@ -10,22 +10,27 @@
 #include "ggml-common.h"
 #include "ggml-impl.h"
 
+#define _USE_MATH_DEFINES
 #include <math.h>
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+/* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
+GGML_API int turboq3_cpu_wht_group_size = 0;
+
 /* ---------- constants ---------- */
 
 #define TURBO_SEED_ROTATION 42
 #define TURBO_SEED_QJL      1042
-#define TURBO_D             QK_TURBOQ3  /* 128 — block size = head_dim */
+#define TURBO_D             128  /* rotation group size = head_dim (independent of block size) */
 #define TURBO_QJL_CONST     1.2533141373155003f  /* sqrt(pi/2) */
 
 /* Optimal centroids from paper (scaled by 1/sqrt(d)) */
-/* 1-bit: ±sqrt(2/(pi*d)) */
-static const float CENTROIDS_1BIT[2] = { -0.070711f, 0.070711f };  /* for d=128 */
-
 /* 2-bit: {±0.453, ±1.51} / sqrt(d) */
 static const float CENTROIDS_2BIT[4] = { -0.133462f, -0.039994f, 0.039994f, 0.133462f };
 
@@ -170,147 +175,175 @@ static int nearest_centroid_3bit(float val) {
     return 7;
 }
 
-/* ---------- TURBOQ3_0: 2-bit PolarQuant + 1-bit QJL ---------- */
+static int nearest_centroid_4bit(float val) {
+    /* 16 centroids, optimal for N(0, 1/sqrt(128)), find nearest via midpoints */
+    if (val < -0.145560f) return 0;
+    if (val < -0.103361f) return 1;
+    if (val < -0.079142f) return 2;
+    if (val < -0.060009f) return 3;
+    if (val < -0.043430f) return 4;
+    if (val < -0.028293f) return 5;
+    if (val < -0.013963f) return 6;
+    if (val <  0.000000f) return 7;
+    if (val <  0.013963f) return 8;
+    if (val <  0.028293f) return 9;
+    if (val <  0.043430f) return 10;
+    if (val <  0.060009f) return 11;
+    if (val <  0.079142f) return 12;
+    if (val <  0.103361f) return 13;
+    if (val <  0.145560f) return 14;
+    return 15;
+}
+
+/* ---------- WHT sign arrays (must match CUDA/Metal, seed=42) ---------- */
+
+static const float turbo_cpu_s1[128] = {
+    -1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,
+    -1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,
+    -1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,
+    -1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1
+};
+
+static const float turbo_cpu_s2[128] = {
+    1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,
+    1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,
+    1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,
+    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1
+};
+
+/* ---------- CPU forward WHT (in-place, group_size elements) ---------- */
+
+static void turbo_cpu_fwht(float * x, int group_size) {
+    const float * s1 = turbo_cpu_s1;
+    const float * s2 = turbo_cpu_s2;
+    const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
+
+    // signs1
+    for (int i = 0; i < group_size; i++) x[i] *= s1[i];
+
+    // butterfly stages
+    for (int h = 1; h < group_size; h *= 2) {
+        for (int i = 0; i < group_size; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+
+    // normalize + signs2
+    for (int i = 0; i < group_size; i++) x[i] *= inv_sqrt * s2[i];
+}
+
+/* ---------- CPU inverse WHT (in-place, group_size elements) ----------
+ *
+ * Forward is  y = D(s2) * N * H * D(s1) * x   (N = 1/sqrt(group_size))
+ * H is the unnormalized Hadamard butterfly with H*H = group_size * I, so
+ * (N*H) is self-inverse.  s1 and s2 are ±1 diagonals, also self-inverse.
+ * The inverse therefore has the same structure with s1 and s2 swapped:
+ *     x = D(s1) * N * H * D(s2) * y
+ */
+GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size) {
+    const float * s1 = turbo_cpu_s1;
+    const float * s2 = turbo_cpu_s2;
+    const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
+
+    // signs2 (undoes the s2 that was applied last in the forward pass)
+    for (int i = 0; i < group_size; i++) x[i] *= s2[i];
+
+    // butterfly stages (same as forward — self-inverse up to the inv_sqrt scaling below)
+    for (int h = 1; h < group_size; h *= 2) {
+        for (int i = 0; i < group_size; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+
+    // normalize + signs1
+    for (int i = 0; i < group_size; i++) x[i] *= inv_sqrt * s1[i];
+}
+
+/* ---------- TURBOQ3_0: 3-bit PolarQuant with WHT rotation ---------- */
 
 void quantize_row_turboq3_0_ref(const float * GGML_RESTRICT x, block_turboq3_0 * GGML_RESTRICT y, int64_t k) {
-    turbo_init_rotation();
-    turbo_init_qjl();
-
     assert(k % QK_TURBOQ3 == 0);
-    const int nb = k / QK_TURBOQ3;
-    const int d  = QK_TURBOQ3;
 
-    for (int block = 0; block < nb; block++) {
-        const float * src = x + block * d;
+    // Read WHT group size from global (set by CPU SET_ROWS handler before each call).
+    // Fallback: 128 if row is 128-aligned, else 64.
+    extern int turboq3_cpu_wht_group_size;
+    int group_size = turboq3_cpu_wht_group_size;
+    if (group_size != 64 && group_size != 128) {
+        group_size = (k % 128 == 0) ? 128 : 64;
+    }
+    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
+    assert(k % group_size == 0);
 
-        /* Step 1: Extract norm */
-        float norm = 0.0f;
-        for (int i = 0; i < d; i++) {
-            norm += src[i] * src[i];
+    const int n_groups = k / group_size;
+    const int blocks_per_group = group_size / QK_TURBOQ3;
+
+    for (int g = 0; g < n_groups; g++) {
+        const float * grp_src = x + g * group_size;
+        block_turboq3_0 * grp_dst = y + g * blocks_per_group;
+
+        // 1. L2 norm over the group
+        float norm_sq = 0.0f;
+        float buf[128];  // max group_size
+        for (int j = 0; j < group_size; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
         }
-        norm = sqrtf(norm);
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
 
-        /* Normalize */
-        float normalized[TURBO_D];
-        if (norm > 1e-10f) {
-            const float inv_norm = 1.0f / norm;
-            for (int i = 0; i < d; i++) {
-                normalized[i] = src[i] * inv_norm;
+        // 2. Normalize
+        for (int j = 0; j < group_size; j++) buf[j] *= inv_norm;
+
+        // 3. Forward WHT rotation
+        turbo_cpu_fwht(buf, group_size);
+
+        // 4. Quantize + pack into sub-blocks
+        float recon_sq = 0.0f;
+        for (int b = 0; b < blocks_per_group; b++) {
+            block_turboq3_0 * blk = &grp_dst[b];
+            const int off = b * QK_TURBOQ3;
+
+            memset(blk->qs, 0, QK_TURBOQ3 / 4);
+            memset(blk->signs, 0, QK_TURBOQ3 / 8);
+
+            for (int j = 0; j < QK_TURBOQ3; j++) {
+                int idx = nearest_centroid_3bit(buf[off + j]);
+                blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                if (idx & 0x4) {
+                    blk->signs[j / 8] |= (1 << (j % 8));
+                }
+                recon_sq += CENTROIDS_3BIT[idx] * CENTROIDS_3BIT[idx];
             }
-        } else {
-            memset(normalized, 0, d * sizeof(float));
         }
 
-        /* Step 2: Rotate */
-        float rotated[TURBO_D];
-        matvec(turbo_rotation, normalized, rotated, d);
-
-        /* Step 3: 2-bit quantization (nearest centroid) */
-        uint8_t indices[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            indices[i] = (uint8_t)nearest_centroid_2bit(rotated[i]);
-        }
-
-        /* Step 4: Compute PolarQuant reconstruction + residual */
-        float reconstructed[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            reconstructed[i] = CENTROIDS_2BIT[indices[i]];
-        }
-
-        /* Inverse rotate to get MSE reconstruction in original space */
-        float mse_recon[TURBO_D];
-        matvec(turbo_rotation_t, reconstructed, mse_recon, d);
-
-        /* Residual (in original normalized space) */
-        float residual[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            residual[i] = normalized[i] - mse_recon[i];
-        }
-
-        /* Residual norm */
-        float rnorm = 0.0f;
-        for (int i = 0; i < d; i++) {
-            rnorm += residual[i] * residual[i];
-        }
-        rnorm = sqrtf(rnorm);
-
-        /* Step 5: QJL on residual */
-        float projected[TURBO_D];
-        matvec(turbo_qjl_matrix, residual, projected, d);
-
-        /* Pack into block */
-        y[block].norm  = GGML_FP32_TO_FP16(norm);
-        y[block].rnorm = GGML_FP32_TO_FP16(rnorm);
-
-        /* Pack 2-bit indices: 4 per byte */
-        memset(y[block].qs, 0, d / 4);
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 4;
-            int bit_pos  = (i % 4) * 2;
-            y[block].qs[byte_idx] |= (indices[i] & 0x3) << bit_pos;
-        }
-
-        /* Pack 1-bit QJL signs: 8 per byte */
-        memset(y[block].signs, 0, d / 8);
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 8;
-            int bit_pos  = i % 8;
-            if (projected[i] >= 0.0f) {
-                y[block].signs[byte_idx] |= (1 << bit_pos);
-            }
+        // 5. Corrected norm: grp_norm / recon_norm (matching CUDA kernel)
+        float recon_norm = sqrtf(recon_sq);
+        float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            grp_dst[b].norm = GGML_FP32_TO_FP16(corrected);
         }
     }
 }
 
 void dequantize_row_turboq3_0(const block_turboq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    turbo_init_rotation();
-    turbo_init_qjl();
-
+    // Stub — Metal shader handles dequant on GPU.
     assert(k % QK_TURBOQ3 == 0);
     const int nb = k / QK_TURBOQ3;
-    const int d  = QK_TURBOQ3;
-
     for (int block = 0; block < nb; block++) {
-        float norm  = GGML_FP16_TO_FP32(x[block].norm);
-        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
-
-        /* Unpack 2-bit indices */
-        uint8_t indices[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 4;
-            int bit_pos  = (i % 4) * 2;
-            indices[i] = (x[block].qs[byte_idx] >> bit_pos) & 0x3;
-        }
-
-        /* Unpack QJL signs to {+1, -1} */
-        float signs[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            int byte_idx = i / 8;
-            int bit_pos  = i % 8;
-            signs[i] = (x[block].signs[byte_idx] & (1 << bit_pos)) ? 1.0f : -1.0f;
-        }
-
-        /* PolarQuant reconstruction: centroid lookup → inverse rotation */
-        float rotated_recon[TURBO_D];
-        for (int i = 0; i < d; i++) {
-            rotated_recon[i] = CENTROIDS_2BIT[indices[i]];
-        }
-
-        float mse_recon[TURBO_D];
-        matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
-
-        /* QJL reconstruction: S^T @ signs * sqrt(pi/2) / d * rnorm */
-        float qjl_recon[TURBO_D];
-        matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
-        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
-        for (int i = 0; i < d; i++) {
-            qjl_recon[i] *= qjl_scale;
-        }
-
-        /* Combine: (mse + qjl) * norm */
-        float * dst = y + block * d;
-        for (int i = 0; i < d; i++) {
-            dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
+        float norm = GGML_FP16_TO_FP32(x[block].norm);
+        for (int j = 0; j < QK_TURBOQ3; j++) {
+            uint8_t low2 = (x[block].qs[j/4] >> ((j%4)*2)) & 0x3;
+            uint8_t hi1 = (x[block].signs[j/8] >> (j%8)) & 0x1;
+            uint8_t idx = low2 | (hi1 << 2);
+            y[block * QK_TURBOQ3 + j] = CENTROIDS_3BIT[idx] * norm;
         }
     }
 }
@@ -331,7 +364,7 @@ size_t quantize_turboq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrows * row_size;
 }
 
-/* ---------- TURBOQ4_0: 3-bit PolarQuant + 1-bit QJL ---------- */
+/* ---------- TURBOQ4_0: 4-bit PolarQuant (default) / 3-bit + QJL (legacy) ---------- */
 
 void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 * GGML_RESTRICT y, int64_t k) {
     turbo_init_rotation();
@@ -358,11 +391,34 @@ void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 *
             memset(normalized, 0, d * sizeof(float));
         }
 
-        /* Step 2: Rotate */
+        /* Step 2: Forward WHT rotation (matches CUDA set_rows) */
         float rotated[TURBO_D];
-        matvec(turbo_rotation, normalized, rotated, d);
+        memcpy(rotated, normalized, d * sizeof(float));
+        turbo_cpu_fwht(rotated, d);
 
-        /* Step 3: 3-bit quantization */
+#if TURBOQ4_USE_4BIT
+        /* Step 3: 4-bit quantization (16 centroids) */
+        static const float CENTROIDS_4BIT[16] = {
+            -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+            -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+             0.006938f,  0.020989f,  0.035597f,  0.051262f,
+             0.068756f,  0.089527f,  0.117195f,  0.173926f
+        };
+        uint8_t indices[TURBO_D];
+        for (int i = 0; i < d; i++) {
+            indices[i] = (uint8_t)nearest_centroid_4bit(rotated[i]);
+        }
+
+        /* Norm correction */
+        float recon_norm_sq = 0.0f;
+        for (int i = 0; i < d; i++) {
+            recon_norm_sq += CENTROIDS_4BIT[indices[i]] * CENTROIDS_4BIT[indices[i]];
+        }
+        float recon_norm = sqrtf(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? norm / recon_norm : norm;
+        y[block].norm = GGML_FP32_TO_FP16(corrected_norm);
+#else
+        /* Step 3: 3-bit quantization (8 centroids) */
         uint8_t indices[TURBO_D];
         for (int i = 0; i < d; i++) {
             indices[i] = (uint8_t)nearest_centroid_3bit(rotated[i]);
@@ -381,55 +437,79 @@ void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 *
             residual[i] = normalized[i] - mse_recon[i];
         }
 
-        float rnorm = 0.0f;
-        for (int i = 0; i < d; i++) rnorm += residual[i] * residual[i];
-        rnorm = sqrtf(rnorm);
-
         /* Step 5: QJL */
         float projected[TURBO_D];
         matvec(turbo_qjl_matrix, residual, projected, d);
+#endif
 
         /* Pack */
+#if !TURBOQ4_USE_4BIT
         y[block].norm  = GGML_FP32_TO_FP16(norm);
-        y[block].rnorm = GGML_FP32_TO_FP16(rnorm);
+#endif
 
-        /* Pack 3-bit indices: 8 indices per 3 bytes */
+#if TURBOQ4_USE_4BIT
+        /* 4-bit PolarQuant: nibble pack into qs[64] */
+        memset(y[block].qs, 0, d / 2);
+        for (int i = 0; i < d; i++) {
+            y[block].qs[i / 2] |= (uint8_t)((indices[i] & 0xF) << ((i % 2) * 4));
+        }
+        y[block].rnorm = GGML_FP32_TO_FP16(0.0f);
+#else
+        /* Legacy 3-bit + QJL: pack 3-bit indices + QJL signs */
         memset(y[block].qs, 0, d * 3 / 8);
         for (int i = 0; i < d; i++) {
             int bit_offset = i * 3;
             int byte_idx   = bit_offset / 8;
             int bit_pos    = bit_offset % 8;
             uint16_t val   = (uint16_t)(indices[i] & 0x7);
-            /* Write up to 2 bytes (3 bits might span a byte boundary) */
             y[block].qs[byte_idx] |= (uint8_t)(val << bit_pos);
             if (bit_pos > 5 && byte_idx + 1 < d * 3 / 8) {
                 y[block].qs[byte_idx + 1] |= (uint8_t)(val >> (8 - bit_pos));
             }
         }
-
-        /* Pack 1-bit QJL signs */
         memset(y[block].signs, 0, d / 8);
         for (int i = 0; i < d; i++) {
             if (projected[i] >= 0.0f) {
                 y[block].signs[i / 8] |= (1 << (i % 8));
             }
         }
+#endif
     }
 }
 
 void dequantize_row_turboq4_0(const block_turboq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     turbo_init_rotation();
-    turbo_init_qjl();
 
     assert(k % QK_TURBOQ4 == 0);
     const int nb = k / QK_TURBOQ4;
     const int d  = QK_TURBOQ4;
 
+#if TURBOQ4_USE_4BIT
+    /* 4-bit PolarQuant: nibble unpack → centroid → inverse rotate → scale */
+    static const float CENTROIDS_4BIT[16] = {
+        -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+        -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+         0.006938f,  0.020989f,  0.035597f,  0.051262f,
+         0.068756f,  0.089527f,  0.117195f,  0.173926f
+    };
+    for (int block = 0; block < nb; block++) {
+        float norm = GGML_FP16_TO_FP32(x[block].norm);
+        float * dst = y + block * d;
+        for (int i = 0; i < d; i++) {
+            uint8_t idx = (x[block].qs[i / 2] >> ((i % 2) * 4)) & 0xF;
+            dst[i] = CENTROIDS_4BIT[idx] * norm;
+        }
+        /* No inverse WHT, dequant stays in the rotated domain.
+        * Q is WHT-rotated by the graph, so <Q_rot, K_rot> gives correct attention scores.
+        * The inverse WHT is applied to the attention output via GGML_OP_TURBO_WHT (direction=1) in the graph.
+        */
+    }
+#else
+    /* Legacy 3-bit + QJL dequant */
+    turbo_init_qjl();
     for (int block = 0; block < nb; block++) {
         float norm  = GGML_FP16_TO_FP32(x[block].norm);
-        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
 
-        /* Unpack 3-bit indices */
         uint8_t indices[TURBO_D];
         for (int i = 0; i < d; i++) {
             int bit_offset = i * 3;
@@ -442,13 +522,14 @@ void dequantize_row_turboq4_0(const block_turboq4_0 * GGML_RESTRICT x, float * G
             indices[i] = (uint8_t)((raw >> bit_pos) & 0x7);
         }
 
-        /* Unpack signs */
         float signs[TURBO_D];
         for (int i = 0; i < d; i++) {
             signs[i] = (x[block].signs[i / 8] & (1 << (i % 8))) ? 1.0f : -1.0f;
         }
 
-        /* PolarQuant dequant */
+        float rnorm = GGML_FP16_TO_FP32(x[block].rnorm);
+        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
+
         float rotated_recon[TURBO_D];
         for (int i = 0; i < d; i++) {
             rotated_recon[i] = CENTROIDS_3BIT[indices[i]];
@@ -456,20 +537,18 @@ void dequantize_row_turboq4_0(const block_turboq4_0 * GGML_RESTRICT x, float * G
         float mse_recon[TURBO_D];
         matvec(turbo_rotation_t, rotated_recon, mse_recon, d);
 
-        /* QJL dequant */
         float qjl_recon[TURBO_D];
         matvec(turbo_qjl_matrix_t, signs, qjl_recon, d);
-        const float qjl_scale = TURBO_QJL_CONST / (float)d * rnorm;
         for (int i = 0; i < d; i++) {
             qjl_recon[i] *= qjl_scale;
         }
 
-        /* Combine */
         float * dst = y + block * d;
         for (int i = 0; i < d; i++) {
             dst[i] = (mse_recon[i] + qjl_recon[i]) * norm;
         }
     }
+#endif
 }
 
 size_t quantize_turboq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
