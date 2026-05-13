@@ -13,15 +13,17 @@ which case bump the version at the top and call out the change.
 Five contributing forks have independently extended `ggml_type` in mutually
 incompatible ways. Concrete known collisions:
 
-| Slot | Mainline | TheTom (alpha-scaling) | Buun (master) | Carlosfundora (1-bit-turbo) | Turbo-tan (main) | ik_llama (main) |
-|---|---|---|---|---|---|---|
-| 41 | `Q1_0` | `TURBO3_0` | `Q1_0` | (gap) | `Q1_0` | `Q1_0_G128` |
-| 42 | — | `TURBO4_0` | `TURBO3_0` | `Q1_0` | — | — |
-| 43 | — | `TURBO2_0` | `TURBO4_0` | `Q1_0_g128` | — | — |
-| 44 | — | `TQ3_1S` | `TURBO2_0` | `PLANAR3_0` | **`TQ3_1S`** (different layout from TheTom's) | — |
-| 45 | — | `TQ4_1S` | `TURBO3_TCQ` | `PLANAR4_0` | — | — |
-| 46 | — | — | `TURBO2_TCQ` | `ISO3_0` | `TQ3_4S` | — |
-| 47 | — | — | — | `ISO4_0` | — | — |
+| Slot | Mainline | TheTom (TQ-KV HEAD) | TheTom (alpha-scaling, stale) | Buun (master) | Carlosfundora (1-bit-turbo) | Turbo-tan (main) | ik_llama (main) |
+|---|---|---|---|---|---|---|---|
+| 41 | `Q1_0` | `Q1_0` (mainline-aligned) | `TURBO3_0` | `Q1_0` | (gap) | `Q1_0` | `Q1_0_G128` |
+| 42 | — | `TURBO2_0` | `TURBO4_0` | `TURBO3_0` | `Q1_0` | — | — |
+| 43 | — | `TURBO3_0` | `TURBO2_0` | `TURBO4_0` | `Q1_0_g128` | — | — |
+| 44 | — | `TURBO4_0` | `TQ3_1S` | `TURBO2_0` | `PLANAR3_0` | **`TQ3_1S`** (different layout from TheTom's) | — |
+| 45 | — | `TQ3_1S` | `TQ4_1S` | `TURBO3_TCQ` | `PLANAR4_0` | — | — |
+| 46 | — | `TQ4_1S` | — | `TURBO2_TCQ` | `ISO3_0` | `TQ3_4S` | — |
+| 47 | — | — | — | — | `ISO4_0` | — | — |
+
+**Note (2026-05-12, recon/06):** TheTom HEAD branch is `feature/turboquant-kv-cache`; alpha-scaling is now stale and superseded. Between alpha-scaling and TQ-KV, the TURBO_*_0 trio was reordered (TURBO2/3/4 = 42/43/44 instead of 43/41/42) and the TQ_1S types shifted up by one slot. This affects the cherry-pick recipe's "FROM" mapping but not yggdrasil's own slot assignments (60–95 zone unchanged).
 
 GGUF files produced by any one fork are silently misread by any other.
 Cherry-picking without renumbering would propagate this hazard into yggdrasil.
@@ -55,13 +57,15 @@ without modification.
 
 ## Yggdrasil extension zone (60–95) — canonical assignments
 
-### 60–65: TurboQuant KV family (source: TheTom `feature/alpha-scaling`)
+### 60–65: TurboQuant KV family (source: TheTom `feature/turboquant-kv-cache`)
+
+Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2026-05-12). Earlier drafts of this document named `feature/alpha-scaling` as the source; alpha-scaling has since been superseded by TQ-KV (1 substantive unique commit, the optional `TURBO_ALPHA` env var knob). All "TheTom name (renamed)" slot numbers below reflect TQ-KV HEAD as of `5aeb2fdbe`.
 
 | Slot | Yggdrasil name | TheTom name (renamed) | Description |
 |---|---|---|---|
-| 60 | `GGML_TYPE_TURBOQ2_0` | `TURBO2_0` (43) | 2-bit PolarQuant, no QJL |
-| 61 | `GGML_TYPE_TURBOQ3_0` | `TURBO3_0` (41) | 2-bit PolarQuant + 1-bit QJL |
-| 62 | `GGML_TYPE_TURBOQ4_0` | `TURBO4_0` (42) | 3-bit PolarQuant + 1-bit QJL |
+| 60 | `GGML_TYPE_TURBOQ2_0` | `TURBO2_0` (42) | 2-bit PolarQuant, no QJL |
+| 61 | `GGML_TYPE_TURBOQ3_0` | `TURBO3_0` (43) | 2-bit PolarQuant + 1-bit QJL |
+| 62 | `GGML_TYPE_TURBOQ4_0` | `TURBO4_0` (44) | 3-bit PolarQuant + 1-bit QJL |
 | 63–64 | reserved | | future TurboQuant variants |
 | 65 | `GGML_TYPE_TURBOQ3_NATIVE` | turbo-tan `TQ3_0` (200) | 3-bit native KV (turbo-tan); see "Row-interleaved / packed variants" |
 
@@ -92,12 +96,14 @@ conceptually but uses Viterbi-coded trellises instead of scalar codebooks.
 Symbol prefix: `rq_` (kernels), `RQ_` (constants). Disambiguates from buun's
 TCQ and TheTom's TurboQuant.
 
-### 80–85: WHT weight family (source: TheTom `pr/tq4-weight-compression`)
+### 80–85: WHT weight family (source: TheTom `feature/turboquant-kv-cache`)
+
+Originally drafted against `pr/tq4-weight-compression`; that branch is fully subsumed by `feature/turboquant-kv-cache` (zero unique commits by subject — see `recon/06-thetom-branches.md`). All slot numbers below reflect TQ-KV HEAD as of `5aeb2fdbe`.
 
 | Slot | Yggdrasil name | TheTom name (renamed) | Description |
 |---|---|---|---|
-| 80 | `GGML_TYPE_WHT3_0` | `TQ3_1S` (44) | WHT-rotated 8-level Lloyd-Max, block_size=32 |
-| 81 | `GGML_TYPE_WHT4_0` | `TQ4_1S` (45) | WHT-rotated 16-level Lloyd-Max, block_size=32 |
+| 80 | `GGML_TYPE_WHT3_0` | `TQ3_1S` (45) | WHT-rotated 8-level Lloyd-Max, block_size=32 |
+| 81 | `GGML_TYPE_WHT4_0` | `TQ4_1S` (46) | WHT-rotated 16-level Lloyd-Max, block_size=32 |
 | 82–85 | reserved | | future WHT variants |
 
 Symbol prefix: `wht_`. The `TQ` prefix in TheTom's naming collided with
