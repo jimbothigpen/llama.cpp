@@ -184,6 +184,8 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
+    // partial=true permits n_created < n_tensors (e.g. when a sibling MTP-head arch
+    // loads only a subset of tensors from a target GGUF via params.override_arch).
     void done_getting_tensors(bool partial = false) const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
