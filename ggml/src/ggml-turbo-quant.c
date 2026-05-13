@@ -267,6 +267,94 @@ GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size) {
     for (int i = 0; i < group_size; i++) x[i] *= inv_sqrt * s1[i];
 }
 
+/* ---------- TURBOQ2_0: 2-bit PolarQuant with WHT rotation (no QJL) ---------- */
+
+void quantize_row_turboq2_0_ref(const float * GGML_RESTRICT x, block_turboq2_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBOQ2 == 0);
+
+    extern int turboq3_cpu_wht_group_size;
+    int group_size = turboq3_cpu_wht_group_size;
+    if (group_size != 64 && group_size != 128) {
+        group_size = (k % 128 == 0) ? 128 : 64;
+    }
+    if (k % group_size != 0) group_size = (group_size == 128) ? 64 : 128;
+    assert(k % group_size == 0);
+
+    const int n_groups = k / group_size;
+    const int blocks_per_group = group_size / QK_TURBOQ2;
+
+    for (int g = 0; g < n_groups; g++) {
+        const float * grp_src = x + g * group_size;
+        block_turboq2_0 * grp_dst = y + g * blocks_per_group;
+
+        /* 1. L2 norm over the group */
+        float norm_sq = 0.0f;
+        float buf[128];
+        for (int j = 0; j < group_size; j++) {
+            buf[j] = grp_src[j];
+            norm_sq += buf[j] * buf[j];
+        }
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+        /* 2. Normalize */
+        for (int j = 0; j < group_size; j++) buf[j] *= inv_norm;
+
+        /* 3. Forward WHT rotation */
+        turbo_cpu_fwht(buf, group_size);
+
+        /* 4. Quantize + pack into sub-blocks */
+        float recon_sq = 0.0f;
+        for (int b = 0; b < blocks_per_group; b++) {
+            block_turboq2_0 * blk = &grp_dst[b];
+            const int off = b * QK_TURBOQ2;
+
+            memset(blk->qs, 0, QK_TURBOQ2 / 4);
+
+            for (int j = 0; j < QK_TURBOQ2; j++) {
+                int idx = nearest_centroid_2bit(buf[off + j]);
+                blk->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                recon_sq += CENTROIDS_2BIT[idx] * CENTROIDS_2BIT[idx];
+            }
+        }
+
+        /* 5. Corrected norm */
+        float recon_norm = sqrtf(recon_sq);
+        float corrected = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; b++) {
+            grp_dst[b].norm = GGML_FP32_TO_FP16(corrected);
+        }
+    }
+}
+
+void dequantize_row_turboq2_0(const block_turboq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBOQ2 == 0);
+    const int nb = k / QK_TURBOQ2;
+    for (int block = 0; block < nb; block++) {
+        float norm = GGML_FP16_TO_FP32(x[block].norm);
+        for (int j = 0; j < QK_TURBOQ2; j++) {
+            uint8_t idx = (x[block].qs[j/4] >> ((j%4)*2)) & 0x3;
+            y[block * QK_TURBOQ2 + j] = CENTROIDS_2BIT[idx] * norm;
+        }
+    }
+}
+
+size_t quantize_turboq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                          int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBOQ2 == 0);
+
+    size_t row_size = (n_per_row / QK_TURBOQ2) * sizeof(block_turboq2_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_turboq2_0_ref(
+            src + row * n_per_row,
+            (block_turboq2_0 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
 /* ---------- TURBOQ3_0: 3-bit PolarQuant with WHT rotation ---------- */
 
 void quantize_row_turboq3_0_ref(const float * GGML_RESTRICT x, block_turboq3_0 * GGML_RESTRICT y, int64_t k) {
