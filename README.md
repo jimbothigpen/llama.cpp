@@ -30,9 +30,13 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 > Yggdrasil: the Norse world-tree where many branches converge at the trunk.
 
-**Status:** Phase 0 in progress. No feature layers landed yet. Tree currently
-tracks mainline `ggml-org/llama.cpp` verbatim, with documented intent for what
-lands next.
+**Status:** Phases 0, 0.5, 0.7, **and 1 COMPLETE** (as of milestone
+[`phase-1-turboquant-kv-foundation`](../../releases/tag/milestone%2Fphase-1-turboquant-kv-foundation)).
+Tree currently delivers the TurboQuant KV cache foundation (2-/3-/4-bit
+PolarQuant KV types + WHT-rotated weight quants) on ROCm + Vulkan, plus
+the sidecar plugin engine from Phase 0.7. Phase 2 (MTP spec-decode spine)
+is the next entry. See [What's available now](#whats-available-now) for
+usage.
 
 ## What yggdrasil is and isn't
 
@@ -71,46 +75,143 @@ feature is **released** only when both backends are on trunk and
 cross-backend PPL matches within tolerance. See
 [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md) for the parity policy.
 
-| Layer | Content | Sources |
-|---|---|---|
-| 0 | Type-ID contract + PPL regression harness (dual-backend) | this project |
-| 0.5 | ik_llama architectural recon + EAGLE3 recon | this project |
-| 0.7 | Sidecar plugin engine (~355 LoC, backend-agnostic) — runtime adapters at residual-stream / MoE-expert / post-logits / weight-delta hook points; out-of-tree `.so` plugins | this project |
-| 1 | TurboQuant KV foundation | TheTom `feature/alpha-scaling` |
-| 2 | MTP spec-decode spine | turbo-tan `experiment/gemma4-mtp-upstream-pr` |
-| 3 | TCQ KV | buun `master` |
-| 4 | TriAttention | domvox `feature/triattention-scoring` |
-| 5 | Carlosfundora bundle (1-bit, RotorQuant, EAGLE3, PHANTOM-X, TurboMind, Wave32) | carlosfundora `1-bit-turbo` |
-| 6 | ik_llama subsystem backports (IK quants, MLA, BitNet, fused MoE, MTP perf) | ik_llama (one subsystem at a time) |
-| 7 | RaBitQ TQ3 weight quants | turbo-tan `main` |
-| 8 | DFlash/PFlash as spec-decode strategies | buun SD-* branches |
-| 9 | Polish (alpha-scaling defaults, --hugepages, gfx1030 norm) | mixed |
+| Layer | Content | Sources | Status |
+|---|---|---|---|
+| 0 | Type-ID contract + PPL regression harness (dual-backend) | this project | **complete** |
+| 0.5 | ik_llama architectural recon + EAGLE3 recon | this project | **complete** |
+| 0.7 | Sidecar plugin engine (~355 LoC, backend-agnostic) — runtime adapters at residual-stream / MoE-expert / post-logits / weight-delta hook points; out-of-tree `.so` plugins | this project | **complete** |
+| 1 | TurboQuant KV foundation (TURBOQ2/3/4_0 + WHT3/4_0 + Boundary V) | TheTom `feature/turboquant-kv-cache` | **complete (milestone tag `phase-1-turboquant-kv-foundation`)** |
+| 2 | MTP spec-decode spine | turbo-tan `experiment/gemma4-mtp-upstream-pr` | pending |
+| 3 | TCQ KV | buun `master` | pending |
+| 4 | TriAttention | domvox `feature/triattention-scoring` | pending |
+| 5 | Carlosfundora bundle (1-bit, RotorQuant, EAGLE3, PHANTOM-X, TurboMind, Wave32) | carlosfundora `1-bit-turbo` | pending |
+| 6 | ik_llama subsystem backports (IK quants, MLA, BitNet, fused MoE, MTP perf) | ik_llama (one subsystem at a time) | pending |
+| 7 | RaBitQ TQ3 weight quants | turbo-tan `main` | pending |
+| 8 | DFlash/PFlash as spec-decode strategies | buun SD-* branches | pending |
+| 9 | Polish (TURBO_ALPHA env-var defaults, --hugepages, gfx1030 norm) | mixed | pending |
 
 Each layer's Vulkan port is scheduled per its priority in
 [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md). No upstream fork has
 Vulkan implementations for novel features, so yggdrasil bears the Vulkan
 port burden in-house.
 
+## What's available now
+
+As of milestone `phase-1-turboquant-kv-foundation`, the following types
+are usable on both ROCm and Vulkan (gfx1150 first-class; gfx1102/1103
+Vulkan supported, ROCm regression-smoke only).
+
+### TurboQuant KV cache types (no model re-quantization required)
+
+These are KV cache types — pass them to `--cache-type-k` / `--cache-type-v`
+on any existing GGUF model whose `head_dim` is a multiple of 128. The KV
+cache is quantized at runtime via `SET_ROWS`; the weights of the model
+stay whatever quantization the GGUF was built with.
+
+| Type | Bits | Block | Compression vs fp16 KV | Notes |
+|---|---|---|---|---|
+| `turboq2` (`GGML_TYPE_TURBOQ2_0`, slot 60) | 2.125 | 128 (one block per rotation group) | ~7.5× | 4-centroid PolarQuant, no QJL |
+| `turboq3` (`GGML_TYPE_TURBOQ3_0`, slot 61) | 3.125 | 128 | ~5.1× | 2-bit PolarQuant + 1-bit QJL signs |
+| `turboq4` (`GGML_TYPE_TURBOQ4_0`, slot 62) | 4.25 | 128 | ~3.8× | 4-bit PolarQuant (default mode) |
+
+Example:
+```bash
+llama-perplexity --no-mmap -fa on \
+    -m Qwen3.5-9B-BF16.gguf \
+    -f wikitext-2-raw-test.txt \
+    --cache-type-k turboq3 --cache-type-v turboq3 \
+    -c 512 --chunks 32 -ngl 99
+```
+
+PPL gates on Qwen3.5-9B-BF16 (32 chunks, c=512, wikitext-2-raw-test):
+
+| KV type | ROCm PPL | Vulkan PPL | Cross-backend Δ | vs F16 KV baseline 6.8168 |
+|---|---|---|---|---|
+| `turboq2` | 7.8041 | 7.8059 | +0.023% | +14.5% |
+| `turboq3` | 7.5939 | 7.6065 | +0.17% | +11.4% |
+
+**Layer-adaptive KV precision** (optional). Set
+`TURBO_LAYER_ADAPTIVE=N` to use higher-precision KV at boundary layers:
+- `1` = q8_0 K+V for first-4 + last-4 layers, turbo elsewhere
+- `2` = q8_0 K+V for last-8 layers, turbo elsewhere
+- `5` = V=turboq4 at first-2+last-2 layers, V=turboq2 elsewhere (K unchanged)
+- `6` = V=turboq4 at last-8 layers, V=turboq2 elsewhere (K unchanged)
+- `7` = **Boundary V (recommended)**: V=q8_0 at first-2+last-2 layers,
+  V=turboq2 elsewhere (K unchanged). Recovers ~1.2% PPL over pure turboq2.
+
+Default is off (uniform precision); each non-zero mode is an explicit opt-in.
+
+### WHT-rotated weight quants (requires re-quantization)
+
+These are weight quantization types — re-quantize your model with
+`llama-quantize` to get a smaller GGUF. **An imatrix is required** for
+these types (ADR-016); see the `--imatrix` flag in `llama-imatrix` and
+`llama-quantize`.
+
+| Type | Bits/value | Block | Backends | Notes |
+|---|---|---|---|---|
+| `WHT3_0` (slot 80) | ~3 | 32 | CPU + CUDA/HIP | Vulkan port deferred (no TQ3_1S shaders in upstream sources; tracked as a yggdrasil-original future port) |
+| `WHT4_0` (slot 81) | ~4 | 32 | CPU + CUDA/HIP + Vulkan | 5.18 BPW; PPL beats `Q4_K_M` by ~1% at slightly higher BPW |
+
+Example (Qwen3.5-9B-F16 → WHT4_0):
+```bash
+# 1. Compute imatrix on a calibration corpus
+llama-imatrix -m Qwen3.5-9B-F16.gguf -f calibration.txt -o imatrix.dat
+
+# 2. Quantize with imatrix
+llama-quantize --imatrix imatrix.dat \
+    Qwen3.5-9B-F16.gguf Qwen3.5-9B-WHT4_0.gguf WHT4_0
+```
+
+PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test):
+
+| Backend | PPL | vs F16 weights 6.8168 | vs Q4_K_M 7.6278 (4.5 BPW) |
+|---|---|---|---|
+| ROCm | 7.5563 | +10.85% | **-0.94%** at 5.18 BPW |
+| Vulkan | 7.5520 | +10.79% | — |
+
+Cross-backend Δ +0.057% — well within the 0.5% release gate.
+
+### Sidecar plugin engine (Phase 0.7)
+
+A backend-agnostic plugin runtime (~355 LoC) for hooking the forward graph
+at residual-stream / MoE-expert / post-logits sites + weight deltas, via
+out-of-tree `.so` plugins. Released alongside Phase 0.7; six companion
+plugin tools are tracked separately. See `src/llama-sidecar.cpp` and the
+plugin-engine commit `f99ad5df8`.
+
+### Build flags
+
+Phase 1 features are built unconditionally as part of the standard cmake
+recipe; no new feature-gate flags are required. See [README.upstream.md](README.upstream.md)
+for the unchanged mainline build instructions.
+
 ## Backend support
 
 | Backend | Primary targets | Status |
 |---|---|---|
-| **ROCm** | gfx1150 (mandatory); gfx1102 / gfx1103 (nice-to-have, blocked on upstream AMD) | first-class |
+| **ROCm** | gfx1150 (mandatory); gfx1102 / gfx1103 (regression-smoke target via single-target `-DAMDGPU_TARGETS=gfx1102` build + `HSA_OVERRIDE_GFX_VERSION=11.0.2` at runtime) | first-class on gfx1150; smoke-only on gfx1102/1103 |
 | **Vulkan** | RDNA3 / RDNA3.5 | first-class — high priority |
 | CUDA, Metal, etc. | inherited from mainline | best-effort, not gated |
 
-A side-quest tracks community fixes that may unblock gfx1102/gfx1103 ROCm
-support; see [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md#gfx1102--gfx1103-rocm-side-quest).
-Until then, RDNA3-mobile systems run Vulkan as the practical alternative.
+gfx1102/1103 ROCm is now used as a regression-smoke target (catches HIP-shim
+breakage early; cross-host PPL parity is validated against ai00 gfx1150).
+Production-inference calibration on those hosts still defers to Vulkan due
+to AMD upstream Tensile/hipBLAS GEMM gaps. See
+[docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md).
 
 ## Key documents
 
+- [**CHANGELOG.md**](CHANGELOG.md) — milestone-tagged change history (Phase 0,
+  0.7, 1 to date).
 - [**docs/TYPE_ASSIGNMENTS.md**](docs/TYPE_ASSIGNMENTS.md) — authoritative
   GGUF type-ID contract. Every cherry-pick renumbers to match. Resolves
   the five-fork collision space.
+- [**docs/OP_ASSIGNMENTS.md**](docs/OP_ASSIGNMENTS.md) — yggdrasil-original
+  `GGML_OP_*` registry (currently: `GGML_OP_TURBO_WHT`).
 - [**docs/BACKEND_PARITY.md**](docs/BACKEND_PARITY.md) — ROCm/Vulkan
   parity policy, per-feature backend status, Vulkan port priorities,
-  gfx1102/1103 side-quest tracker.
+  gfx1102/1103 partial-scope (smoke target) recipe.
 - [**docs/IK_LLAMA_PORTS.md**](docs/IK_LLAMA_PORTS.md) — subsystem tracker
   for ik_llama backports (not a git remote).
 - [**README.upstream.md**](README.upstream.md) — preserved mainline llama.cpp
@@ -118,22 +219,26 @@ Until then, RDNA3-mobile systems run Vulkan as the practical alternative.
 
 ## Build / usage
 
-Yggdrasil follows mainline's build system unchanged for now (Phase 1 work
-has not yet landed). Use [README.upstream.md](README.upstream.md) and the
-upstream `docs/` directory for build instructions until that changes.
+Yggdrasil follows mainline's build system unchanged. Phase 1 features
+(TurboQuant KV + WHT weight quants + sidecar engine) are built
+unconditionally — no new feature-gate flags. See
+[README.upstream.md](README.upstream.md) and the upstream `docs/`
+directory for build instructions.
 
-When new build options become required for yggdrasil-specific features
-(e.g., `GGML_TURBOQUANT=ON`, `GGML_ROTORQUANT=ON`), they will be documented
-here.
+For usage of the new types, see [What's available now](#whats-available-now)
+above. For change history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Project shape
 
 - Single long-lived downstream fork.
 - Mainline sync cadence: every 2 weeks (target).
-- Trunk: `master` (mainline-tracking; current).
-- Feature work happens on `port/<source>/<feature>` topic branches.
-- Each port lands as a tagged commit (`ported/<source>/<feature>-<date>`)
-  recording the source-fork commit SHAs it captures.
+- Trunk: `main` (mainline-tracking; current HEAD at milestone
+  `phase-1-turboquant-kv-foundation`).
+- Feature work happens on `feature/<phase>-<scope>` topic branches and
+  FF-merges back to `main` once all gates pass. See
+  [conventions/git-workflow.md](conventions/git-workflow.md) in
+  yggdrasil-context for the detailed workflow.
+- Each completed phase is tagged `milestone/<phase>-...` on origin.
 - ik_llama work is tracked subsystem-by-subsystem rather than as branches,
   because ik_llama's history is unrelated to mainline's. Cherry-pick
   individual commits or re-implement, never bulk-merge.
@@ -159,6 +264,7 @@ cheaply. Yggdrasil's answer is to accept both as ongoing inputs.
 
 ## Contributing
 
-This is currently a personal project. Contribution guidelines will follow
-once Phase 1 lands and the layer-stack pattern is stable enough to onboard
-others against.
+This is currently a personal project. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the current PR / issue posture (TL;DR: the owner can discuss intent
+but can't independently review code; please cite upstream
+`ggml-org/llama.cpp` for everything not introduced by yggdrasil layers).
