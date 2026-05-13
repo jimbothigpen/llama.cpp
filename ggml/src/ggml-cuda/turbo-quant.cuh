@@ -399,8 +399,25 @@ static __device__ __forceinline__ uint8_t turbo_nearest_centroid_2bit(float val)
     else                              return 3;
 }
 
-// turbo2 quantize/dequant device helpers omitted — TURBOQ2_0 deferred per
-// Phase 1 Step 3 scope (see recon/08). Re-introduce when TURBOQ2_0 enum lands.
+// ---- Per-block quantize for turboq2 (QK_TURBOQ2 elements, expects already-rotated input) ----
+
+static __device__ void quantize_f32_turboq2_0_block(const float * __restrict__ src,
+                                                     block_turboq2_0 * __restrict__ dst) {
+    for (int j = 0; j < QK_TURBOQ2 / 4; j++) dst->qs[j] = 0;
+
+    for (int j = 0; j < QK_TURBOQ2; j++) {
+        uint8_t idx = turbo_nearest_centroid_2bit(src[j]);
+        dst->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+    }
+}
+
+// ---- Inline dequant helper: extract one float from turboq2 block ----
+
+static __device__ __forceinline__ float turboq2_dequant_element(
+        const block_turboq2_0 * __restrict__ x, int j, float norm) {
+    uint8_t idx = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+    return TURBO_CENTROIDS_2BIT[idx] * norm;
+}
 
 // ============================================================================
 // Weight compression types (WHT3_0, WHT4_0)

@@ -582,6 +582,55 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
 // Uses float Q path (like f16), not q8_1 integer path.
 // Q_v is half2[] or float2[] with D/2 pairs, partitioned nthreads-strided.
 //
+// TurboQuant2 KQ dot product: dequantize K from turboq2 blocks, dot with Q (float2/half2)
+// 2-bit indices only (no QJL signs); block size 128.
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_turboq2_0 * K_turbo = (const block_turboq2_0 *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;                   // always even
+            const int ib    = elem0 / QK_TURBOQ2;           // block index
+            const int j0    = elem0 % QK_TURBOQ2;           // always even
+
+            const float   norm    = __half2float(K_turbo[ib].norm);
+            const uint8_t qs_byte = K_turbo[ib].qs[j0 / 4];     // covers j0..j0+3
+            const int     shift   = (j0 % 4) * 2;               // 0 or 4
+
+            const uint8_t idx0 = (qs_byte >> shift)     & 0x3;
+            const uint8_t idx1 = (qs_byte >> (shift+2)) & 0x3;
+
+            float2 kv;
+            kv.x = TURBO_CENTROIDS_2BIT[idx0] * norm;
+            kv.y = TURBO_CENTROIDS_2BIT[idx1] * norm;
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
+
 // Matches the f16 pattern: outer loop steps by nthreads*cpy_ne, inner loop
 // processes cpy_ne pairs per thread per iteration so Q_v and K indices stay aligned.
 // elem0 = 2*k_KQ is always even, so elem0 and elem0+1 always share the same
@@ -687,7 +736,66 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq4_0(
     return sum;
 }
 
-// === TurboQuant V dequantize functions (turboq3, turboq4) ===
+// === TurboQuant V dequantize functions (turboq2, turboq3, turboq4) ===
+// TurboQuant2 V dequantize: extract `ne` float/half values at position i0.
+// 2-bit indices only (no QJL); block size 128.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_turboq2_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_turboq2_0 * x = (const block_turboq2_0 *) vx;
+
+    const int64_t ib   = i0 / QK_TURBOQ2;
+    const int     j0   = i0 % QK_TURBOQ2;
+    const float   norm = __half2float(x[ib].norm);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    if constexpr (ne == 4) {
+        // j0 is always a multiple of 4 from the VEC kernel access pattern.
+        // 4 consecutive 2-bit indices share one qs byte.
+        const uint8_t qs_byte = x[ib].qs[j0 / 4];
+
+        const uint8_t idx0 = (qs_byte >> 0) & 0x3;
+        const uint8_t idx1 = (qs_byte >> 2) & 0x3;
+        const uint8_t idx2 = (qs_byte >> 4) & 0x3;
+        const uint8_t idx3 = (qs_byte >> 6) & 0x3;
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(
+                __float2half(TURBO_CENTROIDS_2BIT[idx0] * norm),
+                __float2half(TURBO_CENTROIDS_2BIT[idx1] * norm));
+            ((half2 *) dst)[1] = make_half2(
+                __float2half(TURBO_CENTROIDS_2BIT[idx2] * norm),
+                __float2half(TURBO_CENTROIDS_2BIT[idx3] * norm));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *) dst)[0] = make_float2(
+                TURBO_CENTROIDS_2BIT[idx0] * norm,
+                TURBO_CENTROIDS_2BIT[idx1] * norm);
+            ((float2 *) dst)[1] = make_float2(
+                TURBO_CENTROIDS_2BIT[idx2] * norm,
+                TURBO_CENTROIDS_2BIT[idx3] * norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    } else { // ne == 2
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            float v0 = turboq2_dequant_element(&x[ib], j0,   norm);
+            float v1 = turboq2_dequant_element(&x[ib], j0+1, norm);
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[0] = turboq2_dequant_element(&x[ib], j0,   norm);
+            ((float *) dst)[1] = turboq2_dequant_element(&x[ib], j0+1, norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    }
+}
+
 // TurboQuant3 V dequantize: extract `ne` float/half values at position i0.
 //
 // Optimised for the ne==4 path (used by the VEC kernel with turbo3 V):
@@ -829,6 +937,8 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TURBOQ2_0) {
+        return vec_dot_fattn_vec_KQ_turboq2_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ3_0) {
         return vec_dot_fattn_vec_KQ_turboq3_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ4_0) {
@@ -855,6 +965,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TURBOQ2_0) {
+        return dequantize_V_turboq2_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ3_0) {
         return dequantize_V_turboq3_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ4_0) {

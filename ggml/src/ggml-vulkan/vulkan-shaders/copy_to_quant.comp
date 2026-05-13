@@ -5,7 +5,7 @@
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #include "types.glsl"
 
-#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0))
+#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ2_0) || defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0))
 // TurboQuant SET_ROWS shaders run the full forward WHT (128 elements per
 // block) inside one workgroup, with subgroup-wide reductions for the
 // pre/post norm and a barrier-driven butterfly.
@@ -320,7 +320,120 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
-#if defined(SET_ROWS) && defined(DATA_A_TURBOQ3_0)
+#if defined(SET_ROWS) && defined(DATA_A_TURBOQ2_0)
+// TurboQuant 2-bit SET_ROWS: forward Walsh-Hadamard + 4-centroid PolarQuant (no QJL).
+// Block size = 128 elements; one workgroup per block; 128 threads, 1 element each.
+const float TS1_T2[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T2[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T2 = 0.08838834764831845;  // 1 / sqrt(128)
+const float TC2[4] = float[4](
+    -0.133462, -0.039994, 0.039994, 0.133462
+);
+const float TM2[3] = float[3](
+    -0.086728, 0.0, 0.086728
+);
+
+shared float wht_t2[128];
+shared float sg_acc_t2[16];
+shared float gnrm_t2;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne12;
+    const uint i03 = tmp / p.ne12;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t2[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t2[t] * wht_t2[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t2[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t2[w];
+        gnrm_t2 = sqrt(total);
+    }
+    barrier();
+
+    wht_t2[t] *= (gnrm_t2 > 1e-10) ? (1.0 / gnrm_t2) : 0.0;
+    barrier();
+
+    wht_t2[t] *= TS1_T2[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t2[t];
+            float b    = wht_t2[t + h];
+            wht_t2[t]     = a + b;
+            wht_t2[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t2[t] * TINV_T2 * TS2_T2[t];
+
+    // Quantize to nearest of 4 centroids (2-bit index).
+    uint idx = rv < TM2[0] ? 0u : rv < TM2[1] ? 1u : rv < TM2[2] ? 2u : 3u;
+
+    // Pack qs: 4 elements per byte (2-bit each). Use subgroup shuffle in
+    // uniform control flow (memory vulkan_subgroup_size_assumptions_landmine).
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint my_low2 = idx & 0x3u;
+    uint qs_byte = 0u;
+    [[unroll]] for (uint k = 0; k < 4; k++) {
+        uint contrib = subgroupShuffle(my_low2, (sg_lane & ~3u) + k);
+        qs_byte |= contrib << (k * 2u);
+    }
+    if (sg_lane % 4u == 0u) {
+        data_q[db].qs[t / 4u] = uint8_t(qs_byte);
+    }
+
+    // Reconstruction-norm correction so dequant(reconstruct) matches original L2.
+    float rc = TC2[idx] * TC2[idx];
+    rc = subgroupAdd(rc);
+    if (sg_lane == 0u) sg_acc_t2[gl_SubgroupID] = rc;
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t2[w];
+        float rn = sqrt(total);
+        data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t2 / rn) : gnrm_t2);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_0)
 // TurboQuant 3-bit SET_ROWS: forward Walsh-Hadamard + 8-centroid PolarQuant.
 // Block size = 128 elements; one workgroup per block; 128 threads, 1 element each.
 const float TS1_T3[128] = float[128](

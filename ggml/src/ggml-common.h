@@ -277,6 +277,22 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant 2-bit: 2-bit PolarQuant indices only (no QJL)
+// Block size = 128 (one block per rotation group, eliminates redundant norms)
+// Per block: norm(fp16) + 2-bit indices (32 bytes) = 34 bytes per 128 values
+// = 2.125 bits/value → 7.5× compression vs fp16
+// 4 centroids (Lloyd-Max for N(0, 1/128)): {-0.133462, -0.039994, 0.039994, 0.133462}
+#define QK_TURBOQ2 128
+#define QK_TURBOQ2_GROUP 128  // rotation group size = head_dim
+// Derived: FA template nl parameters (auto-scale with block size)
+#define NL_TURBOQ2     (QK_TURBOQ2 / 16)   // non-vec FA iterations per block
+#define NL_TURBOQ2_VEC (QK_TURBOQ2 / 4)    // vec FA iterations per block
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected L2 norm
+    uint8_t    qs[QK_TURBOQ2 / 4];      // 32 bytes: 2-bit PolarQuant indices (4 per byte)
+} block_turboq2_0;
+static_assert(sizeof(block_turboq2_0) == sizeof(ggml_half) + QK_TURBOQ2/4, "wrong turboq2_0 block size/padding");
+
 // TurboQuant 3-bit: 2-bit PolarQuant indices + 1-bit QJL signs
 // Block size = 128 (one block per rotation group, eliminates redundant norms)
 // Per block: norm(fp16) + 2-bit indices (32 bytes) + 1-bit signs (16 bytes)

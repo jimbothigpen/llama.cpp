@@ -600,6 +600,185 @@ static void set_rows_cuda_turboq3(
 
 template <typename idx_t>
 __launch_bounds__(128)
+static __global__ void k_set_rows_turboq2(
+        const float * __restrict__ src0,
+        const idx_t * __restrict__ src1,
+        block_turboq2_0 * __restrict__ dst,
+        const int64_t ne00,
+        const int64_t ne01,
+        const int64_t ne10,
+        const int64_t ne11,
+        const int64_t ne12,
+        const int64_t ne13,
+        const int64_t s01,
+        const int64_t s02,
+        const int64_t s03,
+        const int64_t s10,
+        const int64_t s11,
+        const int64_t s12,
+        const int64_t s1,
+        const int64_t s2,
+        const int64_t s3) {
+
+    // blockIdx.x = flat block index; threadIdx.x = element within block (0..127)
+    const int j = threadIdx.x;
+
+    // Decode blockIdx.x → (i_blk, i01, i02, i03)
+    const int64_t n_blocks_per_row = ne00 / QK_TURBOQ2;
+    const int64_t g = blockIdx.x;
+    const int64_t i_blk = g % n_blocks_per_row;
+    int64_t       tmp   = g / n_blocks_per_row;
+    const int64_t i01   = tmp % ne01;
+    tmp                 = tmp / ne01;
+    const int64_t i02   = tmp % ne12;
+    const int64_t i03   = tmp / ne12;
+
+    const int64_t i12 = i02;
+    const int64_t i11 = i01 % ne11;
+    const int64_t i10 = i01;
+
+    const int64_t dst_row = *(src1 + i10*s10 + i11*s11 + i12*s12);
+    const float * src_row = src0 + i01*s01 + i02*s02 + i03*s03;
+    block_turboq2_0 * dst_row_ptr = (block_turboq2_0 *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3);
+    block_turboq2_0 * blk = dst_row_ptr + i_blk;
+
+    // ---- Step 1: Load element j (coalesced) ----
+    __shared__ float x[128];
+    x[j] = src_row[i_blk * QK_TURBOQ2 + j];
+    __syncthreads();
+
+    // ---- Step 2: Parallel L2 norm ----
+    constexpr int n_warps = 128 / WARP_SIZE;
+    __shared__ float warp_accum[n_warps];
+    float v = x[j];
+    float v2 = v * v;
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        v2 += __shfl_xor_sync(0xffffffff, v2, offset, WARP_SIZE);
+    if (j % WARP_SIZE == 0)
+        warp_accum[j / WARP_SIZE] = v2;
+    __syncthreads();
+
+    __shared__ float s_norm_sq;
+    if (j == 0) {
+        float total = 0.0f;
+        for (int w = 0; w < n_warps; w++) total += warp_accum[w];
+        s_norm_sq = total;
+    }
+    __syncthreads();
+    const float grp_norm  = sqrtf(s_norm_sq);
+    const float inv_norm  = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+    // ---- Step 3: Normalize ----
+    x[j] *= inv_norm;
+    __syncthreads();
+
+    // ---- Step 4: Forward WHT (signs1 → butterfly → signs2, normalized) ----
+    x[j] *= TURBO_WHT_SIGNS1[j];
+    __syncthreads();
+
+#define WHT_STAGE_SHARED_T2(h) \
+    if (j % (2*(h)) < (h)) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
+    __syncthreads();
+
+    WHT_STAGE_SHARED_T2(1)
+    WHT_STAGE_SHARED_T2(2)
+    WHT_STAGE_SHARED_T2(4)
+    WHT_STAGE_SHARED_T2(8)
+    WHT_STAGE_SHARED_T2(16)
+    WHT_STAGE_SHARED_T2(32)
+    WHT_STAGE_SHARED_T2(64)
+#undef WHT_STAGE_SHARED_T2
+
+    constexpr float inv_sqrt_128 = 0.08838834764831845f;
+    x[j] = x[j] * inv_sqrt_128 * TURBO_WHT_SIGNS2[j];
+    __syncthreads();
+
+    // ---- Step 5: Quantize element j to 2-bit centroid ----
+    const float rv = x[j];
+    const uint8_t idx = turbo_nearest_centroid_2bit(rv);
+
+    // ---- Step 6: Pack qs (2-bit packed, 4 indices per byte) ----
+    // Thread 0 of each group-of-4 reads idx for j..j+3 and packs them.
+    const int lane = j % WARP_SIZE;
+    const uint8_t my_idx = idx & 0x3;
+    uint8_t partner1 = __shfl_sync(0xffffffff, my_idx, lane ^ 1, WARP_SIZE);
+    uint8_t partner2 = __shfl_sync(0xffffffff, my_idx, lane ^ 2, WARP_SIZE);
+    uint8_t partner3 = __shfl_sync(0xffffffff, my_idx, lane ^ 3, WARP_SIZE);
+    if (j % 4 == 0) {
+        // lane ^ 1 swaps lane within pair; lane ^ 2 swaps the pair; together cover j..j+3.
+        const uint8_t i0 = my_idx;
+        const uint8_t i1 = partner1;
+        const uint8_t i2 = partner2;
+        const uint8_t i3 = partner3;
+        const uint8_t qs_byte = i0 | (i1 << 2) | (i2 << 4) | (i3 << 6);
+        blk->qs[j / 4] = qs_byte;
+    }
+
+    // ---- Step 7: Reconstruction norm (parallel) ----
+    const float c = TURBO_CENTROIDS_2BIT[idx];
+    float rc = c * c;
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        rc += __shfl_xor_sync(0xffffffff, rc, offset, WARP_SIZE);
+    if (j % WARP_SIZE == 0)
+        warp_accum[j / WARP_SIZE] = rc;
+    __syncthreads();
+
+    __shared__ float s_recon_sq;
+    if (j == 0) {
+        float total = 0.0f;
+        for (int w = 0; w < n_warps; w++) total += warp_accum[w];
+        s_recon_sq = total;
+    }
+    __syncthreads();
+    const float recon_norm     = sqrtf(s_recon_sq);
+    const float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+
+    // ---- Step 8: Write corrected norm (one thread) ----
+    if (j == 0) {
+        blk->norm = __float2half(corrected_norm);
+    }
+
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne13);
+}
+
+template<typename idx_t>
+static void set_rows_cuda_turboq2(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+
+    const float * src0_d = (const float *)src0->data;
+    const idx_t * src1_d = (const idx_t *)src1->data;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_TURBOQ2 == 0);
+
+    cudaStream_t stream = ctx.stream();
+
+    const int64_t n_blocks = ne00 / QK_TURBOQ2;
+
+    const int64_t s01 = nb01/sizeof(float);
+    const int64_t s02 = nb02/sizeof(float);
+    const int64_t s03 = nb03/sizeof(float);
+    const int64_t s10 = nb10/sizeof(idx_t);
+    const int64_t s11 = nb11/sizeof(idx_t);
+    const int64_t s12 = nb12/sizeof(idx_t);
+
+    if (n_blocks > 0) {
+        const int64_t ne_total = n_blocks * ne01 * ne02 * ne03;
+        k_set_rows_turboq2<idx_t><<<(int)ne_total, 128, 0, stream>>>(
+            src0_d, src1_d, (block_turboq2_0 *)dst->data,
+            ne00, ne01, ne10, ne11, ne12, ne13,
+            s01, s02, s03, s10, s11, s12,
+            nb1, nb2, nb3);
+    }
+}
+
+
+template <typename idx_t>
+__launch_bounds__(128)
 static __global__ void k_set_rows_turboq4(
         const float * __restrict__ src0,
         const idx_t * __restrict__ src1,
@@ -890,6 +1069,8 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_TURBOQ2_0) {
+        set_rows_cuda_turboq2<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ3_0) {
         set_rows_cuda_turboq3<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ4_0) {

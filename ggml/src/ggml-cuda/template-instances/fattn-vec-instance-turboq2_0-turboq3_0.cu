@@ -1,0 +1,7 @@
+// TurboQuant2 K + TurboQuant3 V CUDA flash attention vec kernel instantiation
+
+#include "../fattn-vec.cuh"
+
+DECL_FATTN_VEC_CASE( 64, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0);
+DECL_FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0);
+DECL_FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0);

@@ -4995,7 +4995,7 @@ static void ggml_compute_forward_set_rows_f32(
     ggml_from_float_t const from_float = ggml_get_type_traits_cpu(dst->type)->from_float;
 
     // For turbo types: communicate WHT group size to the quantize function via global
-    if (dst->type == GGML_TYPE_TURBOQ3_0 || dst->type == GGML_TYPE_TURBOQ4_0) {
+    if (dst->type == GGML_TYPE_TURBOQ2_0 || dst->type == GGML_TYPE_TURBOQ3_0 || dst->type == GGML_TYPE_TURBOQ4_0) {
         int gs = 0;
         memcpy(&gs, dst->op_params, sizeof(int));
         turboq3_cpu_wht_group_size = (gs == 64 || gs == 128) ? gs : 0;

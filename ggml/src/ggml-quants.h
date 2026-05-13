@@ -103,10 +103,13 @@ GGML_API size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_REST
 GGML_API size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 // TurboQuant KV cache compression (arXiv 2504.19874)
+GGML_API void quantize_row_turboq2_0_ref(const float * GGML_RESTRICT x, block_turboq2_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_turboq3_0_ref(const float * GGML_RESTRICT x, block_turboq3_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_turboq2_0(const block_turboq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq3_0(const block_turboq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq4_0(const block_turboq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_turboq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
