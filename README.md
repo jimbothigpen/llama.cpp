@@ -1,5 +1,30 @@
 # llama-yggdrasil
 
+> ## ⚠️ Disclaimer — please read before reviewing or using this repository
+>
+> **The repository owner is not a software developer.** This project is
+> **vibe-coded** in collaboration with [Claude Code](https://claude.com/claude-code).
+> Every line of source change against the upstream `ggml-org/llama.cpp`
+> codebase — design, port, integration, build, test, documentation — is
+> produced by Claude Code under conversational direction. **No code change
+> in this repository is hand-written by a human.**
+>
+> Treat the contents accordingly:
+>
+> - Don't assume mainline-llama.cpp quality conventions. This is an
+>   experimental consolidation project; correctness is verified empirically
+>   (PPL parity, benchmarks, smoke tests), not by traditional code review.
+> - Don't expect timely security patches, CVE response, or production-grade
+>   support. If you need a hardened downstream, use mainline llama.cpp.
+> - Don't open PRs expecting a developer-style review cycle. The owner can
+>   discuss intent and shape but can't independently review code.
+> - Cite upstream `ggml-org/llama.cpp` for everything not introduced by
+>   yggdrasil layers; cite this repo for the consolidation work itself.
+>
+> If you're here to learn how a non-developer can drive a complex
+> systems-software fork end-to-end with an AI agent, you're in the right
+> place. If you're here for production-ready inference code, go upstream.
+
 A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
 that absorbs novel work from six sibling forks into a single coherent tree.
 
