@@ -493,6 +493,15 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "iq4_nl") {
         return GGML_TYPE_IQ4_NL;
     }
+    if (s == "turboq2") {
+        return GGML_TYPE_TURBOQ2_0;
+    }
+    if (s == "turboq3") {
+        return GGML_TYPE_TURBOQ3_0;
+    }
+    if (s == "turboq4") {
+        return GGML_TYPE_TURBOQ4_0;
+    }
 
     return GGML_TYPE_COUNT;
 }
