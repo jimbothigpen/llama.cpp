@@ -204,6 +204,46 @@ struct block_q1_0
 #define A_TYPE block_q1_0
 #endif
 
+// TurboQuant 3-bit PolarQuant KV cache (yggdrasil Phase 1).
+// Block layout matches ggml-common.h block_turboq3_0: 2-byte norm + 32-byte
+// 2-bit indices + 16-byte 1-bit signs = 50 bytes per 128 values.
+#define QUANT_K_TURBOQ3_0 128
+#define QUANT_R_TURBOQ3_0 1
+
+struct block_turboq3_0
+{
+    float16_t norm;
+    uint8_t qs[QUANT_K_TURBOQ3_0 / 4];
+    uint8_t signs[QUANT_K_TURBOQ3_0 / 8];
+};
+
+#if defined(DATA_A_TURBOQ3_0)
+#define QUANT_K QUANT_K_TURBOQ3_0
+#define QUANT_R QUANT_R_TURBOQ3_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq3_0
+#endif
+
+// TurboQuant 4-bit PolarQuant KV cache (yggdrasil Phase 1).
+// 4-bit mode default per ggml-common.h: 2-byte norm + 2-byte rnorm (reserved)
+// + 64-byte nibble-packed 4-bit indices = 68 bytes per 128 values.
+#define QUANT_K_TURBOQ4_0 128
+#define QUANT_R_TURBOQ4_0 1
+
+struct block_turboq4_0
+{
+    float16_t norm;
+    float16_t rnorm;
+    uint8_t qs[QUANT_K_TURBOQ4_0 / 2];
+};
+
+#if defined(DATA_A_TURBOQ4_0)
+#define QUANT_K QUANT_K_TURBOQ4_0
+#define QUANT_R QUANT_R_TURBOQ4_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq4_0
+#endif
+
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 

@@ -1,8 +1,17 @@
 #version 450
 
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
 #include "types.glsl"
 
-#if defined(SET_ROWS) && QUANT_K == 1
+#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0))
+// TurboQuant SET_ROWS shaders run the full forward WHT (128 elements per
+// block) inside one workgroup, with subgroup-wide reductions for the
+// pre/post norm and a barrier-driven butterfly.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+const uint BLOCK_SIZE = 128;
+#elif defined(SET_ROWS) && QUANT_K == 1
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 512;
 #else
@@ -270,7 +279,264 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
-#if defined(SET_ROWS)
+#if defined(SET_ROWS) && defined(DATA_A_TURBOQ3_0)
+// TurboQuant 3-bit SET_ROWS: forward Walsh-Hadamard + 8-centroid PolarQuant.
+// Block size = 128 elements; one workgroup per block; 128 threads, 1 element each.
+const float TS1_T3[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T3[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T3 = 0.08838834764831845;  // 1 / sqrt(128)
+const float TC3[8] = float[8](
+    -0.190685, -0.117832, -0.065717, -0.021460,
+     0.021460,  0.065717,  0.117832,  0.190685
+);
+const float TM3[7] = float[7](
+    -0.154259, -0.091775, -0.043589,
+     0.0,
+     0.043589,  0.091775,  0.154259
+);
+
+shared float wht_t3[128];
+shared float sg_acc_t3[16];
+shared float gnrm_t3;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne12;
+    const uint i03 = tmp / p.ne12;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t3[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t3[t] * wht_t3[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t3[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t3[w];
+        gnrm_t3 = sqrt(total);
+    }
+    barrier();
+
+    wht_t3[t] *= (gnrm_t3 > 1e-10) ? (1.0 / gnrm_t3) : 0.0;
+    barrier();
+
+    wht_t3[t] *= TS1_T3[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t3[t];
+            float b    = wht_t3[t + h];
+            wht_t3[t]     = a + b;
+            wht_t3[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t3[t] * TINV_T3 * TS2_T3[t];
+
+    // Quantize to nearest of 8 centroids (3-bit index: 2-bit qs + 1-bit signs).
+    uint idx = rv < TM3[0] ? 0u : rv < TM3[1] ? 1u : rv < TM3[2] ? 2u : rv < TM3[3] ? 3u :
+               rv < TM3[4] ? 4u : rv < TM3[5] ? 5u : rv < TM3[6] ? 6u : 7u;
+
+    // Pack qs: 4 elements per byte (low 2 bits of each 3-bit index).
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint my_low2 = idx & 0x3u;
+    uint qs_byte = 0u;
+    [[unroll]] for (uint k = 0; k < 4; k++) {
+        uint contrib = subgroupShuffle(my_low2, (sg_lane & ~3u) + k);
+        qs_byte |= contrib << (k * 2u);
+    }
+    if (sg_lane % 4u == 0u) {
+        data_q[db].qs[t / 4u] = uint8_t(qs_byte);
+    }
+
+    // Pack signs: 8 elements per byte (high bit of each 3-bit index).
+    // subgroupShuffle requires uniform control flow, so all lanes
+    // participate in the shuffle even though only every 8th lane writes
+    // the result. (RADV/Strix Halo runs wave64; TheTom's subgroupBallot
+    // variant assumed wave32 and overflowed ballot.x on sg_lane >= 32.)
+    uint my_hi1 = (idx >> 2u) & 1u;
+    uint b = 0u;
+    [[unroll]] for (uint k = 0u; k < 8u; k++) {
+        uint contrib = subgroupShuffle(my_hi1, (sg_lane & ~7u) + k);
+        b |= contrib << k;
+    }
+    if (sg_lane % 8u == 0u) {
+        data_q[db].signs[t / 8u] = uint8_t(b);
+    }
+
+    // Reconstruction-norm correction so dequant(reconstruct) matches original L2.
+    float rc = TC3[idx] * TC3[idx];
+    rc = subgroupAdd(rc);
+    if (sg_lane == 0u) sg_acc_t3[gl_SubgroupID] = rc;
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t3[w];
+        float rn = sqrt(total);
+        data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t3 / rn) : gnrm_t3);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ4_0)
+// TurboQuant 4-bit PolarQuant SET_ROWS (default mode per ggml-common.h:
+// TURBOQ4_USE_4BIT=1). Same WHT pipeline as TURBOQ3, but with 16 centroids
+// and nibble-packed indices (no signs byte).
+const float TS1_T4[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T4[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T4 = 0.08838834764831845;  // 1 / sqrt(128)
+// Lloyd-Max centroids for N(0, 1/128), 16 levels.
+const float TC4[16] = float[16](
+    -0.173926, -0.117195, -0.089527, -0.068756,
+    -0.051262, -0.035597, -0.020989, -0.006938,
+     0.006938,  0.020989,  0.035597,  0.051262,
+     0.068756,  0.089527,  0.117195,  0.173926
+);
+// 15 midpoints between adjacent centroids.
+const float TM4[15] = float[15](
+    -0.145561, -0.103361, -0.079142, -0.060009,
+    -0.043430, -0.028293, -0.013964,  0.0,
+     0.013964,  0.028293,  0.043430,  0.060009,
+     0.079142,  0.103361,  0.145561
+);
+
+shared float wht_t4[128];
+shared float sg_acc_t4[16];
+shared float gnrm_t4;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne12;
+    const uint i03 = tmp / p.ne12;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t4[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t4[t] * wht_t4[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t4[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t4[w];
+        gnrm_t4 = sqrt(total);
+    }
+    barrier();
+
+    wht_t4[t] *= (gnrm_t4 > 1e-10) ? (1.0 / gnrm_t4) : 0.0;
+    barrier();
+
+    wht_t4[t] *= TS1_T4[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t4[t];
+            float b    = wht_t4[t + h];
+            wht_t4[t]     = a + b;
+            wht_t4[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t4[t] * TINV_T4 * TS2_T4[t];
+
+    // Quantize to nearest of 16 centroids (4-bit index, no signs byte).
+    uint idx = 0u;
+    [[unroll]] for (uint i = 0; i < 15; i++) {
+        if (rv >= TM4[i]) idx = i + 1u;
+    }
+
+    // Pack qs: 2 elements per byte (4-bit nibble each).
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint pair_low  = subgroupShuffle(idx & 0xFu, sg_lane & ~1u);
+    uint pair_high = subgroupShuffle(idx & 0xFu, (sg_lane & ~1u) + 1u);
+    uint qs_byte = pair_low | (pair_high << 4u);
+    if (sg_lane % 2u == 0u) {
+        data_q[db].qs[t / 2u] = uint8_t(qs_byte);
+    }
+
+    // Reset rnorm field (reserved in 4-bit mode).
+    if (t == 0u) {
+        data_q[db].rnorm = float16_t(0.0);
+    }
+
+    // Reconstruction-norm correction.
+    float rc = TC4[idx] * TC4[idx];
+    rc = subgroupAdd(rc);
+    if (sg_lane == 0u) sg_acc_t4[gl_SubgroupID] = rc;
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t4[w];
+        float rn = sqrt(total);
+        data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t4 / rn) : gnrm_t4);
+    }
+}
+#elif defined(SET_ROWS)
 
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM

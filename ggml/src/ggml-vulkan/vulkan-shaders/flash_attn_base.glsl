@@ -90,29 +90,33 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
 // FaTypeK / FaTypeV spec constant values. These mirror enum ggml_type so the
 // host can pass the type directly. Keep in sync with ggml.h.
-#define FA_TYPE_F32   0u
-#define FA_TYPE_F16   1u
-#define FA_TYPE_Q4_0  2u
-#define FA_TYPE_Q4_1  3u
-#define FA_TYPE_Q5_0  6u
-#define FA_TYPE_Q5_1  7u
-#define FA_TYPE_Q8_0  8u
-#define FA_TYPE_Q1_0 41u
+#define FA_TYPE_F32       0u
+#define FA_TYPE_F16       1u
+#define FA_TYPE_Q4_0      2u
+#define FA_TYPE_Q4_1      3u
+#define FA_TYPE_Q5_0      6u
+#define FA_TYPE_Q5_1      7u
+#define FA_TYPE_Q8_0      8u
+#define FA_TYPE_Q1_0     41u
+#define FA_TYPE_TURBOQ3_0 61u
+#define FA_TYPE_TURBOQ4_0 62u
 
 // Number of matrix elements per buffer block, derived from the K/V type spec
 // constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1
 // and bypasses the dequant path entirely. Quants follow their ggml block sizes.
 uint fa_block_elems(uint ty) {
     switch (ty) {
-        case FA_TYPE_F32:  return 4u;
-        case FA_TYPE_F16:  return 1u;
-        case FA_TYPE_Q4_0: return uint(QUANT_K_Q4_0);
-        case FA_TYPE_Q4_1: return uint(QUANT_K_Q4_1);
-        case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
-        case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
-        case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
-        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
-        default:           return 1u;
+        case FA_TYPE_F32:      return 4u;
+        case FA_TYPE_F16:      return 1u;
+        case FA_TYPE_Q4_0:     return uint(QUANT_K_Q4_0);
+        case FA_TYPE_Q4_1:     return uint(QUANT_K_Q4_1);
+        case FA_TYPE_Q5_0:     return uint(QUANT_K_Q5_0);
+        case FA_TYPE_Q5_1:     return uint(QUANT_K_Q5_1);
+        case FA_TYPE_Q8_0:     return uint(QUANT_K_Q8_0);
+        case FA_TYPE_Q1_0:     return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        case FA_TYPE_TURBOQ3_0: return uint(QUANT_K_TURBOQ3_0);
+        case FA_TYPE_TURBOQ4_0: return uint(QUANT_K_TURBOQ4_0);
+        default:               return 1u;
     }
 }
 
