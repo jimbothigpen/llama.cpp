@@ -306,3 +306,66 @@ void ggml_cuda_mul_mat_vec_tq(ggml_backend_cuda_context & ctx,
         }
     }
 }
+
+// ============================================================================
+// Load-time conversion: WHT4_0 → q8_0
+//
+// Fused kernel: dequant WHT4_0 (centroid lookup + inverse WHT) → quantize q8_0.
+// One warp (32 threads) per block of 32 elements.
+// Used at model load to convert WHT4_0 weights to q8_0 in VRAM for dp4a decode.
+// ============================================================================
+
+static __global__ void k_convert_wht4_0_to_q8_0(
+        const block_wht4_0 * __restrict__ src,
+        block_q8_0         * __restrict__ dst,
+        const int n_blocks) {
+
+    const int block_idx = blockIdx.x * blockDim.y + threadIdx.y;
+    if (block_idx >= n_blocks) return;
+
+    const int lane = threadIdx.x;
+    const block_wht4_0 * blk = &src[block_idx];
+
+    // Step 1: Dequant — centroid lookup × half-block scale
+    const float d_scale = (lane < 16) ? __half2float(blk->d0) : __half2float(blk->d1);
+    const uint8_t idx = (blk->qs[lane / 2] >> ((lane & 1) * 4)) & 0xF;
+    float val = TQ4_CENTROIDS_WEIGHT[idx] * d_scale;
+
+    // Step 2: Inverse WHT via warp shuffle (same as dequant path)
+    #pragma unroll
+    for (int h = 1; h < 32; h <<= 1) {
+        float o = __shfl_xor_sync(0xffffffff, val, h, WARP_SIZE);
+        val = (lane & h) ? (o - val) : (val + o);
+    }
+    val *= 0.17677669529663688f;  // 1/sqrt(32)
+    val *= TQ_WEIGHT_SIGNS[lane];
+
+    // Step 3: Quantize to q8_0 — find block amax, compute scale, round
+    float amax = fabsf(val);
+    #pragma unroll
+    for (int off = 16; off > 0; off >>= 1)
+        amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, off, WARP_SIZE));
+
+    const float d = amax / 127.0f;
+    const float id = (d > 0.0f) ? 127.0f / amax : 0.0f;
+
+    // Step 4: Write q8_0 block
+    dst[block_idx].qs[lane] = (int8_t)roundf(val * id);
+    if (lane == 0) {
+        dst[block_idx].d = __float2half(d);
+    }
+}
+
+void ggml_cuda_convert_wht4_0_to_q8_0(const void * src_tq4, void * dst_q8, int64_t n_elements, cudaStream_t stream) {
+    GGML_ASSERT(n_elements % QK_WHT4_0 == 0);
+    const int n_blocks = n_elements / QK_WHT4_0;
+
+    const int wpb = 4;  // warps per CUDA block
+    const dim3 block(32, wpb);
+    const dim3 grid((n_blocks + wpb - 1) / wpb);
+
+    k_convert_wht4_0_to_q8_0<<<grid, block, 0, stream>>>(
+        (const block_wht4_0 *)src_tq4,
+        (block_q8_0 *)dst_q8,
+        n_blocks);
+}
