@@ -429,7 +429,10 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        // slots 42–59 reserved for mainline growth (do not use) — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
+        GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
+        GGML_TYPE_COUNT   = 63,
     };
 
     // precision
