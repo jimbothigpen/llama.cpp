@@ -775,6 +775,11 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_WHT3_0:
+        case GGML_TYPE_WHT4_0:
+            // ADR-016: yggdrasil WHT-rotated weight quants require imatrix.
+            // The WLS scale optimization in quantize_block_wht{3,4}_0 uses
+            // per-element importance weights for substantial PPL gain.
             return true;
         case GGML_TYPE_Q2_K:
             // as a general rule, the k-type quantizations don't require imatrix data.
