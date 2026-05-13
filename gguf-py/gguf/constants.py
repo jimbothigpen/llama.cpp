@@ -2115,7 +2115,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_BETA,
         MODEL_TENSOR.SSM_ALPHA,
         MODEL_TENSOR.SSM_OUT,
-        # NextN/MTP tensors - preserved but unused
+        # NextN/MTP tensors written by _Qwen35MtpMixin onto the trailing
+        # nextn_predict_layers blocks. Loaded by the base-arch loader as
+        # TENSOR_NOT_REQUIRED; active MTP head is the sibling qwen35_mtp arch.
         MODEL_TENSOR.NEXTN_EH_PROJ,
         MODEL_TENSOR.NEXTN_EMBED_TOKENS,
         MODEL_TENSOR.NEXTN_ENORM,
@@ -2153,7 +2155,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_BETA,
         MODEL_TENSOR.SSM_ALPHA,
         MODEL_TENSOR.SSM_OUT,
-        # NextN/MTP tensors - preserved but unused
+        # NextN/MTP tensors — see QWEN35 comment above.
         MODEL_TENSOR.NEXTN_EH_PROJ,
         MODEL_TENSOR.NEXTN_EMBED_TOKENS,
         MODEL_TENSOR.NEXTN_ENORM,
