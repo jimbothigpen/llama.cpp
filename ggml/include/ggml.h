@@ -432,7 +432,10 @@ extern "C" {
         // slots 42–59 reserved for mainline growth (do not use) — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_COUNT   = 63,
+        // slots 63–79 reserved for yggdrasil future KV/RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
+        GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
+        GGML_TYPE_COUNT   = 82,
     };
 
     // precision
