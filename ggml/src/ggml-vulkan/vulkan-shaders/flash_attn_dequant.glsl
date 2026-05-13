@@ -28,6 +28,11 @@ layout (binding = 2) readonly buffer V_PACKED_Q5_1 { block_q5_1_packed16 data[];
 layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[]; } k_packed_q8_0;
 layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[]; } v_packed_q8_0;
 
+// turboq3_0 uses a struct binding (block_turboq3_0) rather than a packed16
+// view because its 50-byte block doesn't fit a uniform 16/32-bit interleave.
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } k_packed_turboq3_0;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } v_packed_turboq3_0;
+
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
 layout (binding = 1) readonly buffer K_PACKED_Q4_1_P32 { block_q4_1_packed32 data[]; } k_packed_q4_1_p32;
@@ -99,24 +104,53 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     return FLOAT_TYPE(BUF.data[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);          \
 }
 
+// PolarQuant 3-bit centroids (Lloyd-Max for Gaussian). Index 0..7 = (1-bit
+// sign << 2) | 2-bit magnitude. Matches CENTROIDS_3BIT in ggml-turbo-quant.c
+// and dequantize_row_turboq3_0.
+const float T3C[8] = float[8](
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+);
+
+#define FA_DEQUANT4_TURBOQ3_0(BUF) {                                                              \
+    const uint qb0 = uint(BUF.data[a_offset + ib].qs[(iqs    ) / 4]);                             \
+    const uint qb1 = uint(BUF.data[a_offset + ib].qs[(iqs + 4) / 4]);                             \
+    const uint sb  = uint(BUF.data[a_offset + ib].signs[iqs / 8]);                                \
+    const uint l0 = (qb0 >> (((iqs    ) % 4) * 2u)) & 0x3u;                                       \
+    const uint l1 = (qb0 >> (((iqs + 1) % 4) * 2u)) & 0x3u;                                       \
+    const uint l2 = (qb0 >> (((iqs + 2) % 4) * 2u)) & 0x3u;                                       \
+    const uint l3 = (qb0 >> (((iqs + 3) % 4) * 2u)) & 0x3u;                                       \
+    const uint h0 = (sb >> ((iqs    ) % 8)) & 0x1u;                                               \
+    const uint h1 = (sb >> ((iqs + 1) % 8)) & 0x1u;                                               \
+    const uint h2 = (sb >> ((iqs + 2) % 8)) & 0x1u;                                               \
+    const uint h3 = (sb >> ((iqs + 3) % 8)) & 0x1u;                                               \
+    FLOAT_TYPEV4 c = FLOAT_TYPEV4(T3C[l0 | (h0 << 2)],                                            \
+                                  T3C[l1 | (h1 << 2)],                                            \
+                                  T3C[l2 | (h2 << 2)],                                            \
+                                  T3C[l3 | (h3 << 2)]);                                           \
+    return FLOAT_TYPE(BUF.data[a_offset + ib].norm) * c;                                          \
+}
+
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
         switch (FaTypeK) {
-            case FA_TYPE_F32:  FA_DEQUANT4_F32 (k_packed_f32)
-            case FA_TYPE_Q4_0: FA_DEQUANT4_Q4_0(k_packed_q4_0)
-            case FA_TYPE_Q4_1: FA_DEQUANT4_Q4_1(k_packed_q4_1)
-            case FA_TYPE_Q5_0: FA_DEQUANT4_Q5_0(k_packed_q5_0)
-            case FA_TYPE_Q5_1: FA_DEQUANT4_Q5_1(k_packed_q5_1)
-            case FA_TYPE_Q8_0: FA_DEQUANT4_Q8_0(k_packed_q8_0)
+            case FA_TYPE_F32:      FA_DEQUANT4_F32     (k_packed_f32)
+            case FA_TYPE_Q4_0:     FA_DEQUANT4_Q4_0    (k_packed_q4_0)
+            case FA_TYPE_Q4_1:     FA_DEQUANT4_Q4_1    (k_packed_q4_1)
+            case FA_TYPE_Q5_0:     FA_DEQUANT4_Q5_0    (k_packed_q5_0)
+            case FA_TYPE_Q5_1:     FA_DEQUANT4_Q5_1    (k_packed_q5_1)
+            case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (k_packed_q8_0)
+            case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(k_packed_turboq3_0)
         }
     } else {
         switch (FaTypeV) {
-            case FA_TYPE_F32:  FA_DEQUANT4_F32 (v_packed_f32)
-            case FA_TYPE_Q4_0: FA_DEQUANT4_Q4_0(v_packed_q4_0)
-            case FA_TYPE_Q4_1: FA_DEQUANT4_Q4_1(v_packed_q4_1)
-            case FA_TYPE_Q5_0: FA_DEQUANT4_Q5_0(v_packed_q5_0)
-            case FA_TYPE_Q5_1: FA_DEQUANT4_Q5_1(v_packed_q5_1)
-            case FA_TYPE_Q8_0: FA_DEQUANT4_Q8_0(v_packed_q8_0)
+            case FA_TYPE_F32:      FA_DEQUANT4_F32     (v_packed_f32)
+            case FA_TYPE_Q4_0:     FA_DEQUANT4_Q4_0    (v_packed_q4_0)
+            case FA_TYPE_Q4_1:     FA_DEQUANT4_Q4_1    (v_packed_q4_1)
+            case FA_TYPE_Q5_0:     FA_DEQUANT4_Q5_0    (v_packed_q5_0)
+            case FA_TYPE_Q5_1:     FA_DEQUANT4_Q5_1    (v_packed_q5_1)
+            case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (v_packed_q8_0)
+            case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(v_packed_turboq3_0)
         }
     }
     return FLOAT_TYPEV4(0);
