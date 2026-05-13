@@ -71,7 +71,11 @@ Status updated per layer landing. Initial state derived from
 
 | Feature | Layer | ROCm status | Vulkan status | Vulkan port priority |
 |---|---|---|---|---|
-| TurboQuant KV (TURBOQ2/3/4_0) | 1 | source has full HIP coverage | source has none | **P0** — first Vulkan port |
+| TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
+| WHT weight quants (WHT3_0) | 1 | **RELEASED** | **deferred** — no TQ3_1S shaders in upstream; tracked as yggdrasil-original port | P2 — yggdrasil-original ~50-100 LOC; lands alongside RotorQuant Phase 5 |
+| WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
+| GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
+| Boundary V / `TURBO_LAYER_ADAPTIVE` | 1 | **RELEASED** | **RELEASED** | n/a (default-off; backend-agnostic plumbing) |
 | MTP spec-decode spine | 2 | source has CPU/scheduler logic | source has none for novel kernels | P2 — depends on KV layer Vulkan |
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 4 | source has dedicated HIP scoring kernel | source has none | P1 — scoring kernel needs Vulkan port |
@@ -122,22 +126,49 @@ buffer-sizing pitfall for IK-family row-meta types):
    that were really file-mismatch artifacts.
 6. **Submit as a follow-up topic branch.** Name: `vulkan/<feature>`.
 
-## gfx1102 / gfx1103 ROCm — out of scope
+## gfx1102 / gfx1103 ROCm — partial scope (smoke target)
 
 AMD's upstream ROCm support for RDNA3 mobile (gfx1102/1103) is incomplete
 — stock Tensile lacks GEMM kernels for many dtype/shape combinations
 encountered in production workloads. ROCm calibration on RDNA3-mobile
-systems is currently unworkable; Vulkan is the practical alternative.
+systems is unworkable for production inference; Vulkan is the practical
+alternative for those workloads.
 
-**Project decision (2026-05-12):** Yggdrasil treats gfx1102/1103 ROCm
-support as **out of scope**. Investigating community fixes (custom
-Tensile/hipblas builds, alternative HIP-on-Vulkan translation, etc.) is
-not yggdrasil's problem to solve. RDNA3-mobile systems run Vulkan
-unconditionally.
+**Project decision (2026-05-12, refined 2026-05-21):** Yggdrasil treats
+gfx1102/1103 ROCm as **out of scope for production inference / calibration**,
+**in scope as a regression-smoke target**. The build catches HIP-shim
+breakage early (e.g., new `__shfl_xor_sync` call sites, missing
+`cudaStreamCapture*` shims, undefined-symbol link errors when a new
+fattn-vec template instance is added). Cross-host PPL parity is validated
+against ai00 gfx1150 on models that fit gfx1103's GEMM coverage
+(empirically: TurboQuant KV types + WHT weight quants pass; mainline
+Q4_K_M passes; production-class quantize/calibrate workloads still hit
+Tensile gaps).
+
+**Build recipe.** Single-target gfx1102 build (dual-target gfx1102+gfx1103
+install hangs at relink). Runtime requires the HSA override to load the
+gfx1102 binary on gfx1103 hardware via RDNA3-family ISA compatibility:
+
+```bash
+cmake -B build-rocm-gfx1102 -S . -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/opt/llama-yggdrasil-rocm-ai01 \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="gfx1102" \
+    -DGGML_AVX512=ON -DGGML_AVX512_VBMI=ON \
+    -DGGML_AVX512_VNNI=ON -DGGML_AVX512_BF16=ON \
+    -DCMAKE_C_FLAGS="-march=native -O3" \
+    -DCMAKE_CXX_FLAGS="-march=native -O3"
+cmake --build build-rocm-gfx1102 -j
+
+# Runtime: ALWAYS set HSA_OVERRIDE
+HSA_OVERRIDE_GFX_VERSION=11.0.2 ./build-rocm-gfx1102/bin/llama-perplexity ...
+```
 
 If AMD ships upstream support for gfx1102/1103 GEMM kernels at some
 future point, yggdrasil will inherit it via the standard cmake recipe
-without project-side work.
+without project-side work, and this section will collapse back to
+"first-class".
 
 ## Documenting Vulkan-non-viable features
 
@@ -229,3 +260,7 @@ features; sweep regularly.
 ## Version log
 
 - **v1** (2026-05-12) — initial policy + audit baseline.
+- **v2** (2026-05-21) — Phase 1 release: TurboQuant KV (TURBOQ2/3/4_0) +
+  WHT4_0 released on both backends; WHT3_0 Vulkan deferred (yggdrasil-original
+  port pending). gfx1102/1103 ROCm scope refined from "out of scope" to
+  "partial scope: smoke target" (HSA_OVERRIDE recipe documented).
