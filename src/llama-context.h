@@ -349,6 +349,12 @@ private:
 
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
+    // MTP: when (cparams.mtp && hparams.nextn_predict_layers > 0), the embd buffer is laid
+    // out per-batch-token (one row per ubatch token), not per-output. Tracked separately so
+    // get_embeddings_ith() can address the right row, and so output_reserve() can size the
+    // buffer accordingly. Equals n_outputs in the non-MTP case.
+    int32_t n_outputs_embd = 0;
+
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
 
     struct swap_info {

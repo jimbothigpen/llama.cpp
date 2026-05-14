@@ -890,7 +890,21 @@ float * llama_context::get_embeddings_ith(int32_t i) {
             throw std::runtime_error("no embeddings");
         }
 
-        const int64_t j = output_resolve_row(i);
+        // MTP NONE-pass lays out embd.data per-batch-token; bypass output_ids translation
+        // so callers can index by batch position (the last decoded ubatch's mapping).
+        const bool mtp_layout =
+            model.hparams.nextn_predict_layers > 0 && cparams.mtp &&
+            n_outputs_embd > (int32_t) n_outputs;
+
+        int64_t j;
+        if (mtp_layout) {
+            j = (i < 0) ? (int64_t) n_outputs_embd + i : (int64_t) i;
+            if (j < 0 || j >= n_outputs_embd) {
+                throw std::runtime_error(format("out of range [0, %d)", n_outputs_embd));
+            }
+        } else {
+            j = output_resolve_row(i);
+        }
         const uint32_t n_embd_out = model.hparams.n_embd_out();
         return embd.data + j*n_embd_out;
     } catch (const std::exception & err) {
@@ -1607,6 +1621,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     }
 
     n_outputs = n_tokens;
+    n_outputs_embd = n_tokens;
 
     const auto causal_attn_org = cparams.causal_attn;
 
@@ -2000,6 +2015,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
+    // MTP NONE-pass: embd.data is laid out per-batch-token across ubatches; track separately
+    // because n_outputs only counts marked-output tokens (1 for prompt prefill).
+    const bool mtp_full_embd_pass =
+        cparams.mtp && model.hparams.nextn_predict_layers > 0 &&
+        cparams.mtp_op_type == MTP_OP_NONE;
+    int64_t n_outputs_embd_prev = 0;
+
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -2096,7 +2118,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         // extract embeddings on NONE-pass and on DRAFT_GEN (the per-step hidden state is
         // fed back into the next draft iteration via llama_set_draft_input_hidden_state);
         // WARMUP / UPDATE_ACCEPTED still skipped — they only write K/V, no useful embd.
-        if (embd.data && t_embd && n_outputs > 0 &&
+        // MTP NONE-pass extracts one row per ubatch token (not per marked-output), so the
+        // WARMUP / UPDATE_ACCEPTED passes can read the full [n_embd x n_tokens] matrix back.
+        const bool extract_full_tokens = mtp_full_embd_pass && cparams.mtp_op_type == MTP_OP_NONE;
+        const int64_t n_extract = extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
+        if (embd.data && t_embd && n_extract > 0 &&
             (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
@@ -2107,13 +2133,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         // extract token embeddings
                         GGML_ASSERT(embd.data != nullptr);
                         const uint32_t n_embd_out = hparams.n_embd_out();
-                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;
+                        float * embd_out = embd.data + n_outputs_embd_prev*n_embd_out;
 
-                        if (n_outputs) {
-                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));
-                        }
+                        GGML_ASSERT((n_outputs_embd_prev + n_extract)*n_embd_out <= (int64_t) embd.size);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_extract*n_embd_out*sizeof(float));
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
                 case LLAMA_POOLING_TYPE_CLS:
@@ -2194,12 +2217,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         n_outputs_prev += n_outputs;
-        n_tokens_prev  += ubatch.n_tokens;
+        n_outputs_embd_prev += extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
     sidecars_post_compute_n_outputs = (int) n_outputs_all;
+
+    // For MTP NONE-pass embd.data has one row per batch token; non-MTP paths follow n_outputs.
+    n_outputs_embd = mtp_full_embd_pass ? (int32_t) n_tokens_all : (int32_t) n_outputs_all;
 
     // set output mappings
     if (n_outputs > 0) {
@@ -2289,9 +2315,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
-    logits.size        = has_logits        ? n_vocab*n_outputs_max     : 0;
-    embd.size          = has_embd          ? n_embd_out*n_outputs_max  : 0;
-    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max      : 0;
+    // MTP NONE-pass writes per-batch-token rows into embd.data (so WARMUP / UPDATE_ACCEPTED
+    // can read the full hidden-state matrix back through prepare_mtp_graph_inputs). Size the
+    // buffer for n_batch tokens, not just n_outputs.
+    const int64_t n_outputs_embd_max = has_mtp ? std::max<int64_t>(n_batch, n_outputs_max) : n_outputs_max;
+
+    logits.size        = has_logits        ? n_vocab*n_outputs_max         : 0;
+    embd.size          = has_embd          ? n_embd_out*n_outputs_embd_max : 0;
+    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max          : 0;
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
