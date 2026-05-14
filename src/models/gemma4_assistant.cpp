@@ -547,6 +547,13 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cb(cur, "l_out", il);
     }
 
+    // Final norm. In the HF reference the backbone text model applies its
+    // own final norm before returning last_hidden_state, and BOTH the
+    // post_projection and the output head consume that normed state — so the
+    // norm must come before post_projection, not after.
+    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+
     // post_projection: [n_embd -> n_backbone]. This is the chained-hidden
     // output — the speculative driver reads it back through res->t_embd and
     // feeds it as the next draft step's t_mtp_states input.
@@ -555,12 +562,9 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     res->t_embd = mtp_embd;
     ggml_build_forward_expand(gf, mtp_embd);
 
-    // Final norm + output head. Non-centroid path (use_ordered_embeddings ==
-    // false, e.g. 26B-A4B): the tied `output` head directly. Centroid path is
-    // a follow-up commit (build_masked_embedding_logits).
-    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
-    cb(cur, "result_norm", -1);
-
+    // Output head. Non-centroid path (use_ordered_embeddings == false, e.g.
+    // 26B-A4B): the tied `output` head directly. Centroid path
+    // (E2B/E4B): the masked-embedding head.
     if (use_ordered_embeddings) {
         cur = build_masked_embedding_logits(cur, model.output);
     } else {
@@ -572,22 +576,91 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llama_model_gemma4_assistant::graph::build_masked_embedding_logits(ggml_tensor * hidden, ggml_tensor * lm_head_w) {
-    // Reference: transformers Gemma4AssistantMaskedEmbedder
-    // 1. centroid_logits = hidden @ centroids^T                  [B, L, num_centroids]
-    // 2. top_k_idx       = topk(centroid_logits, k=top_k)        [B, L, top_k]
-    // 3. canonical[c, j] = token_ordering[c * (V/num_centroids) + j]
-    //    (token_ordering is a vocab-sized i32 permutation buffer)
-    // 4. selected_emb    = lm_head[canonical[top_k_idx]]         [B, L, top_k * V_per, D]
-    // 5. selected_logits = hidden @ selected_emb^T               [B, L, top_k * V_per]
-    // 6. scatter selected_logits into [B, L, V] positions; everything else
-    //    is filled with `min(selected_logits) - 1`.
-    //
-    // Implementing the masked scatter cleanly in ggml requires `scatter_rows`
-    // which is not yet a graph-level op. The piece is parked here as a method
-    // on the graph so the runtime patch can swap in the implementation
-    // without touching the loader or the architecture metadata.
-    GGML_UNUSED(hidden);
-    GGML_UNUSED(lm_head_w);
-    GGML_ABORT("gemma4-assistant: build_masked_embedding_logits not yet implemented");
+// Centroid-clustered masked-embedding output head.
+//
+// Reference: HF transformers Gemma4AssistantMaskedEmbedder.forward. The
+// drafter scores `n_assist_centroids` cluster centroids, keeps the top-K,
+// expands each kept cluster to its `vpc = n_vocab / n_centroids` member
+// tokens via the `token_ordering` permutation, computes real logits only
+// for those `top_k * vpc` tokens, and scatters them into a full
+// [n_vocab, n_tokens] tensor whose every other entry is masked to
+// `min(selected_logits) - 1` (so masked tokens keep a tiny but non-zero
+// softmax mass, matching the reference).
+//
+//   hidden:    [n_embd, n_tokens]  (the assistant's normed last hidden state)
+//   lm_head_w: [n_embd, n_vocab]   (tied output embedding)
+//
+// No fork reference exists for this head — frankenturbo2 / ik_llama only
+// did the no-centroid 26B-A4B path. Built from the HF reference + mainline
+// #22738's build_masked_embedding_logits comment. The ggml realization
+// avoids a dedicated scatter op by using the row-size-1 ggml_set_rows
+// trick (same pattern as build_moe_ffn's expert-group masking).
+ggml_tensor * llama_model_gemma4_assistant::graph::build_masked_embedding_logits(
+        ggml_tensor * hidden, ggml_tensor * lm_head_w) {
+    GGML_ASSERT(model.assist_embed_centroids && model.assist_token_ordering &&
+                "gemma4-assistant: centroid head requires centroid + token-ordering tensors");
+
+    const int64_t n_vocab    = lm_head_w->ne[1];
+    const int64_t n_centroid = n_assist_centroids;
+    const int64_t top_k      = n_assist_centroid_top_k;
+    GGML_ASSERT(n_centroid > 0 && top_k > 0 && top_k <= n_centroid);
+    GGML_ASSERT(n_vocab % n_centroid == 0);
+    const int64_t vpc   = n_vocab / n_centroid;  // vocab_size_per_centroid
+    const int64_t n_sel = top_k * vpc;           // selected tokens per position
+
+    // 1. centroid_logits = centroids @ hidden  ->  [n_centroid, n_tokens]
+    ggml_tensor * centroid_logits = build_lora_mm(model.assist_embed_centroids, hidden);
+    cb(centroid_logits, "centroid_logits", -1);
+
+    // 2. top-K centroid indices per token, flattened to a 1-D index buffer.
+    ggml_tensor * top_k_idx = ggml_top_k(ctx0, centroid_logits, (int) top_k); // [top_k, n_tokens] I32
+    top_k_idx = ggml_reshape_1d(ctx0, top_k_idx, top_k * n_tokens);
+    cb(top_k_idx, "centroid_top_k", -1);
+
+    // 3. token_ordering is a vocab-sized permutation buffer, stored F32 (the
+    //    converter keeps the int64 values as bit-exact floats). Cast to I32
+    //    and view as [vpc, n_centroid]: column c holds cluster c's member ids.
+    //    Gathering by the kept centroid indices yields the selected vocab ids:
+    //    selected_canonical = [vpc, top_k * n_tokens] I32.
+    ggml_tensor * token_ordering = ggml_cast(ctx0, model.assist_token_ordering, GGML_TYPE_I32);
+    token_ordering = ggml_reshape_2d(ctx0, token_ordering, vpc, n_centroid);
+    ggml_tensor * selected_canonical = ggml_get_rows(ctx0, token_ordering, top_k_idx);
+    cb(selected_canonical, "selected_canonical", -1);
+
+    // 4. gather the lm_head rows for those vocab ids -> [n_embd, n_sel, n_tokens].
+    ggml_tensor * selected_idx_1d = ggml_reshape_1d(ctx0, selected_canonical, n_sel * n_tokens);
+    ggml_tensor * selected_emb = ggml_get_rows(ctx0, lm_head_w, selected_idx_1d);
+    selected_emb = ggml_reshape_3d(ctx0, selected_emb, n_embd, n_sel, n_tokens);
+    cb(selected_emb, "selected_emb", -1);
+
+    // 5. selected_logits = per-token dot(hidden, selected_emb) -> [n_sel, n_tokens].
+    ggml_tensor * hidden_3d = ggml_reshape_3d(ctx0, hidden, n_embd, 1, n_tokens);
+    ggml_tensor * selected_logits = ggml_mul_mat(ctx0, selected_emb, hidden_3d); // [n_sel, 1, n_tokens]
+    selected_logits = ggml_reshape_2d(ctx0, selected_logits, n_sel, n_tokens);
+    cb(selected_logits, "selected_logits", -1);
+
+    // 6a. mask_value = global min(selected_logits) - 1. ggml has no min
+    //     reduction, so take argmax of the negated flattened logits and read
+    //     that single element back.
+    ggml_tensor * sl_col   = ggml_reshape_2d(ctx0, selected_logits, n_sel * n_tokens, 1);
+    ggml_tensor * argmin   = ggml_argmax(ctx0, ggml_scale(ctx0, sl_col, -1.0f)); // [1] I32
+    ggml_tensor * sl_row   = ggml_reshape_2d(ctx0, selected_logits, 1, n_sel * n_tokens);
+    ggml_tensor * min_val  = ggml_get_rows(ctx0, sl_row, argmin);                // [1, 1]
+    ggml_tensor * mask_val = ggml_scale_bias(ctx0, min_val, 1.0f, -1.0f);        // min - 1
+    mask_val = ggml_reshape_3d(ctx0, mask_val, 1, 1, 1);
+
+    // 6b. base [1, n_vocab, n_tokens] filled with mask_value (broadcast add),
+    //     then scatter the real logits into their canonical vocab positions
+    //     via the row-size-1 ggml_set_rows trick.
+    ggml_tensor * base = ggml_fill(ctx0,
+        ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_tokens), 0.0f);
+    base = ggml_add(ctx0, base, mask_val);
+
+    ggml_tensor * scatter_idx = ggml_reshape_2d(ctx0, selected_canonical, n_sel, n_tokens);
+    ggml_tensor * scatter_src = ggml_reshape_3d(ctx0, selected_logits, 1, n_sel, n_tokens);
+    ggml_tensor * out = ggml_set_rows(ctx0, base, scatter_src, scatter_idx);
+    out = ggml_reshape_2d(ctx0, out, n_vocab, n_tokens);
+    cb(out, "masked_embedding_logits", -1);
+
+    return out;
 }
