@@ -830,10 +830,14 @@ struct common_speculative_impl_mtp : public common_speculative_impl {
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
-        // Fresh generation — drop any stale MTP-KV and hidden-state buffer.
-        llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, -1, -1);
-        hs_pos_base       = -1;
-        hs_n              = 0;
+        GGML_UNUSED(seq_id);
+        // Do NOT seq_rm the MTP-head KV here. begin() runs at the
+        // DONE_PROMPT -> GENERATING transition, i.e. AFTER the prompt has
+        // already been warmed into the MTP head's KV cache by process(). A
+        // wipe here would discard that warmup and leave the MTP head with a
+        // [0, prompt_len) cache gap for the entire generation. Stale cells
+        // from a previous request are instead cleared by mtp_update_kv_cache's
+        // own seq_rm on the first prompt-warmup batch.
         last_draft_n_past = -1;
     }
 
@@ -1889,6 +1893,19 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup) {
     if (batch.n_tokens == 0) {
         return;
+    }
+
+    // F5 (PR #1601): clear any stale MTP cells at or after the start of this
+    // batch before writing. The MTP head has its own KV cache that may still
+    // hold leftover positions from a previous WARMUP / UPDATE_ACCEPTED pass;
+    // without this seq_rm the new write lands on top of stale cells and the
+    // MTP head reads corrupted KV state (degenerate, non-deterministic drafts).
+    {
+        const llama_seq_id seq_id    = batch.seq_id[0][0];
+        const llama_pos    start_pos = batch.pos[0];
+        if (llama_memory_seq_pos_max(llama_get_memory(ctx), seq_id) >= start_pos) {
+            llama_memory_seq_rm(llama_get_memory(ctx), seq_id, start_pos, -1);
+        }
     }
 
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
