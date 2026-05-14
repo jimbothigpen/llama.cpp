@@ -270,6 +270,12 @@ int main(int argc, char ** argv) {
 
         // evaluate the same batch with the draft model
         {
+            // Trim ctx_dft back to pre-draft position so re-evaluation of batch_tgt doesn't
+            // collide with draft-generated KV entries. Required for M-RoPE models (Qwen3.5 family)
+            // where llama_batch_allocr::init() enforces last_kv_pos < min_batch_pos (strictly <).
+            // Safe/no-op for standard-RoPE models.
+            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+
             // TODO: extend to support MTP, Eagle, etc. See server code for reference
             llama_decode(ctx_dft.get(), batch_tgt);
         }
