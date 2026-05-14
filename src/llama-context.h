@@ -7,7 +7,6 @@
 #include "llama-adapter.h"
 #include "llama-sidecar.h"
 #include "llama-impl.h"
-#include "llama-mtp.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -89,12 +88,8 @@ struct llama_context {
     float * get_embeddings_pre_norm();
     float * get_embeddings_pre_norm_ith(int32_t i);
     float * get_embeddings_pre_norm_raw_ith(int32_t i);
-    ggml_tensor * get_t_h_pre_norm() const;
-    ggml_tensor * get_t_mtp_out() const;
-    void set_mtp(llama_context * ctx_mtp_in);
-    llama_context * get_mtp() const { return mtp.ctx_mtp; }
 
-    // MTP driver-layer (upstream-style) — coexists with the hook-driven path above.
+    // MTP driver-layer (upstream-style).
     void set_mtp_op_type(llama_mtp_op_type op);
     void set_draft_input_hidden_state(const float * hidden_state);
 
@@ -271,12 +266,6 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
-    void handle_mtp_for_ubatch(
-            int32_t              n_tokens,
-            const llama_token  * tokens,
-            const llama_pos    * positions,
-            struct ggml_tensor * t_h_pre_norm);
-
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
@@ -304,7 +293,6 @@ private:
     int  sidecars_post_compute_n_outputs = 0;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
-    llama_mtp mtp;
 
     std::unique_ptr<llama_memory_i> memory;
 
