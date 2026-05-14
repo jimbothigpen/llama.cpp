@@ -777,18 +777,32 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 };
 
-// MTP (multi-token prediction) draft head — single-sequence hook-driven speculation.
-// ctx_tgt = trunk model; ctx_dft = MTP head loaded as a sibling instance via override_arch.
-// On each draft step we pull the trunk's pre-norm hidden state (k==0) or the MTP head's
-// previous output (k>0), pair it with the conditioning token, and decode through ctx_dft.
+// MTP (multi-token prediction) draft head — driver-layer speculation.
+// ctx_tgt = trunk model context; ctx_dft = MTP head context (sibling GGUF
+// loaded via override_arch). Unlike the retired hook-driven path, this impl
+// orchestrates the upstream-style driver free functions explicitly:
+//   - process(): after the trunk decodes a batch, copy its per-token hidden
+//     states and run an MTP_OP_WARMUP decode over them to advance the MTP
+//     head's KV cache.
+//   - draft():   seed the MTP head with the trunk hidden state of id_last and
+//     run the recursive MTP_OP_DRAFT_GEN loop (mtp_speculative_gen_draft).
+//   - accept():  drop the MTP-KV cells warmed for rejected draft tokens.
 struct common_speculative_impl_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
-    llama_batch batch;
     common_sampler_ptr smpl;
     int32_t n_embd = 0;
-    int32_t  last_n_accepted = -1;
-    uint16_t last_n_drafted  = 0;
+
+    // Hidden states of the most recently process()'d trunk batch, contiguous
+    // [n_embd * hs_n], row r = trunk hidden state of the token at hs_pos_base+r.
+    // draft() looks up its step-0 seed here; the whole buffer feeds WARMUP.
+    std::vector<float> hs_buf;
+    llama_pos          hs_pos_base = -1;
+    int32_t            hs_n        = 0;
+
+    // n_past handed to the last draft() call — accept() uses it to compute which
+    // MTP-KV cells belong to rejected drafts.
+    llama_pos last_draft_n_past = -1;
 
     common_speculative_impl_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_MTP, n_seq)
@@ -797,64 +811,62 @@ struct common_speculative_impl_mtp : public common_speculative_impl {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
         GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
-        GGML_ASSERT(n_seq == 1 && "hook-driven MTP currently supports only single-sequence speculation");
+        GGML_ASSERT(n_seq == 1 && "driver-layer MTP currently supports only single-sequence speculation");
 
         n_embd = llama_model_n_embd(llama_get_model(ctx_dft));
+        GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
+                    "MTP head and trunk must share n_embd");
+
+        // common_sampler_sample_speculative (used inside mtp_speculative_gen_draft)
+        // reads logits directly from the context; the sampler chain only needs to
+        // be non-null. A 1-deep top-k chain keeps it cheap.
         common_params_sampling sparams;
         sparams.no_perf  = false;
         sparams.top_k    = 1;
         sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
         smpl.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
-
-        batch = llama_batch_init(/*n_tokens=*/ 1, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
-        batch.token = (llama_token *) malloc(sizeof(llama_token));
-        batch.n_tokens     = 1;
-        batch.n_seq_id[0]  = 1;
-        batch.seq_id[0][0] = 0;
-        batch.logits[0]    = 1;
-
-        // For external-arch MTP (e.g. gemma4_mtp loaded as a separate GGUF), the draft model
-        // manages its own KV cache independently. Wiring the target streaming hook would cause
-        // position mismatches during speculative verification. Only wire same-arch inline MTP.
-        char arch_dft[64] = {};
-        llama_model_meta_val_str(llama_get_model(ctx_dft), "general.architecture", arch_dft, sizeof(arch_dft));
-        char arch_tgt[64] = {};
-        llama_model_meta_val_str(llama_get_model(ctx_tgt), "general.architecture", arch_tgt, sizeof(arch_tgt));
-        const bool is_external_mtp = (strcmp(arch_dft, arch_tgt) != 0);
-        if (!is_external_mtp) {
-            llama_set_mtp(ctx_tgt, ctx_dft);
-        }
     }
 
-    ~common_speculative_impl_mtp() override {
-        llama_set_mtp(params.ctx_tgt, nullptr);
-        if (batch.token != nullptr) {
-            free(batch.token);
-            batch.token = nullptr;
-        }
-        llama_batch_free(batch);
-    }
+    ~common_speculative_impl_mtp() override = default;
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
-        GGML_UNUSED(seq_id);
-        last_n_accepted = -1;
-        last_n_drafted  = 0;
-
-        const int32_t N = (int32_t) prompt.size();
-        if (N <= 0) {
-            return;
-        }
-        auto * ctx_dft = this->params.ctx_dft;
-        const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), 0);
-        if (pos_max < N - 1) {
-            LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - "
-                    "streaming hook may not have run on every prefill ubatch. "
-                    "Drafts may degrade.\n",
-                    __func__, (int) pos_max, N - 1);
-        }
+        GGML_UNUSED(prompt);
+        // Fresh generation — drop any stale MTP-KV and hidden-state buffer.
+        llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, -1, -1);
+        hs_pos_base       = -1;
+        hs_n              = 0;
+        last_draft_n_past = -1;
     }
 
-    bool process(const llama_batch & /*batch_in*/) override {
+    // After the trunk decodes `batch`, mirror its per-token hidden states into
+    // the MTP head's KV cache via an MTP_OP_WARMUP decode. Idempotent: the
+    // WARMUP pass seq_rm's from the batch's first position before writing, so
+    // re-warming an overlapping range is self-correcting.
+    bool process(const llama_batch & batch) override {
+        if (batch.n_tokens <= 0) {
+            return true;
+        }
+        auto * ctx_tgt = params.ctx_tgt;
+        auto * ctx_dft = params.ctx_dft;
+
+        llama_synchronize(ctx_tgt);
+
+        const int32_t n = batch.n_tokens;
+        hs_buf.resize((size_t) n_embd * n);
+        for (int32_t i = 0; i < n; ++i) {
+            const float * h = llama_get_embeddings_ith(ctx_tgt, i);
+            if (h == nullptr) {
+                LOG_WRN("%s: trunk produced no embeddings at row %d - MTP warmup skipped\n", __func__, i);
+                hs_n = 0;
+                return true;
+            }
+            std::memcpy(hs_buf.data() + (size_t) i * n_embd, h, (size_t) n_embd * sizeof(float));
+        }
+        hs_pos_base = batch.pos[0];
+        hs_n        = n;
+
+        llama_set_draft_input_hidden_state(ctx_dft, hs_buf.data());
+        mtp_update_kv_cache(ctx_dft, batch, /*is_prompt_warmup=*/ true);
         return true;
     }
 
@@ -865,91 +877,43 @@ struct common_speculative_impl_mtp : public common_speculative_impl {
             return;
         }
 
-        auto * ctx_tgt = params.ctx_tgt;
-        auto * ctx_dft = params.ctx_dft;
-        const size_t row_bytes = (size_t) n_embd * sizeof(float);
-
-        if (last_n_drafted > 0) {
-            const int32_t n_to_drop = (int32_t) last_n_drafted - 1;
-            if (n_to_drop > 0) {
-                const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), 0);
-                if (pos_max >= 0) {
-                    const llama_pos drop_from = pos_max - n_to_drop + 1;
-                    llama_memory_seq_rm(llama_get_memory(ctx_dft), 0, drop_from, -1);
-                }
-            }
-            last_n_drafted  = 0;
-            last_n_accepted = 0;
-        }
-
-        common_sampler_reset(smpl.get());
-
-        llama_token cond_tok = dp.id_last;
-        llama_pos   pos      = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), 0) + 1;
-
-        for (int32_t k = 0; k < params.n_max; ++k) {
-            ggml_tensor * src;
-            int32_t src_row;
-            if (k == 0) {
-                src = llama_context_get_t_h_pre_norm(ctx_tgt);
-                if (last_n_accepted < 0) {
-                    src_row = (src && src->ne[1] > 0) ? (int32_t) src->ne[1] - 1 : 0;
-                } else {
-                    src_row = last_n_accepted;
-                }
-                llama_synchronize(ctx_tgt);
-            } else {
-                src = llama_context_get_t_mtp_out(ctx_dft);
-                src_row = src ? (int32_t) src->ne[1] - 1 : 0;
-                llama_synchronize(ctx_dft);
-            }
-            if (!src) {
-                break;
-            }
-
-            ggml_backend_tensor_get(src, batch.embd, (size_t) src_row * row_bytes, row_bytes);
-            batch.token[0] = cond_tok;
-            batch.pos[0]   = pos;
-
-            const int32_t dec_rc = llama_decode(ctx_dft, batch);
-            if (dec_rc != 0) {
-                break;
-            }
-
-            const llama_token id = common_sampler_sample(smpl.get(), ctx_dft, 0, false);
-            const auto * cur_p = common_sampler_get_candidates(smpl.get(), true);
-            if (cur_p == nullptr || cur_p->size == 0 || cur_p->data[0].p < params.p_min) {
-                break;
-            }
-
-            common_sampler_accept(smpl.get(), id, true);
-            dp.result->push_back(id);
-            cond_tok = id;
-            ++pos;
-        }
-
-        last_n_drafted = (uint16_t) dp.result->size();
-    }
-
-    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
-        GGML_UNUSED(seq_id);
-        auto * mem_dft = llama_get_memory(params.ctx_dft);
-        const llama_pos pos_max = llama_memory_seq_pos_max(mem_dft, 0);
-        const int32_t n_drafted_last = (int32_t) last_n_drafted;
-        const int32_t n_to_drop = std::max(0, n_drafted_last - (int32_t) n_accepted - 1);
-
-        if (pos_max < 0) {
-            last_n_accepted = (int32_t) n_accepted;
+        // Step-0 seed: the trunk hidden state of id_last, i.e. the hidden state
+        // at position dp.n_past-1 (the position id_last was sampled from). It
+        // must live in the batch that process() most recently observed.
+        const llama_pos seed_pos = dp.n_past - 1;
+        if (hs_n <= 0 || seed_pos < hs_pos_base || seed_pos >= hs_pos_base + hs_n) {
+            // Seed hidden state isn't available — skip drafting this round
+            // rather than feed the MTP head a stale/wrong hidden state.
             return;
         }
+        const float * seed = hs_buf.data() + (size_t) (seed_pos - hs_pos_base) * n_embd;
+        llama_set_draft_input_hidden_state(params.ctx_dft, seed);
 
-        if (n_to_drop > 0) {
-            const llama_pos drop_from = pos_max - n_to_drop + 1;
-            llama_memory_seq_rm(mem_dft, 0, drop_from, -1);
+        const int n_draft = dp.n_max > 0 ? dp.n_max : params.n_max;
+
+        *dp.result = mtp_speculative_gen_draft(
+            smpl.get(),
+            params.ctx_dft,
+            n_draft,
+            params.p_min,
+            dp.id_last,
+            dp.n_past,
+            /*seq_id=*/ 0);
+
+        last_draft_n_past = dp.n_past;
+    }
+
+    // process() warmed the MTP-KV for every position of the verification batch
+    // [id_last, draft[0], ...]. Now that n_accepted is known, drop the cells
+    // belonging to rejected drafts so the next draft() starts clean.
+    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+        if (last_draft_n_past < 0) {
+            return;
         }
-
-        last_n_drafted  = 0;
-        last_n_accepted = (int32_t) n_accepted;
+        // id_last sits at last_draft_n_past; n_accepted drafts follow it, so the
+        // last confirmed position is last_draft_n_past + n_accepted.
+        const llama_pos first_stale = last_draft_n_past + (llama_pos) n_accepted + 1;
+        llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, first_stale, -1);
     }
 };
 
