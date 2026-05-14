@@ -1281,14 +1281,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.speculative.ngram_cache.lookup_cache_static = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"-lcd", "--lookup-cache-dynamic"}, "FNAME",
         "path to dynamic lookup cache to use for lookup decoding (updated by generation)",
         [](common_params & params, const std::string & value) {
             params.speculative.ngram_cache.lookup_cache_dynamic = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"-c", "--ctx-size"}, "N",
         string_format("size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx),
