@@ -156,6 +156,15 @@ public:
     ggml_type type_k() const;
     ggml_type type_v() const;
 
+    // foreign-KV accessors for external-assistant MTP drafters (gemma4-assistant):
+    // expose the raw stored layer K/V tensors so a separate draft context's graph
+    // can attend against this (target) cache's K/V directly. `il` is the target
+    // model's layer index; it is translated through map_layer_ids internally.
+    ggml_tensor * get_layer_k_raw(int32_t il) const;
+    ggml_tensor * get_layer_v_raw(int32_t il) const;
+    uint32_t      get_n_used()    const;
+    bool          get_v_trans()   const;
+
     //
     // graph_build API
     //

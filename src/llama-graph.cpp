@@ -976,6 +976,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     sidecars         (params.sidecars),
     mctx             (params.mctx),
     cross            (params.cross),
+    mtp_target_ctx   (params.mtp_target_ctx),
+    mtp_target_seq_id(params.mtp_target_seq_id),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),

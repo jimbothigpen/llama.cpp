@@ -19,6 +19,7 @@ struct ggml_tensor;
 
 struct llama_cparams;
 struct llama_layer;
+struct llama_context;
 
 struct llama_memory_context_i;
 
@@ -548,6 +549,12 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    // gemma4-assistant external-MTP: the target (backbone) context this graph
+    // borrows hidden state + foreign K/V from, and the seq_id its KV cells were
+    // written under. Both stay unset for every non-assistant graph.
+    llama_context * mtp_target_ctx    = nullptr;
+    llama_seq_id    mtp_target_seq_id = -1;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -639,7 +646,10 @@ struct llm_graph_params {
             cvec    == other.cvec    &&
             loras   == other.loras   &&
             sidecars == other.sidecars &&
-            cross   == other.cross;
+            cross   == other.cross   &&
+            // gemma4-assistant: attaching/detaching a target context changes the
+            // graph topology (degenerate fast-path vs. full foreign-KV attention).
+            mtp_target_ctx == other.mtp_target_ctx;
     }
 };
 
@@ -781,6 +791,11 @@ struct llm_graph_context {
     const std::vector<llama_sidecar_handler_ptr> * sidecars;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    // gemma4-assistant external-MTP: copied from llm_graph_params; the assistant
+    // graph builder reads foreign K/V + hidden state from this target context.
+    llama_context * mtp_target_ctx    = nullptr;
+    llama_seq_id    mtp_target_seq_id = -1;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
