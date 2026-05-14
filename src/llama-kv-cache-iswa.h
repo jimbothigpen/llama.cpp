@@ -37,7 +37,8 @@ public:
     llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) override;
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type = MTP_OP_NONE) override;
 
     llama_memory_context_ptr init_full() override;
 

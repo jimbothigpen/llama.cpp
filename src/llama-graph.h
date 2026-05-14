@@ -630,6 +630,10 @@ struct llm_graph_params {
         return
             cparams.embeddings  == other.cparams.embeddings  &&
             cparams.causal_attn == other.cparams.causal_attn &&
+            // MTP graph topology depends on op_type (NONE runs the full transformer; WARMUP /
+            // UPDATE_ACCEPTED / DRAFT_GEN run only the NextN tail). Reuse is invalid across
+            // op_type changes — even between WARMUP and DRAFT_GEN, since the input shape differs.
+            cparams.mtp_op_type == other.cparams.mtp_op_type &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec    == other.cvec    &&
@@ -651,6 +655,7 @@ public:
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
     ggml_tensor * get_h_pre_norm()  const { return t_h_pre_norm; }
     ggml_tensor * get_mtp_out()     const { return t_mtp_out; }
+    ggml_tensor * get_mtp_states()  const { return t_mtp_states; }
 
     ggml_cgraph  * get_gf()  const { return gf; }
     ggml_context * get_ctx() const { return ctx_compute.get(); }
@@ -684,6 +689,11 @@ public:
     // pre-norm hidden state for MTP draft loop (only set when an MTP head graph runs)
     ggml_tensor * t_h_pre_norm  = nullptr;
     ggml_tensor * t_mtp_out     = nullptr; // MTP MoE post-FFN tensor — set by qwen35moe_mtp graph for draft-loop seeding
+
+    // MTP driver-layer (upstream-style): graph INPUT tensor the MTP-tail graph builder creates;
+    // the decode loop fills it via llama_context::prepare_mtp_graph_inputs before graph_compute.
+    // Distinct from t_h_pre_norm / t_mtp_out, which are graph OUTPUTS for the hook-driven path.
+    ggml_tensor * t_mtp_states  = nullptr;
 
     std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
     std::map<llama_seq_id, ggml_tensor*> t_candidates;

@@ -117,7 +117,8 @@ public:
     llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) override;
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type = MTP_OP_NONE) override;
 
     llama_memory_context_ptr init_full() override;
 
@@ -175,17 +176,19 @@ public:
 
     // find places for the provided ubatches in the cache, returns the slot infos
     // return empty vector on failure
-    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
+    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches, llama_mtp_op_type mtp_op_type = MTP_OP_NONE);
 
     bool update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info);
 
     // find a slot of kv cells that can hold the ubatch
     // if cont == true, then the slot must be continuous
     // return empty slot_info on failure
-    slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
+    // mtp_op_type: WARMUP/UPDATE_ACCEPTED bypass slot-search and locate the existing cell at (pos,seq) instead
+    slot_info find_slot(const llama_ubatch & ubatch, bool cont, llama_mtp_op_type mtp_op_type = MTP_OP_NONE) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+    // mtp_op_type: WARMUP/UPDATE_ACCEPTED skip cell-metadata mutation (cell already holds correct pos/seq)
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, llama_mtp_op_type mtp_op_type = MTP_OP_NONE);
 
     //
     // input API
@@ -330,7 +333,8 @@ public:
     llama_kv_cache_context(
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
-            std::vector<llama_ubatch> ubatches);
+            std::vector<llama_ubatch> ubatches,
+            llama_mtp_op_type mtp_op_type = MTP_OP_NONE);
 
     virtual ~llama_kv_cache_context();
 
@@ -409,6 +413,10 @@ private:
     slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
+
+    // when not MTP_OP_NONE, apply() forwards this op_type to llama_kv_cache::apply_ubatch
+    // so the WARMUP/UPDATE_ACCEPTED paths skip cell-metadata mutation
+    llama_mtp_op_type mtp_op_type = MTP_OP_NONE;
 
     //
     // data needed for building the compute graph for the current ubatch:
