@@ -85,6 +85,12 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 // assume idxs == [ 0, 1, 2, ..., draft.size() ]
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);
 
+// Greedy argmax for speculative drafting: picks the highest-logit token at idx and
+// (if out_prob != nullptr) writes the softmax probability of that token. The sampler
+// chain is bypassed — this matches MTP's paper-described drafting policy and avoids
+// the full sample/accept overhead per draft step.
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);
+
 uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 
 // helpers

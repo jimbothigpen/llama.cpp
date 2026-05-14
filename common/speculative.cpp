@@ -1869,13 +1869,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
     llama_token current_input_id = id_last;
-    int32_t current_n_past = n_past;
-    // Track cells actually written by DRAFT_GEN, independent of which tokens we keep
-    // in the drafts vector. Each successful llama_decode allocates one cell at
-    // current_n_past via the regular find_slot path; we MUST seq_rm those cells before
-    // returning, otherwise the next main decode collides on the same positions.
-    int32_t draft_cells_written = 0;
-    int32_t draft_cells_first   = n_past;
+    int32_t       current_n_past   = n_past;
+    const int32_t draft_cells_first = n_past;
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -1884,43 +1879,39 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
         }
-        // decode succeeded → cell allocated at current_n_past
-        draft_cells_written++;
 
-        common_sampler_sample(smpl, ctx, 0, true);
+        // F2 (#1499): greedy argmax + recursive drafting. The new helper bypasses
+        // the full sampler chain and returns prob=softmax(argmax). drafts.push_back
+        // happens BEFORE the prob<p_min check so drafts.size() always equals the
+        // number of cells allocated by llama_decode above — no orphan-cell case.
+        float prob;
+        const llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, &prob);
 
-        const auto * cur_p = common_sampler_get_candidates(smpl, true);
+        drafts.push_back(id_next);
 
-        if (!cur_p || cur_p->size == 0) {
-            break;
+        // Propagate the per-step hidden state into the next draft iteration so the
+        // NextN tail consumes its own previous output, not a stale main-model embd.
+        const float * emb = llama_get_embeddings_ith(ctx, 0);
+        if (emb) {
+            llama_set_draft_input_hidden_state(ctx, emb);
         }
 
-        const llama_token id_next = cur_p->data[0].id;
-        const float prob = cur_p->data[0].p;
-
-        common_sampler_accept(smpl, id_next, true);
+        current_input_id = id_next;
+        current_n_past++;
 
         if (prob < p_min) {
             break;
         }
-
-        drafts.push_back(id_next);
-
-        current_input_id = id_next;
-        current_n_past++;
     }
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Purge the cells DRAFT_GEN allocated. This must fire whenever any cell was
-    // written, NOT just when drafts is non-empty: with a low-confidence first
-    // sample (prob < p_min), the loop breaks AFTER llama_decode but BEFORE
-    // drafts.push_back(), leaving an orphan cell that collides with the next
-    // main decode at the same position.
-    if (draft_cells_written > 0) {
+    // drafts.size() is now exactly the number of cells DRAFT_GEN wrote. Purge them
+    // so the next main decode lands on clean cells at the same positions.
+    if (!drafts.empty()) {
         llama_memory_seq_rm(llama_get_memory(ctx), seq_id,
                             draft_cells_first,
-                            draft_cells_first + draft_cells_written);
+                            draft_cells_first + (int32_t)drafts.size());
     }
 
     return drafts;
