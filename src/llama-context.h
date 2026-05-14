@@ -394,6 +394,10 @@ private:
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
+    // Separate slot for MTP-pass (WARMUP / UPDATE_ACCEPTED / DRAFT_GEN). NONE-pass caches in
+    // gf_res_prev; selection in process_ubatch is by cparams.mtp_op_type so a chain of
+    // NONE -> MTP -> NONE preserves both cached graphs across the MTP interlude.
+    llm_graph_result_ptr gf_res_prev_mtp;
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
