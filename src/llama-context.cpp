@@ -448,6 +448,7 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
     gf_res_prev.reset(new llm_graph_result(max_nodes));
+    gf_res_prev_mtp.reset(new llm_graph_result(max_nodes));
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
@@ -788,6 +789,7 @@ bool llama_context::memory_update(bool optimize) {
         // TODO: change the mctx->apply() to return information if a graph reserve is needed
         //       reset the graph result only if the memory module did reset the scheduler
         gf_res_prev->reset();
+        gf_res_prev_mtp->reset();
 
         if (!mctx->apply()) {
             LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
@@ -1493,7 +1495,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    auto * res = gf_res_prev.get();
+    // C-Graph-Reuse-MTP-Split: NONE-pass caches in gf_res_prev, MTP-pass in
+    // gf_res_prev_mtp, so a NONE -> MTP -> NONE chain keeps both cached graphs
+    // (cparams.mtp_op_type is part of llm_graph_params::allow_reuse keys).
+    auto & slot = (cparams.mtp_op_type == MTP_OP_NONE) ? gf_res_prev : gf_res_prev_mtp;
+    auto * res = slot.get();
     auto * gf  = res->get_gf();
 
     // the new graph parameters
@@ -2093,9 +2099,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
             t_embd = res->get_embd_pooled();
         }
 
-        // MTP WARMUP / UPDATE_ACCEPTED only updates the KV cache; nothing to read out.
-        const bool mtp_kv_only = (cparams.mtp_op_type == MTP_OP_WARMUP ||
-                                  cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED);
+        // P5 (#1736): UPDATE_ACCEPTED now extracts logits + embd so mtp_accept_tokens
+        // can sample/cache the next-cycle draft seed. Only MTP_OP_WARMUP truly skips
+        // readout (no useful logit/embd produced).
+        const bool mtp_kv_only = (cparams.mtp_op_type == MTP_OP_WARMUP);
 
         // extract logits
         if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers) && !mtp_kv_only) {
@@ -2115,15 +2122,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // extract embeddings on NONE-pass and on DRAFT_GEN (the per-step hidden state is
-        // fed back into the next draft iteration via llama_set_draft_input_hidden_state);
-        // WARMUP / UPDATE_ACCEPTED still skipped — they only write K/V, no useful embd.
+        // P5 (#1736): extract embeddings on NONE / DRAFT_GEN / UPDATE_ACCEPTED. The
+        // per-step hidden state on DRAFT_GEN is fed back into the next draft iteration
+        // via llama_set_draft_input_hidden_state; the last-accepted hidden state on
+        // UPDATE_ACCEPTED is captured by mtp_accept_tokens for the next-cycle accept-batch
+        // optimization. WARMUP still skipped — its K/V write produces no useful embd.
         // MTP NONE-pass extracts one row per ubatch token (not per marked-output), so the
         // WARMUP / UPDATE_ACCEPTED passes can read the full [n_embd x n_tokens] matrix back.
         const bool extract_full_tokens = mtp_full_embd_pass && cparams.mtp_op_type == MTP_OP_NONE;
         const int64_t n_extract = extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
         if (embd.data && t_embd && n_extract > 0 &&
-            (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
+            cparams.mtp_op_type != MTP_OP_WARMUP) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -2523,6 +2532,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // when the scheduler is reset, we cannot reuse the old graph, so we reset the previous graph result to prevent that
     gf_res_prev->reset();
+    gf_res_prev_mtp->reset();
 
     // store the n_outputs as it is, and restore it afterwards
     // TODO: not sure if needed, might simplify in the future by removing this
@@ -3522,7 +3532,8 @@ void llama_context::opt_epoch_iter(
                 break;
             }
 
-            auto * res = gf_res_prev.get();
+            auto & slot = (cparams.mtp_op_type == MTP_OP_NONE) ? gf_res_prev : gf_res_prev_mtp;
+            auto * res = slot.get();
 
             const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 

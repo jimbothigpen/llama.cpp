@@ -1871,6 +1871,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_token current_input_id = id_last;
     int32_t       current_n_past   = n_past;
     const int32_t draft_cells_first = n_past;
+    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    std::vector<float> draft_hidden_state(n_embd);
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -1889,12 +1891,16 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
         drafts.push_back(id_next);
 
-        // Propagate the per-step hidden state into the next draft iteration so the
-        // NextN tail consumes its own previous output, not a stale main-model embd.
+        // P1 (#1718): copy the per-step hidden state into a stable buffer; the next
+        // llama_decode below reuses ctx->embd storage, so the pointer returned by
+        // llama_get_embeddings_ith would otherwise dangle by the time the MTP-tail
+        // graph reads it.
         const float * emb = llama_get_embeddings_ith(ctx, 0);
-        if (emb) {
-            llama_set_draft_input_hidden_state(ctx, emb);
+        if (!emb) {
+            break;
         }
+        memcpy(draft_hidden_state.data(), emb, n_embd * sizeof(float));
+        llama_set_draft_input_hidden_state(ctx, draft_hidden_state.data());
 
         current_input_id = id_next;
         current_n_past++;
