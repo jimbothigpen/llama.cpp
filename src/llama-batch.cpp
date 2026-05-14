@@ -28,7 +28,8 @@ bool llama_batch_allocr::init(
         const llama_memory_i * memory,
         uint32_t n_embd,
         uint32_t n_seq_max,
-        bool output_all) {
+        bool output_all,
+        llama_mtp_op_type mtp_op_type) {
     clear();
 
     batch = batch_inp;
@@ -287,6 +288,13 @@ bool llama_batch_allocr::init(
             }
         }
     } else {
+        // MTP WARMUP / UPDATE_ACCEPTED: the kv-cache find_slot bypass (A5c) re-writes K/V to
+        // the SAME (pos, seq) cell that the main-model decode just placed; the standard
+        // Y = X + 1 contiguity check fails (X already advanced to the cell we want to overwrite).
+        // Skip the contiguity check for these op_types — find_slot's MTP path handles cell location.
+        const bool mtp_kv_rewrite =
+            (mtp_op_type == MTP_OP_WARMUP || mtp_op_type == MTP_OP_UPDATE_ACCEPTED);
+
         for (uint32_t s = 0; s < n_seq_max; ++s) {
             if (seq_pos[s].empty()) {
                 continue;
@@ -294,7 +302,7 @@ bool llama_batch_allocr::init(
 
             const llama_pos p0 = memory ? memory->seq_pos_max(s) : -1;
 
-            if (p0 >= 0) {
+            if (p0 >= 0 && !mtp_kv_rewrite) {
                 bool ok = true;
 
                 if (seq_pos_min(s) != p0 + 1) {

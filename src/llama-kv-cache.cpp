@@ -926,6 +926,18 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             return { };
         }
 
+        // The main-model decode placed the prompt's K/V into contiguous cells
+        // starting at found_idx (since cells are allocated head-forward). The
+        // WARMUP/UPDATE_ACCEPTED batch contains those same N tokens at positions
+        // [target_pos, target_pos + N - 1]; locate ALL N cells, not just the first.
+        // (set_input_k_idxs asserts ubatch.n_tokens == sinfo.size()*sinfo.n_stream().)
+        const uint32_t n_tokens = ubatch.n_tokens;
+        if (found_idx + n_tokens > cells.size()) {
+            LLAMA_LOG_ERROR("%s: MTP cell range [%u, %u) exceeds cache size %u\n",
+                __func__, found_idx, found_idx + n_tokens, cells.size());
+            return { };
+        }
+
         slot_info res = {
             /*.s0   =*/ stream_id,
             /*.s1   =*/ stream_id,
@@ -934,7 +946,10 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
         };
         res.resize(1);
         res.strm[0] = stream_id;
-        res.idxs[0].push_back(found_idx);
+        res.idxs[0].reserve(n_tokens);
+        for (uint32_t t = 0; t < n_tokens; ++t) {
+            res.idxs[0].push_back(found_idx + t);
+        }
         return res;
     }
 
