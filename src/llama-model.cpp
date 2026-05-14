@@ -134,9 +134,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_gemma3n(params);
         case LLM_ARCH_GEMMA4:
             return new llama_model_gemma4(params);
-        // LLM_ARCH_GEMMA4_MTP: model class deferred to Task 2c
-        // (Gemma 4 MTP is only an assistant graph scaffold in turbotan;
-        //  Qwen3.5 MTP is the locked C2.1 first target)
+        case LLM_ARCH_GEMMA4_MTP:
+            return new llama_model_gemma4_mtp(params);
         case LLM_ARCH_GEMMA_EMBEDDING:
             return new llama_model_gemma_embedding(params);
         case LLM_ARCH_STARCODER2:
