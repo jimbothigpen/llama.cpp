@@ -34,9 +34,11 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 [`phase-1-turboquant-kv-foundation`](../../releases/tag/milestone%2Fphase-1-turboquant-kv-foundation)).
 Tree currently delivers the TurboQuant KV cache foundation (2-/3-/4-bit
 PolarQuant KV types + WHT-rotated weight quants) on ROCm + Vulkan, plus
-the sidecar plugin engine from Phase 0.7. Phase 2 (MTP spec-decode spine)
-is the next entry. See [What's available now](#whats-available-now) for
-usage.
+the sidecar plugin engine from Phase 0.7. **Phase 2 (MTP spec-decode spine)
+is merged to `main`** — the upstream-style MTP driver layer, internal
+qwen35/qwen35moe NextN-tail MTP, and the foreign-KV Gemma 4 external-assistant
+MTP — with a milestone tag still pending. See
+[What's available now](#whats-available-now) for usage.
 
 ## What yggdrasil is and isn't
 
@@ -81,7 +83,7 @@ cross-backend PPL matches within tolerance. See
 | 0.5 | ik_llama architectural recon + EAGLE3 recon | this project | **complete** |
 | 0.7 | Sidecar plugin engine (~355 LoC, backend-agnostic) — runtime adapters at residual-stream / MoE-expert / post-logits / weight-delta hook points; out-of-tree `.so` plugins | this project | **complete** |
 | 1 | TurboQuant KV foundation (TURBOQ2/3/4_0 + WHT3/4_0 + Boundary V) | TheTom `feature/turboquant-kv-cache` | **complete (milestone tag `phase-1-turboquant-kv-foundation`)** |
-| 2 | MTP spec-decode spine | turbo-tan `experiment/gemma4-mtp-upstream-pr` | pending |
+| 2 | MTP spec-decode spine — upstream-style MTP driver layer; internal qwen35/qwen35moe NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP | mainline `#22738` (gemma4-assistant) + upstream MTP-driver pattern | **merged to `main`** (milestone tag pending) |
 | 3 | TCQ KV | buun `master` | pending |
 | 4 | TriAttention | domvox `feature/triattention-scoring` | pending |
 | 5 | Carlosfundora bundle (1-bit, RotorQuant, EAGLE3, PHANTOM-X, TurboMind, Wave32) | carlosfundora `1-bit-turbo` | pending |
@@ -179,6 +181,37 @@ at residual-stream / MoE-expert / post-logits sites + weight deltas, via
 out-of-tree `.so` plugins. Released alongside Phase 0.7; six companion
 plugin tools are tracked separately. See `src/llama-sidecar.cpp` and the
 plugin-engine commit `f99ad5df8`.
+
+### MTP speculative decoding (Phase 2)
+
+Multi-token-prediction speculative decoding, built on the upstream-style MTP
+driver layer. Two model families are supported; both run through
+`--spec-type mtp` and require `--parallel 1` on the server.
+
+**Internal NextN-tail MTP** — for Qwen3.5 / Qwen3.5-MoE GGUFs that carry
+`nextn_predict_layers` MTP-tail blocks. The MTP head is part of the same GGUF;
+launch with `--mtp` and no separate draft model:
+
+```bash
+llama-server -m Qwen3.5-4B-MTP-BF16.gguf \
+    --mtp --spec-type mtp --parallel 1 --no-mmap -fa on -ngl 999 -c 4096
+```
+
+**External-assistant MTP** — for the Gemma 4 family, whose MTP drafter is a
+separate "assistant" GGUF (mainline #22738 `gemma4-assistant` arch: a
+foreign-KV, Q-only transformer that borrows the backbone's K/V). Pass the
+assistant as the draft model with `-md` (do **not** pass `--mtp`):
+
+```bash
+llama-server -m Gemma4-26B-A4B-it-IQ4_XS.gguf \
+    -md Gemma4-26B-A4B-it-assistant-BF16.gguf \
+    --spec-type mtp --parallel 1 --no-mmap -fa on -ngl 999 -ngld 999 -c 4096
+```
+
+Smoke-verified draft acceptance: ~89% on Qwen3.5-4B-MTP (internal), 85–89% on
+Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path, not the
+output distribution, so there is no PPL gate — correctness is verified by
+output coherence plus accept rate.
 
 ### Build flags
 
