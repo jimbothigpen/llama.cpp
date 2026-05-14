@@ -96,22 +96,19 @@ llama_model_qwen35moe_mtp::graph::graph(const llama_model & model, const llm_gra
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
-    auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
-
-    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    ggml_set_input(inp->tokens);
-
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->embd);
-    ggml_set_name(inp->embd, "mtp_h_input");
+    // MTP driver-layer input: the main model's hidden state for each batch token.
+    // The decode loop fills it via prepare_mtp_graph_inputs before graph_compute —
+    // on DRAFT_GEN from the speculative decoder's draft_input_hidden_state, on
+    // WARMUP / UPDATE_ACCEPTED from the main context's per-token result_norm.
+    res->t_mtp_states = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+    ggml_set_input(res->t_mtp_states);
+    ggml_set_name(res->t_mtp_states, "mtp_states");
 
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
-    ggml_tensor * h_input  = inp->embd;
-    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    ggml_tensor * h_input  = res->t_mtp_states;
+    ggml_tensor * tok_embd = build_inp_embd(tok_embd_w);
     cb(tok_embd, "mtp_tok_embd", il);
-
-    res->add_input(std::move(inp));
 
     ggml_tensor * inp_pos = build_inp_pos();
     auto * inp_attn       = build_attn_inp_kv();
@@ -231,17 +228,17 @@ llama_model_qwen35moe_mtp::graph::graph(const llama_model & model, const llm_gra
     cur = ggml_add(ctx0, cur, ffn_residual);
     cb(cur, "mtp_post_ffn", il);
 
-    // Pre-norm hidden state: used by the AR draft loop to seed the next MTP step.
-    cb(cur, "h_pre_norm", -1);
-    res->t_h_pre_norm = cur;
-    res->t_mtp_out    = cur;
-
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
             : model.output_norm;
     GGML_ASSERT(head_norm_w && "QWEN35MOE_MTP: missing both nextn.shared_head_norm and output_norm");
     cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "mtp_shared_head_norm", -1);
+
+    // Post-norm hidden state: the decode loop extracts this during DRAFT_GEN
+    // (via llama_get_embeddings_ith) and the speculative decoder feeds it back
+    // as t_mtp_states for the next recursive draft step.
+    res->t_embd = cur;
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     GGML_ASSERT(head_w && "QWEN35MOE_MTP: missing LM head (nextn.shared_head_head or model.output)");
