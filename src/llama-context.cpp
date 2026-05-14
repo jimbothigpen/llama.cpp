@@ -190,7 +190,11 @@ llama_context::llama_context(
     // MTP driver-layer safety net (mirrors frankenturbo2 A5a's arch guard). yggdrasil
     // loads MTP heads as discrete-arch GGUFs rather than GLM4-MoE-style inline tails,
     // so the guard is arch-agnostic: disable if the model exposes no NextN layers.
-    if (cparams.mtp && model.hparams.nextn_predict_layers == 0) {
+    // Exception: the gemma4-assistant arch is an external-assistant MTP drafter by
+    // design (foreign-KV Q-only transformer, no NextN tail) — its cparams.mtp gates
+    // post-projection embedding extraction, not a NextN-tail decode.
+    if (cparams.mtp && model.hparams.nextn_predict_layers == 0 &&
+        model.arch != LLM_ARCH_GEMMA4_ASSISTANT) {
         LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers; disabling MTP\n", __func__);
         cparams.mtp = false;
     }

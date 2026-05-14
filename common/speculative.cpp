@@ -1602,12 +1602,18 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
+        // the gemma4-assistant draft GGUF is an external-MTP foreign-KV drafter — it
+        // has no own KV cache and cannot run as a standalone 'draft-simple' model, so
+        // never auto-enable draft-simple for it (mtp is the only valid type).
+        bool draft_is_gemma4_assistant = params.draft.ctx_dft != nullptr &&
+            llama_model_is_gemma4_assistant(llama_get_model(params.draft.ctx_dft));
+
         if (has_draft_simple) {
             if (!has_draft_model_path) {
                 LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
                 has_draft_simple = false;
             }
-        } else if (has_draft_model_path && !has_mtp && !has_draft_eagle3) {
+        } else if (has_draft_model_path && !draft_is_gemma4_assistant) {
             LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
             has_draft_simple = true;
         }
