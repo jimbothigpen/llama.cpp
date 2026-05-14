@@ -883,10 +883,21 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
 
 llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont, llama_mtp_op_type mtp_op_type) const {
 
-    // MTP WARMUP / UPDATE_ACCEPTED: the K/V we are about to write belong at an existing
-    // (pos, seq_id) cell that was placed earlier by the main-model decode. We do not
-    // allocate a new slot — we locate the existing cell and return a slot_info pointing
-    // to it. Cell metadata is left untouched; apply_ubatch's MTP path skips its mutation.
+    // MTP WARMUP / UPDATE_ACCEPTED fast-path:
+    //
+    // When MTP shares the main llama_context, the K/V cells at (target_pos, target_seq)
+    // ALREADY exist (placed by the main-model decode) and the WARMUP/UPDATE_ACCEPTED pass
+    // needs to OVERWRITE their tensor data without disturbing cell metadata. The bypass
+    // locates those existing cells and apply_ubatch skips its metadata mutation.
+    //
+    // With F5's separate ctx_mtp, the secondary context's KV is independent. The server's
+    // seq_rm-before-decode pattern in mtp_update_kv_cache() clears any cells at >= start_pos
+    // before the decode, so the cells the bypass would look for never exist in ctx_mtp at
+    // WARMUP time. Falling through to the standard path then allocates fresh cells at the
+    // head and apply_ubatch (also relaxed) writes the right (pos, seq_id) metadata.
+    //
+    // We keep the fast-path as an opportunistic match: if cells at target_pos already exist
+    // with matching seq_id, reuse them. Otherwise FALL THROUGH to standard allocation.
     if (mtp_op_type == MTP_OP_WARMUP || mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
         if (ubatch.n_tokens == 0 || ubatch.n_seqs_unq == 0) {
             LLAMA_LOG_ERROR("%s: MTP op with empty ubatch\n", __func__);
@@ -920,37 +931,32 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             }
         }
 
-        if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP slot for seq %d pos %d not found\n",
-                __func__, target_seq, target_pos);
-            return { };
+        if (found) {
+            // The main-model decode placed the prompt's K/V into contiguous cells
+            // starting at found_idx (since cells are allocated head-forward). The
+            // WARMUP/UPDATE_ACCEPTED batch contains those same N tokens at positions
+            // [target_pos, target_pos + N - 1]; locate ALL N cells, not just the first.
+            // (set_input_k_idxs asserts ubatch.n_tokens == sinfo.size()*sinfo.n_stream().)
+            const uint32_t n_tokens = ubatch.n_tokens;
+            if (found_idx + n_tokens <= cells.size()) {
+                slot_info res = {
+                    /*.s0   =*/ stream_id,
+                    /*.s1   =*/ stream_id,
+                    /*.strm =*/ { },
+                    /*.idxs =*/ { },
+                };
+                res.resize(1);
+                res.strm[0] = stream_id;
+                res.idxs[0].reserve(n_tokens);
+                for (uint32_t t = 0; t < n_tokens; ++t) {
+                    res.idxs[0].push_back(found_idx + t);
+                }
+                return res;
+            }
+            // Fall through if the contiguous range exceeds cache size.
         }
-
-        // The main-model decode placed the prompt's K/V into contiguous cells
-        // starting at found_idx (since cells are allocated head-forward). The
-        // WARMUP/UPDATE_ACCEPTED batch contains those same N tokens at positions
-        // [target_pos, target_pos + N - 1]; locate ALL N cells, not just the first.
-        // (set_input_k_idxs asserts ubatch.n_tokens == sinfo.size()*sinfo.n_stream().)
-        const uint32_t n_tokens = ubatch.n_tokens;
-        if (found_idx + n_tokens > cells.size()) {
-            LLAMA_LOG_ERROR("%s: MTP cell range [%u, %u) exceeds cache size %u\n",
-                __func__, found_idx, found_idx + n_tokens, cells.size());
-            return { };
-        }
-
-        slot_info res = {
-            /*.s0   =*/ stream_id,
-            /*.s1   =*/ stream_id,
-            /*.strm =*/ { },
-            /*.idxs =*/ { },
-        };
-        res.resize(1);
-        res.strm[0] = stream_id;
-        res.idxs[0].reserve(n_tokens);
-        for (uint32_t t = 0; t < n_tokens; ++t) {
-            res.idxs[0].push_back(found_idx + t);
-        }
-        return res;
+        // Not found / out-of-range: fall through to standard allocation. apply_ubatch
+        // detects "cells need fresh metadata" via its own match check and writes them.
     }
 
     if (debug > 0) {
@@ -1151,17 +1157,40 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 }
 
 void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, llama_mtp_op_type mtp_op_type) {
-    // MTP WARMUP / UPDATE_ACCEPTED: the slot already holds the correct (pos, seq_id) — only
-    // the K/V tensor contents need updating, which the graph itself does. Skip the destructive
-    // metadata mutation and SWA purge, but still move the head to the slot index (matching the
-    // upstream-MTP behavior of cache.head = i).
+    // MTP WARMUP / UPDATE_ACCEPTED fast-path (paired with the find_slot bypass above):
+    // only valid when the cells located by find_slot ALREADY hold the correct
+    // (pos, seq_id). In that case the K/V tensor contents will be rewritten by the
+    // graph itself, so the destructive metadata mutation + SWA purge is unnecessary.
+    // We still move the head to match upstream-MTP's `cache.head = i`.
+    //
+    // With F5's separate ctx_mtp, the secondary context's cells are typically empty
+    // (or just cleared by mtp_update_kv_cache's seq_rm-before-decode), so the
+    // matching-metadata precondition fails and we fall through to the standard
+    // mutation path which sets pos/seq_id on the freshly-allocated cells.
     if (mtp_op_type == MTP_OP_WARMUP || mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-            if (!sinfo.idxs[s].empty()) {
-                v_heads[sinfo.strm[s]] = sinfo.idxs[s].front();
+        bool cells_already_match = true;
+        for (uint32_t s = 0; s < sinfo.n_stream() && cells_already_match; ++s) {
+            const auto & cells = v_cells[sinfo.strm[s]];
+            for (uint32_t ii = 0; ii < sinfo.size() && cells_already_match; ++ii) {
+                const uint32_t i   = s*sinfo.size() + ii;
+                const auto     idx = sinfo.idxs[s][ii];
+                if (cells.is_empty(idx) ||
+                    cells.pos_get(idx) != ubatch.pos[i] ||
+                    !cells.seq_has(idx, ubatch.seq_id[i][0])) {
+                    cells_already_match = false;
+                }
             }
         }
-        return;
+
+        if (cells_already_match) {
+            for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+                if (!sinfo.idxs[s].empty()) {
+                    v_heads[sinfo.strm[s]] = sinfo.idxs[s].front();
+                }
+            }
+            return;
+        }
+        // Fall through to standard mutation path so pos/seq_id get written.
     }
 
     // keep track of the max sequence position that we would overwrite with this ubatch
