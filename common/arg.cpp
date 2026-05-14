@@ -3671,7 +3671,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
-        string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",
+        string_format("comma-separated list of types of speculative decoding to use (default: %s)\n"
+            "  note: 'mtp' requires --parallel 1 when used with llama-server (single-sequence limit)\n",
             common_speculative_type_name_str(params.speculative.types).c_str()),
         [](common_params & params, const std::string & value) {
             const auto types_str = string_split<std::string>(value, ',');
