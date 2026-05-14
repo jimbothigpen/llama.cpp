@@ -1019,6 +1019,12 @@ extern "C" {
     // backbone wrote its KV cells under (= server slot id). -1 = use the draft ubatch's own.
     LLAMA_API void llama_set_mtp_target_seq_id(struct llama_context * ctx, llama_seq_id seq_id);
 
+    // Width of the per-step hidden-state buffer the MTP speculative driver feeds this
+    // context. For a gemma4-assistant draft model this is the backbone's hidden size
+    // (wider than the assistant's own n_embd); for any other model it is the model's
+    // own n_embd.
+    LLAMA_API int32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
