@@ -75,6 +75,11 @@ void common_speculative_print_stats(const common_speculative * spec);
 // ----------------------------------------------------------------------------
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
+//
+// constant_draft_positions: when true (gemma4-assistant external MTP), every draft
+// step pins its position to n_past — the assistant attends the backbone's frozen KV
+// at that single position rather than advancing per step. When false (internal
+// MTP-tail head), the position advances with each generated token.
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
@@ -82,7 +87,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     float p_min,
     llama_token id_last,
     int32_t n_past,
-    llama_seq_id seq_id);
+    llama_seq_id seq_id,
+    bool constant_draft_positions = false);
 
 void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup);
 

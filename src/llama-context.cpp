@@ -3833,6 +3833,18 @@ void llama_set_mtp_target_seq_id(llama_context * ctx, llama_seq_id seq_id) {
     ctx->set_mtp_target_seq_id(seq_id);
 }
 
+int32_t llama_mtp_state_n_embd(const llama_context * ctx) {
+    const llama_model & model = ctx->get_model();
+
+    // The gemma4-assistant drafter's MTP hidden state (pre_projection input and
+    // post_projection output) is backbone-width, not the assistant's own n_embd.
+    if (llama_model_is_gemma4_assistant(&model)) {
+        return model.hparams.n_embd_backbone;
+    }
+
+    return model.hparams.n_embd;
+}
+
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
 }
