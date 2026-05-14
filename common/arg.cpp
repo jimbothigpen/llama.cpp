@@ -1372,6 +1372,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
+        {"--mtp", "--multi-token-prediction"},
+        {"--no-mtp", "--no-multi-token-prediction"},
+        string_format("enable Multi-Token Prediction speculative decoding when the model has MTP/NextN tail layers (default: %s)", params.has_mtp ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.has_mtp = value;
+        }
+    ).set_env("LLAMA_ARG_MTP"));
+    add_opt(common_arg(
         {"--cache-idle-slots"},
         {"--no-cache-idle-slots"},
         "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",

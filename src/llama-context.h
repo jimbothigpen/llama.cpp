@@ -94,6 +94,9 @@ struct llama_context {
     void set_mtp(llama_context * ctx_mtp_in);
     llama_context * get_mtp() const { return mtp.ctx_mtp; }
 
+    // MTP driver-layer (upstream-style) — coexists with the hook-driven path above.
+    void set_mtp_op_type(llama_mtp_op_type op);
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 

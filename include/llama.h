@@ -200,6 +200,13 @@ extern "C" {
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
 
+    enum llama_mtp_op_type {
+        MTP_OP_NONE             = 0,
+        MTP_OP_WARMUP           = 1,
+        MTP_OP_UPDATE_ACCEPTED  = 2,
+        MTP_OP_DRAFT_GEN        = 3,
+    };
+
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
@@ -329,6 +336,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool mtp;             // if true, load MTP / NextN tail layers if present
     };
 
     struct llama_sampler_seq_config {
@@ -386,6 +394,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool mtp;                           // activate MTP if supported by the model
+        enum llama_mtp_op_type mtp_op_type; // which MTP op to run on the next decode (none/warmup/update_accepted/draft_gen)
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -566,6 +576,9 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+
+    // Number of NextN/MTP prediction layers in this model (0 if none).
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
 
     // Select the backend buffer type for tensors at layer il. Used by sidecar
     // plugins that allocate per-layer tensors and need them on the right device.
@@ -985,6 +998,12 @@ extern "C" {
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
+    // Set which, if any, MTP operation the context will perform on the next decode.
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
+
+    // Provide the draft input hidden state for an MTP_OP_DRAFT_GEN pass.
+    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

@@ -184,6 +184,8 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.mtp         = params.mtp;
+    cparams.mtp_op_type = params.mtp_op_type;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -3572,6 +3574,8 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.mtp                         =*/ false,
+        /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };
@@ -3825,6 +3829,25 @@ void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx
         return;
     }
     ctx_target->set_mtp(ctx_mtp);
+}
+
+// MTP driver-layer API (upstream-style; see driver-port-plan-session-26.md).
+// Coexists with the hook-driven MTP path above until task #11 retires it.
+
+int32_t llama_model_n_nextn_layer(const llama_model * model) {
+    return (int32_t) model->hparams.nextn_predict_layers;
+}
+
+void llama_context::set_mtp_op_type(llama_mtp_op_type op) {
+    cparams.mtp_op_type = op;
+}
+
+void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
+    ctx->set_mtp_op_type(mtp_op_type);
+}
+
+void llama_set_draft_input_hidden_state(llama_context * /*ctx*/, const float * /*hidden_state*/) {
+    LLAMA_LOG_DEBUG("%s: A3 stub — graph integration lands in A5a\n", __func__);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
