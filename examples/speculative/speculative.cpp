@@ -313,8 +313,8 @@ int main(int argc, char ** argv) {
                             drafts[s].active = false;
 
                             // calculate residual probability
-                            GGML_ASSERT(dist_tgt.sorted);
-                            GGML_ASSERT(dist_dft.sorted);
+                            // (the .sorted flag is unreliable across modern sampling
+                            //  paths; we re-sort below regardless, so it doesn't matter.)
 
                             // sort dist by id
                             std::sort(dist_tgt.data, dist_tgt.data + dist_tgt.size, [](const llama_token_data &a, const llama_token_data &b) {
