@@ -661,6 +661,32 @@ uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl) {
     return llama_sampler_get_seed(gsmpl->chain);
 }
 
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob) {
+    GGML_UNUSED(gsmpl);
+
+    const float * logits = llama_get_logits_ith(ctx, idx);
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+
+    int   best_id  = 0;
+    float max_val  = logits[0];
+    for (int i = 1; i < n_vocab; ++i) {
+        if (logits[i] > max_val) {
+            max_val = logits[i];
+            best_id = i;
+        }
+    }
+
+    if (out_prob) {
+        double sum_exp = 0.0;
+        for (int i = 0; i < n_vocab; ++i) {
+            sum_exp += std::exp((double)(logits[i] - max_val));
+        }
+        *out_prob = (float)(1.0 / sum_exp);
+    }
+
+    return best_id;
+}
+
 // helpers
 
 llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort) {
