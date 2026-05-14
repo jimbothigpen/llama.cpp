@@ -1304,6 +1304,25 @@ ggml_type llama_kv_cache::type_v() const {
     return layers[0].v->type;
 }
 
+ggml_tensor * llama_kv_cache::get_layer_k_raw(int32_t il) const {
+    const int32_t ikv = map_layer_ids.at(il);
+    return layers[ikv].k;
+}
+
+ggml_tensor * llama_kv_cache::get_layer_v_raw(int32_t il) const {
+    const int32_t ikv = map_layer_ids.at(il);
+    return layers[ikv].v;
+}
+
+uint32_t llama_kv_cache::get_n_used() const {
+    GGML_ASSERT(n_stream == 1 && "get_n_used: foreign-KV consumers require a unified single-stream cache");
+    return v_cells[seq_to_stream[0]].used_max_p1();
+}
+
+bool llama_kv_cache::get_v_trans() const {
+    return v_trans;
+}
+
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
