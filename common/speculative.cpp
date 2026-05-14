@@ -1870,6 +1870,12 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
+    // Track cells actually written by DRAFT_GEN, independent of which tokens we keep
+    // in the drafts vector. Each successful llama_decode allocates one cell at
+    // current_n_past via the regular find_slot path; we MUST seq_rm those cells before
+    // returning, otherwise the next main decode collides on the same positions.
+    int32_t draft_cells_written = 0;
+    int32_t draft_cells_first   = n_past;
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -1878,6 +1884,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
         }
+        // decode succeeded → cell allocated at current_n_past
+        draft_cells_written++;
 
         common_sampler_sample(smpl, ctx, 0, true);
 
@@ -1904,10 +1912,15 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Purge the metadata for the draft tokens.
-    // This prevents cache state corruption where two cells map to the same logical position.
-    if (!drafts.empty()) {
-        llama_memory_seq_rm(llama_get_memory(ctx), seq_id, n_past, current_n_past);
+    // Purge the cells DRAFT_GEN allocated. This must fire whenever any cell was
+    // written, NOT just when drafts is non-empty: with a low-confidence first
+    // sample (prob < p_min), the loop breaks AFTER llama_decode but BEFORE
+    // drafts.push_back(), leaving an orphan cell that collides with the next
+    // main decode at the same position.
+    if (draft_cells_written > 0) {
+        llama_memory_seq_rm(llama_get_memory(ctx), seq_id,
+                            draft_cells_first,
+                            draft_cells_first + draft_cells_written);
     }
 
     return drafts;

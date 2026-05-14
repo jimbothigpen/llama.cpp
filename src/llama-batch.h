@@ -75,13 +75,17 @@ public:
 
     // sanitize and auto-gen missing data in the input batch
     // memory is optional. if provided will be used to check for sequence continuity and to determine the positions
+    // mtp_op_type: WARMUP/UPDATE_ACCEPTED relax the Y=X+1 consistency check, since those passes
+    //              re-write to the SAME (pos, seq) cell that was just placed by the main-model decode
+    //              (see llama_kv_cache::find_slot's MTP bypass added by A5c).
     bool init(
             const llama_batch & batch_inp,
             const llama_vocab & vocab,
             const llama_memory_i * memory,
             uint32_t n_embd,
             uint32_t n_seq_max,
-            bool output_all);
+            bool output_all,
+            llama_mtp_op_type mtp_op_type = MTP_OP_NONE);
 
     const llama_batch & get_batch() const;
 
