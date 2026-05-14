@@ -2126,9 +2126,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // extract pre-norm embeddings (hidden state before the final output norm)
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
-        auto * t_h_pre_norm = cparams.embeddings_pre_norm ? res->get_h_pre_norm() : nullptr;
-        if (embd_pre_norm.data && t_h_pre_norm && n_outputs > 0 && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
-            ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm);
+        auto * t_h_pre_norm_user = cparams.embeddings_pre_norm ? res->get_h_pre_norm() : nullptr;
+        if (embd_pre_norm.data && t_h_pre_norm_user && n_outputs > 0 && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
+            ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm_user);
             GGML_ASSERT(backend_h != nullptr);
 
             const uint32_t n_embd = hparams.n_embd;
@@ -2136,13 +2136,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
             GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_pre_norm.size);
-            ggml_backend_tensor_get_async(backend_h, t_h_pre_norm, embd_pre_norm_out, 0, n_outputs*n_embd*sizeof(float));
+            ggml_backend_tensor_get_async(backend_h, t_h_pre_norm_user, embd_pre_norm_out, 0, n_outputs*n_embd*sizeof(float));
         }
 
         // MTP streaming hook: when an MTP draft head is registered, feed each prefill ubatch's
         // pre-norm hidden state into the draft context so the draft loop can seed its first step.
-        if (mtp.ctx_mtp != nullptr && t_h_pre_norm != nullptr && ubatch.token != nullptr && ubatch.pos != nullptr) {
-            handle_mtp_for_ubatch((int32_t) ubatch.n_tokens, ubatch.token, ubatch.pos, t_h_pre_norm);
+        // Note: use res->get_h_pre_norm() directly (not gated on embeddings_pre_norm) so the
+        // hook fires regardless of the user-facing embeddings_pre_norm flag.
+        auto * t_h_pre_norm_mtp = res->get_h_pre_norm();
+        if (mtp.ctx_mtp != nullptr && t_h_pre_norm_mtp != nullptr && ubatch.token != nullptr && ubatch.pos != nullptr) {
+            handle_mtp_for_ubatch((int32_t) ubatch.n_tokens, ubatch.token, ubatch.pos, t_h_pre_norm_mtp);
         }
 
         // Copy backend sampling output if this ubatch produced any sampling tensors.

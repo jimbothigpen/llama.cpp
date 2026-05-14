@@ -813,7 +813,17 @@ struct common_speculative_impl_mtp : public common_speculative_impl {
         batch.seq_id[0][0] = 0;
         batch.logits[0]    = 1;
 
-        llama_set_mtp(ctx_tgt, ctx_dft);
+        // For external-arch MTP (e.g. gemma4_mtp loaded as a separate GGUF), the draft model
+        // manages its own KV cache independently. Wiring the target streaming hook would cause
+        // position mismatches during speculative verification. Only wire same-arch inline MTP.
+        char arch_dft[64] = {};
+        llama_model_meta_val_str(llama_get_model(ctx_dft), "general.architecture", arch_dft, sizeof(arch_dft));
+        char arch_tgt[64] = {};
+        llama_model_meta_val_str(llama_get_model(ctx_tgt), "general.architecture", arch_tgt, sizeof(arch_tgt));
+        const bool is_external_mtp = (strcmp(arch_dft, arch_tgt) != 0);
+        if (!is_external_mtp) {
+            llama_set_mtp(ctx_tgt, ctx_dft);
+        }
     }
 
     ~common_speculative_impl_mtp() override {

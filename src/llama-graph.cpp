@@ -885,6 +885,12 @@ void llm_graph_result::set_outputs() {
             ggml_set_output(t);
         }
     }
+    if (t_h_pre_norm != nullptr) {
+        ggml_set_output(t_h_pre_norm);
+    }
+    if (t_mtp_out != nullptr) {
+        ggml_set_output(t_mtp_out);
+    }
 }
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
