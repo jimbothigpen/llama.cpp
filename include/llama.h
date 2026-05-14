@@ -649,6 +649,11 @@ extern "C" {
     // Returns true if the model is hybrid (like Jamba, Granite, etc.)
     LLAMA_API bool llama_model_is_hybrid(const struct llama_model * model);
 
+    // Returns true if the model is a Gemma 4 MTP "assistant" drafter
+    // (LLM_ARCH_GEMMA4_ASSISTANT) — loaded as a separate GGUF and run as an
+    // external speculative-decoding draft model against a Gemma 4 backbone.
+    LLAMA_API bool llama_model_is_gemma4_assistant(const struct llama_model * model);
+
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
@@ -1004,6 +1009,14 @@ extern "C" {
 
     // Provide the draft input hidden state for an MTP_OP_DRAFT_GEN pass.
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
+
+    // gemma4-assistant external-MTP: attach the target (backbone) context that an
+    // assistant draft context reads hidden state and foreign K/V from. nullptr clears it.
+    LLAMA_API void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+
+    // gemma4-assistant external-MTP: tell the assistant context which sequence id the
+    // backbone wrote its KV cells under (= server slot id). -1 = use the draft ubatch's own.
+    LLAMA_API void llama_set_mtp_target_seq_id(struct llama_context * ctx, llama_seq_id seq_id);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

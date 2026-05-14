@@ -98,6 +98,16 @@ struct llama_context {
     // - DRAFT_GEN: source is draft_input_hidden_state (set by the speculative decoder)
     bool prepare_mtp_graph_inputs(llm_graph_result * res);
 
+    // gemma4-assistant external-MTP: attach a target (backbone) context whose
+    // hidden state and KV cache this assistant context reads from when building
+    // its draft graph. nullptr clears the attachment.
+    void            set_mtp_target_context(llama_context * target_ctx);
+    llama_context * get_mtp_target_ctx() const;
+    // the sequence id the backbone wrote its KV cells under (= server slot.id);
+    // -1 means "use the draft ubatch's own seq_id" (only correct when slot.id == 0).
+    void         set_mtp_target_seq_id(llama_seq_id seq_id);
+    llama_seq_id get_mtp_target_seq_id() const;
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -373,6 +383,11 @@ private:
     const float * draft_input_hidden_state = nullptr;
     // MTP driver-layer: graph input tensor slot, populated by the decode loop (A5c).
     struct ggml_tensor * inp_mtp_states = nullptr;
+
+    // gemma4-assistant external-MTP: target (backbone) context borrowed for
+    // foreign-KV attention, and the seq_id its KV cells were written under.
+    llama_context * mtp_target_ctx    = nullptr;
+    llama_seq_id    mtp_target_seq_id = -1;
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 

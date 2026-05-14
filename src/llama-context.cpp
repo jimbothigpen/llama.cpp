@@ -2450,6 +2450,8 @@ llm_graph_params llama_context::graph_params(
         /*.sidecars    =*/ sidecars.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.mtp_target_ctx    =*/ mtp_target_ctx,
+        /*.mtp_target_seq_id =*/ mtp_target_seq_id,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3775,6 +3777,22 @@ void llama_context::set_draft_input_hidden_state(const float * hidden_state) {
     draft_input_hidden_state = hidden_state;
 }
 
+void llama_context::set_mtp_target_context(llama_context * target_ctx) {
+    mtp_target_ctx = target_ctx;
+}
+
+llama_context * llama_context::get_mtp_target_ctx() const {
+    return mtp_target_ctx;
+}
+
+void llama_context::set_mtp_target_seq_id(llama_seq_id seq_id) {
+    mtp_target_seq_id = seq_id;
+}
+
+llama_seq_id llama_context::get_mtp_target_seq_id() const {
+    return mtp_target_seq_id;
+}
+
 bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res) {
     ggml_tensor * dst = res ? res->t_mtp_states : nullptr;
     if (!dst) {
@@ -3805,6 +3823,14 @@ void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_ty
 
 void llama_set_draft_input_hidden_state(llama_context * ctx, const float * hidden_state) {
     ctx->set_draft_input_hidden_state(hidden_state);
+}
+
+void llama_set_mtp_target_context(llama_context * ctx, llama_context * target_ctx) {
+    ctx->set_mtp_target_context(target_ctx);
+}
+
+void llama_set_mtp_target_seq_id(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->set_mtp_target_seq_id(seq_id);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
