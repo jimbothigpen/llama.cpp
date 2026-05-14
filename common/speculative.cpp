@@ -920,6 +920,134 @@ struct common_speculative_impl_mtp : public common_speculative_impl {
     }
 };
 
+// Gemma 4 external-assistant MTP draft head — the sibling of
+// common_speculative_impl_mtp for the foreign-KV "external assistant" arch
+// (mainline #22738). The assistant is a separately-loaded GGUF (loaded by the
+// caller into ctx_dft) that has no own KV cache to warm: it reads the backbone's
+// K/V live through foreign-KV views, and its MTP hidden state is backbone-width
+// rather than the assistant's own (narrower) n_embd. So, versus the internal head:
+//   - process(): still mirrors the trunk's per-token hidden states into hs_buf
+//     (draft() needs the step-0 seed) but runs NO MTP_OP_WARMUP decode.
+//   - draft():   seeds the assistant with the trunk hidden state of id_last and
+//     runs mtp_speculative_gen_draft with constant_draft_positions = true.
+//   - accept():  no-op — there are no warmed MTP-KV cells to drop.
+struct common_speculative_impl_mtp_external : public common_speculative_impl {
+    common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
+
+    common_sampler_ptr smpl;
+
+    // Backbone-width hidden-state size (= llama_mtp_state_n_embd(ctx_dft)); this
+    // is wider than the assistant model's own n_embd.
+    int32_t n_embd = 0;
+
+    // Hidden states of the most recently process()'d trunk batch, contiguous
+    // [n_embd * hs_n], row r = trunk hidden state of the token at hs_pos_base+r.
+    std::vector<float> hs_buf;
+    llama_pos          hs_pos_base = -1;
+    int32_t            hs_n        = 0;
+
+    common_speculative_impl_mtp_external(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_MTP, n_seq)
+        , params(params.draft)
+    {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        auto * ctx_dft = this->params.ctx_dft;
+        GGML_ASSERT(ctx_tgt && ctx_dft && "external MTP requires ctx_tgt and ctx_dft to be set");
+        GGML_ASSERT(n_seq == 1 && "driver-layer MTP currently supports only single-sequence speculation");
+        GGML_ASSERT(llama_model_is_gemma4_assistant(llama_get_model(ctx_dft)) &&
+                    "common_speculative_impl_mtp_external requires a gemma4-assistant draft model");
+
+        // The assistant's MTP hidden state is backbone-width. Do NOT assert
+        // n_embd(dft) == n_embd(tgt) — the assistant is intentionally narrower.
+        n_embd = llama_mtp_state_n_embd(ctx_dft);
+
+        // Attach the backbone context so the assistant's graph builder can read
+        // the backbone's hidden state and foreign K/V views.
+        llama_set_mtp_target_context(ctx_dft, ctx_tgt);
+
+        // common_sampler_sample_speculative (inside mtp_speculative_gen_draft) reads
+        // logits straight from the context; a 1-deep top-k chain keeps it cheap.
+        common_params_sampling sparams;
+        sparams.no_perf  = false;
+        sparams.top_k    = 1;
+        sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+        smpl.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
+    }
+
+    ~common_speculative_impl_mtp_external() override = default;
+
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        GGML_UNUSED(seq_id);
+        GGML_UNUSED(prompt);
+        // Nothing to reset — the assistant holds no own KV state across requests.
+    }
+
+    // Mirror the trunk's per-token hidden states into hs_buf so draft() can seed
+    // the assistant. Unlike the internal head there is no MTP_OP_WARMUP decode:
+    // the assistant borrows the backbone's K/V live through foreign-KV views.
+    bool process(const llama_batch & batch) override {
+        if (batch.n_tokens <= 0) {
+            return true;
+        }
+        auto * ctx_tgt = params.ctx_tgt;
+
+        llama_synchronize(ctx_tgt);
+
+        const int32_t n = batch.n_tokens;
+        hs_buf.resize((size_t) n_embd * n);
+        for (int32_t i = 0; i < n; ++i) {
+            const float * h = llama_get_embeddings_ith(ctx_tgt, i);
+            if (h == nullptr) {
+                LOG_WRN("%s: trunk produced no embeddings at row %d - MTP draft seed unavailable\n", __func__, i);
+                hs_n = 0;
+                return true;
+            }
+            std::memcpy(hs_buf.data() + (size_t) i * n_embd, h, (size_t) n_embd * sizeof(float));
+        }
+        hs_pos_base = batch.pos[0];
+        hs_n        = n;
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto & dp = dparams.at(0);
+        dp.result->clear();
+        if (!dp.drafting) {
+            return;
+        }
+
+        // Step-0 seed: the trunk hidden state at position dp.n_past-1 (where
+        // id_last was sampled from). It must live in the batch process() last saw.
+        const llama_pos seed_pos = dp.n_past - 1;
+        if (hs_n <= 0 || seed_pos < hs_pos_base || seed_pos >= hs_pos_base + hs_n) {
+            // Seed hidden state isn't available — skip drafting this round rather
+            // than feed the assistant a stale/wrong hidden state.
+            return;
+        }
+        const float * seed = hs_buf.data() + (size_t) (seed_pos - hs_pos_base) * n_embd;
+        llama_set_draft_input_hidden_state(params.ctx_dft, seed);
+
+        const int n_draft = dp.n_max > 0 ? dp.n_max : params.n_max;
+
+        *dp.result = mtp_speculative_gen_draft(
+            smpl.get(),
+            params.ctx_dft,
+            n_draft,
+            params.p_min,
+            dp.id_last,
+            dp.n_past,
+            /*seq_id=*/ 0,
+            /*constant_draft_positions=*/ true);
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+        GGML_UNUSED(seq_id);
+        GGML_UNUSED(n_accepted);
+        // No-op: the external assistant has no own MTP-KV cells to drop — the
+        // foreign-KV views track the backbone's cache automatically.
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
@@ -1542,7 +1670,14 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
-                impls.push_back(std::make_unique<common_speculative_impl_mtp>(config.params, n_seq));
+                // Two siblings share COMMON_SPECULATIVE_TYPE_MTP: the internal
+                // MTP-tail head (qwen35/qwen35moe) and the gemma4-assistant
+                // external head (separately-loaded foreign-KV drafter GGUF).
+                if (llama_model_is_gemma4_assistant(llama_get_model(config.params.draft.ctx_dft))) {
+                    impls.push_back(std::make_unique<common_speculative_impl_mtp_external>(config.params, n_seq));
+                } else {
+                    impls.push_back(std::make_unique<common_speculative_impl_mtp>(config.params, n_seq));
+                }
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
@@ -1823,7 +1958,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     float p_min,
     llama_token id_last,
     int32_t n_past,
-    llama_seq_id seq_id) {
+    llama_seq_id seq_id,
+    bool constant_draft_positions) {
 
     llama_tokens drafts;
     drafts.reserve(n_draft);
@@ -1838,12 +1974,18 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_token current_input_id = id_last;
     int32_t       current_n_past   = n_past;
     const int32_t draft_cells_first = n_past;
-    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    // The MTP hidden state is backbone-width for a gemma4-assistant drafter (wider
+    // than its own n_embd), plain n_embd otherwise.
+    const int n_embd = llama_mtp_state_n_embd(ctx);
     std::vector<float> draft_hidden_state(n_embd);
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
-        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+        // External assistant (constant_draft_positions): pin every step to n_past so the
+        // assistant attends the backbone's frozen KV at that one position. Internal
+        // MTP-tail: advance the position per generated token.
+        const int32_t draft_pos = constant_draft_positions ? n_past : current_n_past;
+        common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
 
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
