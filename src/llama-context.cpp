@@ -2093,8 +2093,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // extract embeddings (only on NONE-pass; MTP passes don't produce useful embeddings)
-        if (embd.data && t_embd && n_outputs > 0 && cparams.mtp_op_type == MTP_OP_NONE) {
+        // extract embeddings on NONE-pass and on DRAFT_GEN (the per-step hidden state is
+        // fed back into the next draft iteration via llama_set_draft_input_hidden_state);
+        // WARMUP / UPDATE_ACCEPTED still skipped — they only write K/V, no useful embd.
+        if (embd.data && t_embd && n_outputs > 0 &&
+            (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
