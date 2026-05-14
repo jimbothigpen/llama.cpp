@@ -532,8 +532,13 @@ struct llama_model {
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
-    struct ggml_tensor * mtp_pre_proj    = nullptr;
-    struct ggml_tensor * mtp_post_proj   = nullptr;
+
+    // gemma4_assistant (MTP drafter): backbone <-> assistant projections and
+    // optional centroid-clustered output head.
+    struct ggml_tensor * assist_pre_proj         = nullptr; // [2*backbone, hidden]
+    struct ggml_tensor * assist_post_proj        = nullptr; // [hidden, backbone]
+    struct ggml_tensor * assist_embed_centroids  = nullptr; // [hidden, num_centroids]
+    struct ggml_tensor * assist_token_ordering   = nullptr; // i32 [vocab_size]
 
 
     // NVFP4 per-tensor scale2, input_scale for LM head
