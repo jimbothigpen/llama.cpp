@@ -61,7 +61,8 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
             : filter_recr
     )) {}
 
-llama_memory_context_ptr llama_memory_hybrid_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
+llama_memory_context_ptr llama_memory_hybrid_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all, llama_mtp_op_type mtp_op_type) {
+    GGML_UNUSED(mtp_op_type);
     do {
         balloc.split_reset();
 

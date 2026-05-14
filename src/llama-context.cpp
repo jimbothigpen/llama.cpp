@@ -1532,6 +1532,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    // MTP: copy the source hidden-state into the graph's t_mtp_states input tensor.
+    // The MTP-tail graph builder creates this tensor and stores it on res; the value comes
+    // from the just-computed embd buffer (WARMUP / UPDATE_ACCEPTED) or from the draft hidden
+    // state set by the speculative decoder (DRAFT_GEN). Graph-builder wiring lands in task #11.
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        if (!prepare_mtp_graph_inputs(res)) {
+            ret = GGML_STATUS_FAILED;
+            return nullptr;
+        }
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
@@ -1938,7 +1949,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     llama_memory_context_ptr mctx;
 
     while (true) {
-        mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
+        mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all, cparams.mtp_op_type);
         if (!mctx) {
             return -2;
         }
@@ -2048,16 +2059,24 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        auto * t_logits        = res->get_logits();
-        auto * t_embd          = cparams.embeddings          ? res->get_embd()        : nullptr;
-        auto * t_h_pre_norm    = cparams.embeddings_pre_norm ? res->get_h_pre_norm()  : nullptr;
+        auto * t_logits = res->get_logits();
+
+        // MTP: when nextn-predict layers are enabled at the model level, also extract embd
+        // (result_norm) on a normal NONE-pass so it can be fed back into the MTP-tail graph for
+        // WARMUP / UPDATE_ACCEPTED. Mirrors upstream PR #1270 has_mtp logic.
+        const bool has_mtp = hparams.nextn_predict_layers > 0 && cparams.mtp;
+        auto * t_embd   = (cparams.embeddings || has_mtp) ? res->get_embd() : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
         }
 
+        // MTP WARMUP / UPDATE_ACCEPTED only updates the KV cache; nothing to read out.
+        const bool mtp_kv_only = (cparams.mtp_op_type == MTP_OP_WARMUP ||
+                                  cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED);
+
         // extract logits
-        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers) && !mtp_kv_only) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
@@ -2074,8 +2093,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // extract embeddings
-        if (embd.data && t_embd && n_outputs > 0) {
+        // extract embeddings (only on NONE-pass; MTP passes don't produce useful embeddings)
+        if (embd.data && t_embd && n_outputs > 0 && cparams.mtp_op_type == MTP_OP_NONE) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -2248,8 +2267,13 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_embd_out = hparams.n_embd_out();
     const auto n_embd     = hparams.n_embd;
 
+    // MTP needs the embd buffer to capture the main-model hidden state on the NONE-pass so it
+    // can be fed into WARMUP / UPDATE_ACCEPTED passes. has_logits is already unconditionally
+    // true in this fork (DRAFT_GEN draft sampling needs it), so only has_embd changes.
+    const bool has_mtp = hparams.nextn_predict_layers > 0 && cparams.mtp;
+
     bool has_logits        = true;
-    bool has_embd          = cparams.embeddings;
+    bool has_embd          = cparams.embeddings || has_mtp;
     bool has_embd_pre_norm = cparams.embeddings_pre_norm;
 
     // TODO: hacky enc-dec support
@@ -3441,7 +3465,7 @@ void llama_context::opt_epoch_iter(
 
         uint32_t n_outputs_all = n_tokens_all;
 
-        auto mctx = memory->init_batch(*balloc, cparams.n_ubatch, true);
+        auto mctx = memory->init_batch(*balloc, cparams.n_ubatch, true, cparams.mtp_op_type);
         if (!mctx || mctx->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;
@@ -3865,6 +3889,29 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type op) {
 
 void llama_context::set_draft_input_hidden_state(const float * hidden_state) {
     draft_input_hidden_state = hidden_state;
+}
+
+bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res) {
+    ggml_tensor * dst = res ? res->t_mtp_states : nullptr;
+    if (!dst) {
+        LLAMA_LOG_ERROR("%s: res->t_mtp_states is null (graph builder did not expose MTP input)\n", __func__);
+        return false;
+    }
+
+    const float * src = nullptr;
+    if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+        src = embd.data;
+    } else {
+        src = draft_input_hidden_state;
+    }
+
+    if (!src) {
+        LLAMA_LOG_ERROR("%s: source hidden state is null (op=%d)\n", __func__, (int) cparams.mtp_op_type);
+        return false;
+    }
+
+    ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
+    return true;
 }
 
 void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
