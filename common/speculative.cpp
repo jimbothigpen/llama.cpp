@@ -155,13 +155,12 @@ struct common_speculative_impl {
 
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
-    virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
+    virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
 
-    // true if this implementation requires the target context to extract post-norm embeddings
-    virtual bool need_embd() const = 0;
-
-    // true if this implementation requires the target context to extract pre-norm embeddings
-    virtual bool need_embd_pre_norm() const { return false; }
+    // The external-assistant MTP impl owns a separately-loaded draft context
+    // (the gemma4-assistant GGUF) that the server must reach to thread
+    // mtp_target_seq_id. All other impls return nullptr.
+    virtual llama_context * get_mtp_ctx() const { return nullptr; }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -1046,6 +1045,8 @@ struct common_speculative_impl_mtp_external : public common_speculative_impl {
         // No-op: the external assistant has no own MTP-KV cells to drop — the
         // foreign-KV views track the backbone's cache automatically.
     }
+
+    llama_context * get_mtp_ctx() const override { return params.ctx_dft; }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
@@ -1757,6 +1758,23 @@ common_speculative_draft_params & common_speculative_get_draft_params(
     GGML_ASSERT(seq_id < (llama_seq_id) spec->dparams.size());
 
     return spec->dparams[seq_id];
+}
+
+llama_context * common_speculative_get_mtp_ctx(common_speculative * spec, llama_seq_id seq_id) {
+    GGML_UNUSED(seq_id);
+
+    if (spec == nullptr) {
+        return nullptr;
+    }
+
+    for (auto & impl : spec->impls) {
+        llama_context * ctx = impl->get_mtp_ctx();
+        if (ctx != nullptr) {
+            return ctx;
+        }
+    }
+
+    return nullptr;
 }
 
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt) {
