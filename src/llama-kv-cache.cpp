@@ -692,7 +692,8 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
 llama_memory_context_ptr llama_kv_cache::init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) {
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type) {
     GGML_UNUSED(embd_all);
 
     do {
@@ -714,13 +715,13 @@ llama_memory_context_ptr llama_kv_cache::init_batch(
             break;
         }
 
-        auto sinfos = prepare(ubatches);
+        auto sinfos = prepare(ubatches, mtp_op_type);
         if (sinfos.empty()) {
             break;
         }
 
         return std::make_unique<llama_kv_cache_context>(
-                this, std::move(sinfos), std::move(ubatches));
+                this, std::move(sinfos), std::move(ubatches), mtp_op_type);
     } while (false);
 
     return std::make_unique<llama_kv_cache_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
@@ -738,7 +739,7 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
     return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
 }
 
-llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
+llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches, llama_mtp_op_type mtp_op_type) {
     llama_kv_cache::slot_info_vec_t res;
 
     struct state_t {
@@ -756,7 +757,7 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 
     for (const auto & ubatch : ubatches) {
         // only find a suitable slot for the ubatch. don't modify the cells yet
-        const auto sinfo_new = find_slot(ubatch, false);
+        const auto sinfo_new = find_slot(ubatch, false, mtp_op_type);
         if (sinfo_new.empty()) {
             success = false;
             break;
@@ -779,7 +780,7 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
         }
 
         // now emplace the ubatch
-        apply_ubatch(sinfo_new, ubatch);
+        apply_ubatch(sinfo_new, ubatch, mtp_op_type);
     }
 
     GGML_ASSERT(!states.empty() || !success);
@@ -880,7 +881,62 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
     return updated;
 }
 
-llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont) const {
+llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont, llama_mtp_op_type mtp_op_type) const {
+
+    // MTP WARMUP / UPDATE_ACCEPTED: the K/V we are about to write belong at an existing
+    // (pos, seq_id) cell that was placed earlier by the main-model decode. We do not
+    // allocate a new slot — we locate the existing cell and return a slot_info pointing
+    // to it. Cell metadata is left untouched; apply_ubatch's MTP path skips its mutation.
+    if (mtp_op_type == MTP_OP_WARMUP || mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+        if (ubatch.n_tokens == 0 || ubatch.n_seqs_unq == 0) {
+            LLAMA_LOG_ERROR("%s: MTP op with empty ubatch\n", __func__);
+            return { };
+        }
+
+        const llama_pos    target_pos = ubatch.pos[0];
+        const llama_seq_id target_seq = ubatch.seq_id[0][0];
+        const uint32_t     stream_id  = seq_to_stream[target_seq];
+        const auto &       cells      = v_cells[stream_id];
+
+        bool found = false;
+        uint32_t found_idx = 0;
+
+        const uint32_t head_cur = v_heads[stream_id];
+        if (head_cur < cells.size() &&
+            !cells.is_empty(head_cur) &&
+            cells.pos_get(head_cur) == target_pos &&
+            cells.seq_has(head_cur, target_seq)) {
+            found = true;
+            found_idx = head_cur;
+        } else {
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                if (!cells.is_empty(i) &&
+                    cells.pos_get(i) == target_pos &&
+                    cells.seq_has(i, target_seq)) {
+                    found = true;
+                    found_idx = i;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            LLAMA_LOG_ERROR("%s: MTP slot for seq %d pos %d not found\n",
+                __func__, target_seq, target_pos);
+            return { };
+        }
+
+        slot_info res = {
+            /*.s0   =*/ stream_id,
+            /*.s1   =*/ stream_id,
+            /*.strm =*/ { },
+            /*.idxs =*/ { },
+        };
+        res.resize(1);
+        res.strm[0] = stream_id;
+        res.idxs[0].push_back(found_idx);
+        return res;
+    }
 
     if (debug > 0) {
         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
@@ -1079,7 +1135,20 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
-void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, llama_mtp_op_type mtp_op_type) {
+    // MTP WARMUP / UPDATE_ACCEPTED: the slot already holds the correct (pos, seq_id) — only
+    // the K/V tensor contents need updating, which the graph itself does. Skip the destructive
+    // metadata mutation and SWA purge, but still move the head to the slot index (matching the
+    // upstream-MTP behavior of cache.head = i).
+    if (mtp_op_type == MTP_OP_WARMUP || mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+            if (!sinfo.idxs[s].empty()) {
+                v_heads[sinfo.strm[s]] = sinfo.idxs[s].front();
+            }
+        }
+        return;
+    }
+
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -2453,7 +2522,8 @@ llama_kv_cache_context::llama_kv_cache_context(
 llama_kv_cache_context::llama_kv_cache_context(
         llama_kv_cache * kv,
         llama_kv_cache::slot_info_vec_t sinfos,
-        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)) {
+        std::vector<llama_ubatch> ubatches,
+        llama_mtp_op_type mtp_op_type) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)), mtp_op_type(mtp_op_type) {
 }
 
 llama_kv_cache_context::~llama_kv_cache_context() = default;
@@ -2478,7 +2548,7 @@ bool llama_kv_cache_context::apply() {
         return true;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur], mtp_op_type);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
     return true;

@@ -123,8 +123,9 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_iswa::memory_breakdo
     return mb;
 }
 
-llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
+llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all, llama_mtp_op_type mtp_op_type) {
     GGML_UNUSED(embd_all);
+    GGML_UNUSED(mtp_op_type);
 
     // first try simple split
     do {

@@ -81,10 +81,12 @@ struct llama_memory_i {
     // split the input batch into a set of ubatches and verify that they can fit into the cache
     // return a context object containing the ubatches and memory state required to process them
     // check the llama_memory_context_i::get_status() for the result
+    // mtp_op_type: when not MTP_OP_NONE, signals MTP-special slot logic (kv_cache only; ignored elsewhere)
     virtual llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) = 0;
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type = MTP_OP_NONE) = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_context_ptr init_full() = 0;

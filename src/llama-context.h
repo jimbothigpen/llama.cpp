@@ -98,6 +98,11 @@ struct llama_context {
     void set_mtp_op_type(llama_mtp_op_type op);
     void set_draft_input_hidden_state(const float * hidden_state);
 
+    // copy the appropriate hidden-state source into res->t_mtp_states before graph_compute.
+    // - WARMUP / UPDATE_ACCEPTED: source is the just-computed embd buffer
+    // - DRAFT_GEN: source is draft_input_hidden_state (set by the speculative decoder)
+    bool prepare_mtp_graph_inputs(llm_graph_result * res);
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
