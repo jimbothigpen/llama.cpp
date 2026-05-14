@@ -1368,7 +1368,7 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, int64_t mtp_token_cursor) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1437,7 +1437,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // from the just-computed embd buffer (WARMUP / UPDATE_ACCEPTED) or from the draft hidden
     // state set by the speculative decoder (DRAFT_GEN). Graph-builder wiring lands in task #11.
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        if (!prepare_mtp_graph_inputs(res)) {
+        if (!prepare_mtp_graph_inputs(res, mtp_token_cursor)) {
             ret = GGML_STATUS_FAILED;
             return nullptr;
         }
@@ -1908,6 +1908,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
         cparams.mtp_op_type == MTP_OP_NONE;
     int64_t n_outputs_embd_prev = 0;
 
+    // MTP WARMUP / UPDATE_ACCEPTED read cursor: draft_input_hidden_state points at the
+    // base of the full [n_embd x batch_n_tokens] hidden-state matrix; when the decode
+    // splits into multiple ubatches each ubatch must read from its own token offset.
+    // DRAFT_GEN is single-token and re-points the pointer per step, so it stays at 0.
+    const bool mtp_multi_token_read =
+        cparams.mtp_op_type == MTP_OP_WARMUP ||
+        cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+    int64_t mtp_read_cursor = 0;
+
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -1928,8 +1937,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status,
+                                          mtp_multi_token_read ? mtp_read_cursor : 0);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2098,6 +2107,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         n_outputs_prev += n_outputs;
         n_outputs_embd_prev += extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
+        mtp_read_cursor += (int64_t) ubatch.n_tokens;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
@@ -3810,7 +3820,7 @@ llama_seq_id llama_context::get_mtp_target_seq_id() const {
     return mtp_target_seq_id;
 }
 
-bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res) {
+bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res, int64_t token_cursor) {
     ggml_tensor * dst = res ? res->t_mtp_states : nullptr;
     if (!dst) {
         LLAMA_LOG_ERROR("%s: res->t_mtp_states is null (graph builder did not expose MTP input)\n", __func__);
@@ -3829,6 +3839,13 @@ bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res) {
         LLAMA_LOG_ERROR("%s: source hidden state is null (op=%d)\n", __func__, (int) cparams.mtp_op_type);
         return false;
     }
+
+    // Multi-ubatch WARMUP / UPDATE_ACCEPTED: draft_input_hidden_state points at the base
+    // of the full per-token hidden-state matrix, so ubatches 2+ must read from their own
+    // token offset. Row width is llama_mtp_state_n_embd (backbone-width for a
+    // gemma4-assistant, n_embd otherwise) — never hard-code hparams.n_embd. The caller
+    // passes token_cursor == 0 for the single-ubatch and DRAFT_GEN cases.
+    src += token_cursor * (int64_t) llama_mtp_state_n_embd(this);
 
     ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
     return true;

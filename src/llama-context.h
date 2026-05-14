@@ -96,7 +96,9 @@ struct llama_context {
     // copy the appropriate hidden-state source into res->t_mtp_states before graph_compute.
     // - WARMUP / UPDATE_ACCEPTED: source is the just-computed embd buffer
     // - DRAFT_GEN: source is draft_input_hidden_state (set by the speculative decoder)
-    bool prepare_mtp_graph_inputs(llm_graph_result * res);
+    // token_cursor: offset (in tokens) into draft_input_hidden_state for ubatches 2+
+    // of a multi-ubatch WARMUP / UPDATE_ACCEPTED decode; 0 for the single-ubatch / DRAFT_GEN cases.
+    bool prepare_mtp_graph_inputs(llm_graph_result * res, int64_t token_cursor = 0);
 
     // gemma4-assistant external-MTP: attach a target (backbone) context whose
     // hidden state and KV cache this assistant context reads from when building
@@ -152,11 +154,14 @@ struct llama_context {
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
+    // mtp_token_cursor: cumulative ubatch-token offset into draft_input_hidden_state
+    // for a multi-ubatch MTP WARMUP / UPDATE_ACCEPTED decode (0 for the NONE / DRAFT_GEN paths)
     llm_graph_result * process_ubatch(
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret);
+                       ggml_status & ret,
+                           int64_t   mtp_token_cursor = 0);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
