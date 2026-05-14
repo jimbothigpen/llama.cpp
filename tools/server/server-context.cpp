@@ -59,8 +59,9 @@ struct server_slot {
     llama_context * ctx_dft = nullptr;
 
     // True when this slot's speculative impl is MTP (ctx_dft is the MTP head).
-    // MTP needs every prefill position to carry logits=1 so the streaming
-    // hook in common_speculative_state_mtp::process() can read t_h_pre_norm.
+    // MTP needs every prefill position to carry logits=1 so the trunk emits a
+    // per-token hidden state; the driver-layer MTP impl reads those back via
+    // llama_get_embeddings_ith in common_speculative_process() to warm the head.
     bool is_mtp_enabled = false;
 
     // multimodal
@@ -2973,8 +2974,8 @@ private:
                         }
 
                         // embedding requires all tokens in the batch to be output;
-                        // MTP also wants logits at every prompt position so the
-                        // streaming hook can mirror t_h_pre_norm into ctx_dft.
+                        // MTP also wants logits at every prompt position so the trunk
+                        // emits a per-token hidden state for the driver-layer warmup.
                         common_batch_add(batch,
                             cur_tok,
                             slot.prompt.tokens.pos_next(),

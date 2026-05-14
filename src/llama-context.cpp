@@ -416,15 +416,6 @@ llama_context::~llama_context() {
         }
     }
     ggml_opt_free(opt_ctx);
-
-    if (mtp.hook_batch.pos != nullptr) {
-        if (mtp.hook_batch.token != nullptr) {
-            free(mtp.hook_batch.token);
-            mtp.hook_batch.token = nullptr;
-        }
-        llama_batch_free(mtp.hook_batch);
-        mtp.hook_batch = llama_batch{};
-    }
 }
 
 void llama_context::sched_reserve() {
@@ -1211,121 +1202,6 @@ float * llama_context::get_embeddings_pre_norm_raw_ith(int32_t i) {
     ggml_backend_tensor_get(t_h_pre_norm, embd_pre_norm_raw.data(), (size_t) i_clamped * t_h_pre_norm->nb[1], row_bytes);
 
     return embd_pre_norm_raw.data();
-}
-
-ggml_tensor * llama_context::get_t_h_pre_norm() const {
-    return gf_res_prev ? gf_res_prev->t_h_pre_norm : nullptr;
-}
-
-ggml_tensor * llama_context::get_t_mtp_out() const {
-    return gf_res_prev ? gf_res_prev->t_mtp_out : nullptr;
-}
-
-void llama_context::set_mtp(llama_context * ctx_mtp_in) {
-    if (mtp.ctx_mtp == ctx_mtp_in) {
-        return;
-    }
-
-    if (mtp.hook_batch.pos != nullptr) {
-        if (mtp.hook_batch.token != nullptr) {
-            free(mtp.hook_batch.token);
-            mtp.hook_batch.token = nullptr;
-        }
-        llama_batch_free(mtp.hook_batch);
-        mtp.hook_batch = llama_batch{};
-    }
-
-    mtp.ctx_mtp     = ctx_mtp_in;
-    mtp.pending_pos = -1;
-
-    if (mtp.ctx_mtp) {
-        const int32_t n_ub   = (int32_t) cparams.n_ubatch;
-        const int32_t n_embd = (int32_t) model.hparams.n_embd;
-        mtp.hook_batch       = llama_batch_init(n_ub, n_embd, 1);
-        mtp.hook_batch.token = (llama_token *) malloc(sizeof(llama_token) * n_ub);
-        mtp.pending_h.assign(n_embd, 0.0f);
-        LLAMA_LOG_INFO("%s: MTP draft head registered (ctx_mtp=%p, n_ubatch=%d, n_embd=%d)\n",
-                       __func__, (const void *) mtp.ctx_mtp, n_ub, n_embd);
-    } else {
-        mtp.pending_h.clear();
-        mtp.pending_h.shrink_to_fit();
-        LLAMA_LOG_INFO("%s: MTP draft head unregistered\n", __func__);
-    }
-}
-
-void llama_context::handle_mtp_for_ubatch(
-        int32_t              n_tokens,
-        const llama_token  * tokens,
-        const llama_pos    * positions,
-        struct ggml_tensor * t) {
-    if (mtp.ctx_mtp == nullptr || n_tokens == 0 || t == nullptr) {
-        return;
-    }
-    if (t->ne[1] != (int64_t) n_tokens) {
-        return;
-    }
-
-    const int64_t n_embd = model.hparams.n_embd;
-    GGML_ASSERT(t->ne[0] == n_embd);
-
-    const int       n_rows    = (int) n_tokens;
-    const llama_pos pos_start = positions[0];
-
-    const llama_pos pos_max_mtp = llama_memory_seq_pos_max(llama_get_memory(mtp.ctx_mtp), 0);
-    if (pos_start <= pos_max_mtp) {
-        llama_memory_seq_rm(llama_get_memory(mtp.ctx_mtp), 0, pos_start, -1);
-        if (mtp.pending_pos >= pos_start) {
-            mtp.pending_pos = -1;
-        }
-    }
-
-    const bool pending_continues = mtp.pending_pos >= 0 && mtp.pending_pos + 1 == pos_start;
-    if (mtp.pending_pos >= 0 && !pending_continues) {
-        mtp.pending_pos = -1;
-    }
-
-    synchronize();
-
-    const size_t row_bytes = (size_t) n_embd * sizeof(float);
-    const int    n_out     = (pending_continues ? 1 : 0) + (n_rows - 1);
-
-    if (n_out > 0) {
-        int out_idx = 0;
-        if (pending_continues) {
-            std::memcpy(mtp.hook_batch.embd + (size_t) out_idx * n_embd,
-                        mtp.pending_h.data(), row_bytes);
-            mtp.hook_batch.token[out_idx]     = tokens[0];
-            mtp.hook_batch.pos[out_idx]       = pos_start;
-            mtp.hook_batch.n_seq_id[out_idx]  = 1;
-            mtp.hook_batch.seq_id[out_idx][0] = 0;
-            mtp.hook_batch.logits[out_idx]    = 0;
-            ++out_idx;
-        }
-        for (int k = 0; k + 1 < n_rows; ++k) {
-            ggml_backend_tensor_get(t,
-                mtp.hook_batch.embd + (size_t) out_idx * n_embd,
-                (size_t) k * row_bytes,
-                row_bytes);
-            mtp.hook_batch.token[out_idx]     = tokens[k + 1];
-            mtp.hook_batch.pos[out_idx]       = positions[k + 1];
-            mtp.hook_batch.n_seq_id[out_idx]  = 1;
-            mtp.hook_batch.seq_id[out_idx][0] = 0;
-            mtp.hook_batch.logits[out_idx]    = 0;
-            ++out_idx;
-        }
-        GGML_ASSERT(out_idx == n_out);
-        mtp.hook_batch.n_tokens = n_out;
-
-        const int32_t rc_dec = llama_decode(mtp.ctx_mtp, mtp.hook_batch);
-        if (rc_dec != 0) {
-            LLAMA_LOG_ERROR("%s: llama_decode(ctx_mtp) failed rc=%d (pos=%d, n=%d)\n",
-                            __func__, (int) rc_dec, (int) pos_start, n_out);
-        }
-    }
-
-    ggml_backend_tensor_get(t, mtp.pending_h.data(),
-        (size_t) (n_rows - 1) * row_bytes, row_bytes);
-    mtp.pending_pos = pos_start + n_rows - 1;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -2201,15 +2077,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
             GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_pre_norm.size);
             ggml_backend_tensor_get_async(backend_h, t_h_pre_norm_user, embd_pre_norm_out, 0, n_outputs*n_embd*sizeof(float));
-        }
-
-        // MTP streaming hook: when an MTP draft head is registered, feed each prefill ubatch's
-        // pre-norm hidden state into the draft context so the draft loop can seed its first step.
-        // Note: use res->get_h_pre_norm() directly (not gated on embeddings_pre_norm) so the
-        // hook fires regardless of the user-facing embeddings_pre_norm flag.
-        auto * t_h_pre_norm_mtp = res->get_h_pre_norm();
-        if (mtp.ctx_mtp != nullptr && t_h_pre_norm_mtp != nullptr && ubatch.token != nullptr && ubatch.pos != nullptr) {
-            handle_mtp_for_ubatch((int32_t) ubatch.n_tokens, ubatch.token, ubatch.pos, t_h_pre_norm_mtp);
         }
 
         // Copy backend sampling output if this ubatch produced any sampling tensors.
@@ -3904,21 +3771,6 @@ float * llama_get_embeddings_pre_norm_ith(llama_context * ctx, int32_t i) {
 
 float * llama_get_embeddings_pre_norm_raw_ith(llama_context * ctx, int32_t i) {
     return ctx->get_embeddings_pre_norm_raw_ith(i);
-}
-
-ggml_tensor * llama_context_get_t_h_pre_norm(struct llama_context * ctx) {
-    return ctx ? ctx->get_t_h_pre_norm() : nullptr;
-}
-
-ggml_tensor * llama_context_get_t_mtp_out(struct llama_context * ctx) {
-    return ctx ? ctx->get_t_mtp_out() : nullptr;
-}
-
-void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx_mtp) {
-    if (!ctx_target) {
-        return;
-    }
-    ctx_target->set_mtp(ctx_mtp);
 }
 
 // MTP driver-layer API (upstream-style; see driver-port-plan-session-26.md).
