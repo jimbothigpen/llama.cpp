@@ -845,6 +845,12 @@ private:
             }
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
+            // The MTP head runs the driver-layer MTP-tail graph: it must extract
+            // per-token embeddings (result_norm) on DRAFT_GEN / UPDATE_ACCEPTED so
+            // the speculative impl can read them back. cparams.mtp gates that
+            // extraction (has_mtp in output_reserve / process_ubatch). The arch
+            // guard keeps it set because the head has nextn_predict_layers > 0.
+            cparams_mtp.mtp = true;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
             if (ctx_dft == nullptr) {
