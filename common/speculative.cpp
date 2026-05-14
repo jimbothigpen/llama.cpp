@@ -3,7 +3,6 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
-#include "../src/llama-ext.h" // staging API: llama_set_mtp / llama_context_get_t_h_pre_norm / llama_context_get_t_mtp_out (used by MTP)
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
