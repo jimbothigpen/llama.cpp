@@ -1843,3 +1843,113 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 str_perf.c_str());
     }
 }
+
+// ----------------------------------------------------------------------------
+// MTP driver-layer free functions (upstream-style; ports ik_llama PR #1270
+// lines 138-348 via frankenturbo2 d9c5ad4b3b). Not yet wired into
+// common_speculative_init — see driver-port-plan-session-26.md, task #11.
+// ----------------------------------------------------------------------------
+std::vector<llama_token> mtp_speculative_gen_draft(
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    int n_draft,
+    float p_min,
+    llama_token id_last,
+    int32_t n_past,
+    llama_seq_id seq_id) {
+
+    llama_tokens drafts;
+    drafts.reserve(n_draft);
+
+    if (!smpl) return drafts;
+
+    common_sampler_reset(smpl);
+
+    llama_batch mtp_batch = llama_batch_init(1, 0, 1);
+    llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
+
+    llama_token current_input_id = id_last;
+    int32_t current_n_past = n_past;
+
+    for (int i = 0; i < n_draft; ++i) {
+        mtp_batch.n_tokens = 0;
+        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+
+        if (llama_decode(ctx, mtp_batch) != 0) {
+            break;
+        }
+
+        common_sampler_sample(smpl, ctx, 0, true);
+
+        const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+        if (!cur_p || cur_p->size == 0) {
+            break;
+        }
+
+        const llama_token id_next = cur_p->data[0].id;
+        const float prob = cur_p->data[0].p;
+
+        common_sampler_accept(smpl, id_next, true);
+
+        if (prob < p_min) {
+            break;
+        }
+
+        drafts.push_back(id_next);
+
+        current_input_id = id_next;
+        current_n_past++;
+    }
+    llama_batch_free(mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+
+    // Purge the metadata for the draft tokens.
+    // This prevents cache state corruption where two cells map to the same logical position.
+    if (!drafts.empty()) {
+        llama_memory_seq_rm(llama_get_memory(ctx), seq_id, n_past, current_n_past);
+    }
+
+    return drafts;
+}
+
+void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup) {
+    if (batch.n_tokens == 0) {
+        return;
+    }
+
+    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+
+    llama_batch mtp_batch = batch;
+    if (is_prompt_warmup) {
+        llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
+    } else {
+        llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
+    }
+
+    for (int i = 0; i < mtp_batch.n_tokens; ++i) {
+        mtp_batch.logits[i] = true;
+    }
+    llama_decode(ctx, mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+}
+
+void mtp_accept_tokens(
+    struct llama_context * ctx,
+    const std::vector<llama_token> & ids,
+    int32_t n_past_base,
+    llama_seq_id seq_id
+) {
+    if (ids.empty()) {
+        return;
+    }
+
+    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
+    }
+
+    mtp_update_kv_cache(ctx, accepted_batch, false);
+
+    llama_batch_free(accepted_batch);
+}
