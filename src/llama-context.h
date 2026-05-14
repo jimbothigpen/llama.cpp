@@ -96,6 +96,7 @@ struct llama_context {
 
     // MTP driver-layer (upstream-style) — coexists with the hook-driven path above.
     void set_mtp_op_type(llama_mtp_op_type op);
+    void set_draft_input_hidden_state(const float * hidden_state);
 
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
@@ -367,6 +368,12 @@ private:
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
+
+    // MTP driver-layer (upstream-style): hidden state from the main model, set via
+    // llama_set_draft_input_hidden_state, consumed on an MTP_OP_DRAFT_GEN decode.
+    const float * draft_input_hidden_state = nullptr;
+    // MTP driver-layer: graph input tensor slot, populated by the decode loop (A5c).
+    struct ggml_tensor * inp_mtp_states = nullptr;
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 
