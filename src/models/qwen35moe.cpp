@@ -155,6 +155,17 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
     // block here as a vanilla transformer layer corrupts both the trunk logits
     // and res->t_h_pre_norm (the hidden state the MTP head conditions on).
     const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
+
+    // MTP NONE-pass: keep the per-token result_norm / h_pre_norm so embd.data can be
+    // populated for every batch token. A subsequent MTP_OP_WARMUP / UPDATE_ACCEPTED
+    // decode reads back [n_embd x n_tokens] from embd.data through
+    // prepare_mtp_graph_inputs. Without this, the inp_out_ids filter applied at the
+    // last transformer layer collapses cur to [n_embd x n_outputs] (1 for prompt
+    // prefill) and the WARMUP pass over-reads past the valid rows. The filter is
+    // re-applied below, before lm_head, so logits stay narrow. Mirrors frankenturbo2
+    // 7966e5fbfc (A7), glm4-moe half.
+    const bool mtp_full_embd = cparams.mtp && hparams.nextn_predict_layers > 0;
+
     for (int il = 0; il < n_transformer_layers; ++il) {
         ggml_tensor * inpSA = inpL;
 
@@ -172,7 +183,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids) {
+        if (il == n_transformer_layers - 1 && inp_out_ids && !mtp_full_embd) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -213,6 +224,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+
+    // Apply the deferred inp_out_ids filter for the MTP NONE-pass; lm_head still
+    // produces [n_vocab x n_outputs] while res->t_embd / t_h_pre_norm retain
+    // [n_embd x n_tokens].
+    if (mtp_full_embd && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     // LM head
     cur = build_lora_mm(model.output, cur);
