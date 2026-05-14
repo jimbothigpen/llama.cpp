@@ -800,16 +800,16 @@ private:
 
             auto cparams = common_context_params_to_llama(params_dft);
 
-            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-                                            params_base.speculative.types.end(),
-                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-            if (spec_mtp) {
-                cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            // Gemma 4 external-assistant MTP: the assistant is a separately-loaded
+            // draft GGUF (foreign-KV drafter, mainline #22738). Its context must
+            // extract the post-projection hidden state so the speculative driver
+            // can read it back via llama_get_embeddings_ith; cparams.mtp gates that
+            // extraction and params_dft does not inherit has_mtp.
+            if (llama_model_is_gemma4_assistant(model_dft.get())) {
+                cparams.mtp = true;
+                SRV_INF("%s", "draft model is a Gemma 4 external MTP assistant - enabling MTP extraction on its context\n");
             }
 
-            // note: for small models maybe we can set this to the maximum possible draft from all speculative types
-            //       the extra memory for small models is likely negligible?
-            cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
@@ -973,6 +973,18 @@ private:
                                              COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end())
                                   && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
+
+            // Gemma 4 external-assistant MTP: thread this slot's seq_id into the
+            // assistant context so its foreign-KV mask reads the backbone's KV
+            // cells written under slot.id. get_mtp_ctx returns non-null only for
+            // the external-assistant impl; n_seq==1 today so slot.id is always 0
+            // (== the legacy fallback), but thread it explicitly for correctness.
+            if (slot.is_mtp_enabled) {
+                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(spec.get(), slot.id);
+                if (mtp_ctx != nullptr) {
+                    llama_set_mtp_target_seq_id(mtp_ctx, slot.id);
+                }
+            }
 
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
