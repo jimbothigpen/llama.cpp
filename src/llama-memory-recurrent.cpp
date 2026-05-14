@@ -217,6 +217,26 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
                 cells[i].pos = -1;
                 cells[i].src = -1;
+                // Zero the recurrent state of the freed cell. The in-graph
+                // rs_zero mechanism in build_rs is meant to clear reused cells,
+                // but when a fresh sequence reuses this exact cell it does not
+                // reliably take effect before the state is read — the cell
+                // would otherwise carry stale SSM/conv state from the previous
+                // sequence (manifested as progressively degenerate output on
+                // a server's 2nd+ request). Zero it here so any reuse starts
+                // from a clean recurrent state.
+                for (size_t il = 0; il < s_l.size(); ++il) {
+                    if (r_l[il]) {
+                        const size_t nb = r_l[il]->nb[1];
+                        const std::vector<uint8_t> z(nb, 0);
+                        ggml_backend_tensor_set(r_l[il], z.data(), (size_t) i * nb, nb);
+                    }
+                    if (s_l[il]) {
+                        const size_t nb = s_l[il]->nb[1];
+                        const std::vector<uint8_t> z(nb, 0);
+                        ggml_backend_tensor_set(s_l[il], z.data(), (size_t) i * nb, nb);
+                    }
+                }
                 if (new_head == size) {
                     new_head = i;
                 }
