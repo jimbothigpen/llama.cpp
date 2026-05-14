@@ -187,6 +187,14 @@ llama_context::llama_context(
     cparams.mtp         = params.mtp;
     cparams.mtp_op_type = params.mtp_op_type;
 
+    // MTP driver-layer safety net (mirrors frankenturbo2 A5a's arch guard). yggdrasil
+    // loads MTP heads as discrete-arch GGUFs rather than GLM4-MoE-style inline tails,
+    // so the guard is arch-agnostic: disable if the model exposes no NextN layers.
+    if (cparams.mtp && model.hparams.nextn_predict_layers == 0) {
+        LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers; disabling MTP\n", __func__);
+        cparams.mtp = false;
+    }
+
     // initialized later
     cparams.pipeline_parallel = false;
 
@@ -3855,12 +3863,16 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type op) {
     cparams.mtp_op_type = op;
 }
 
+void llama_context::set_draft_input_hidden_state(const float * hidden_state) {
+    draft_input_hidden_state = hidden_state;
+}
+
 void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
 }
 
-void llama_set_draft_input_hidden_state(llama_context * /*ctx*/, const float * /*hidden_state*/) {
-    LLAMA_LOG_DEBUG("%s: A3 stub — graph integration lands in A5a\n", __func__);
+void llama_set_draft_input_hidden_state(llama_context * ctx, const float * hidden_state) {
+    ctx->set_draft_input_hidden_state(hidden_state);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
