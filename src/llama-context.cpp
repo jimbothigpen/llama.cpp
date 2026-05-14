@@ -3919,12 +3919,13 @@ bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res) {
         return false;
     }
 
-    const float * src = nullptr;
-    if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-        src = embd.data;
-    } else {
-        src = draft_input_hidden_state;
-    }
+    // F2 (PR #1499): always read from draft_input_hidden_state. Server-context (task #11)
+    // sets it BEFORE every WARMUP / UPDATE_ACCEPTED on the MTP context via the main
+    // context's per-token embd buffer; DRAFT_GEN sets it per-step inside
+    // mtp_speculative_gen_draft from the secondary ctx's own previous output. The pre-F2
+    // WARMUP/UPDATE_ACCEPTED branch read embd.data of the MTP context — but that context
+    // only ever runs MTP-tail graphs, so its embd.data is never populated by a NONE-pass.
+    const float * src = draft_input_hidden_state;
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: source hidden state is null (op=%d)\n", __func__, (int) cparams.mtp_op_type);
