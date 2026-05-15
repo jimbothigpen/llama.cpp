@@ -536,71 +536,44 @@ class _Qwen35MRopeMixin:
 
 
 class _Qwen35MtpMixin:
-    """Shared MTP wiring for Qwen3.5/3.6 text variants. The HF config carries
-    the MTP block under `mtp_num_hidden_layers` and the tensors under
-    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
-    `mtp.*` to the standard layer-indexed nextn naming so the existing
-    tensor_map handles them."""
+    """Shared MTP wiring for Qwen3.5/3.6 text variants. HF config carries the MTP block
+    under `mtp_num_hidden_layers` and the tensors under `mtp.*`; we extend block_count,
+    emit the nextn metadata key, and remap `mtp.*` to the standard layer-indexed nextn
+    naming so the existing tensor_map handles them. Output GGUF tags base arch
+    (`qwen35` / `qwen35moe`) with `nextn_predict_layers` set; the yggdrasil loader
+    detects this in src/models/qwen35{,moe}.cpp via base-arch-nextn detection."""
 
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
     block_count: int
     tensor_map: gguf.TensorNameMap
-    no_mtp: bool
-    mtp_only: bool
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-
-    @classmethod
-    def filter_tensors(cls, item):
-        name, _ = item
-        if name.startswith("mtp."):
-            if cls.no_mtp:
-                return None
-            return item
-        if cls.mtp_only:
-            canonical = name.replace("language_model.", "")
-            keep = canonical in (
-                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-                "embed_tokens.weight", "norm.weight",
-            )
-            if not keep:
-                return None
-        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if self.no_mtp:
-            return
         if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
 
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Multimodal Qwen3.5/3.6 wrap the text model under `model.language_model.*`.
+        if name.startswith("model.language_model."):
+            name = "model." + name[len("model.language_model."):]
+        elif name.startswith("language_model."):
+            name = name[len("language_model."):]
+
+        # Remap MTP block tensors to llama.cpp's layer-indexed nextn naming.
+        # HF: mtp.layers.0.*  (transformer block at MTP slot 0)
+        #     mtp.fc / mtp.pre_fc_norm_embedding / mtp.pre_fc_norm_hidden / mtp.norm
         if name.startswith("mtp."):
             n_layer = self.hparams["num_hidden_layers"]
             if name.find("layers.") != -1:
                 assert bid is not None
                 name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
-                bid = bid + n_layer
             else:
                 remapper = {
                     "mtp.fc":                    "model.layers.{bid}.eh_proj",
