@@ -3123,6 +3123,23 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         path = FA_SCALAR;
     }
 
+    // S44 ablation hook: env var forces the FA code path so we can bisect
+    // which variant carries the Strix Halo MTP livelock. Cm1/cm2 force-paths
+    // honor device capability — fall back to scalar if unsupported.
+    if (const char * env_path = std::getenv("GGML_VK_FA_FORCE_PATH")) {
+        FaCodePath want = path;
+        if (std::string(env_path) == "scalar") want = FA_SCALAR;
+        else if (std::string(env_path) == "cm1" && device->coopmat1_fa_support) want = FA_COOPMAT1;
+        else if (std::string(env_path) == "cm2" && device->coopmat2) want = FA_COOPMAT2;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            fprintf(stderr, "[S44 FA-ABLATE] GGML_VK_FA_FORCE_PATH=%s natural=%d forced=%d\n",
+                    env_path, (int)path, (int)want);
+        }
+        path = want;
+    }
+
     switch (path) {
     case FA_SCALAR:
         return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
@@ -9370,6 +9387,33 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         // of "align", so recompute split_k based on that.
         split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), alignment);
         split_k = CEIL_DIV(KV, split_kv);
+    }
+
+    // S44 ablation hook: env var forces split_k=1 (disables the split_k reduce
+    // path). Used to test whether flash_attn_split_k_reduce.comp is the lockup
+    // mechanism on Strix Halo at n_max >= 8.
+    if (const char * env_sk = std::getenv("GGML_VK_FA_DISABLE_SPLIT_K")) {
+        if (env_sk[0] == '1' || env_sk[0] == 'y' || env_sk[0] == 'Y' || env_sk[0] == 't' || env_sk[0] == 'T') {
+            static bool logged_sk = false;
+            if (!logged_sk) {
+                logged_sk = true;
+                fprintf(stderr, "[S44 FA-ABLATE] GGML_VK_FA_DISABLE_SPLIT_K=%s natural_split_k=%u forced=1\n",
+                        env_sk, split_k);
+            }
+            split_k = 1;
+            split_kv = KV;
+        }
+    }
+
+    // S44: one-shot log of the chosen path + split_k for the first FA call so we
+    // know the baseline (natural pick) for this hardware/workload.
+    {
+        static bool logged_first = false;
+        if (!logged_first) {
+            logged_first = true;
+            fprintf(stderr, "[S44 FA-DISPATCH] path=%d Br=%u Bc=%u split_k=%u KV=%u N=%u HSK=%u HSV=%u gqa_ratio=%u\n",
+                    (int)tuning_params.path, Br, Bc, split_k, KV, N, HSK, HSV, gqa_ratio);
+        }
     }
 
     // Reserve space for split_k temporaries. For each split x batch, we need to store the O matrix (D x ne1)
