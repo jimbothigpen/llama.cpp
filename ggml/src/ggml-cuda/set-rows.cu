@@ -969,6 +969,430 @@ static void set_rows_cuda_turboq4(
 }
 
 
+
+// =====================================================================================
+// TCQ KV cache SET_ROWS Viterbi encode kernels — Phase 3a port from buun master
+// k_set_rows_turboq3_tcq: 512-thread block (one per trellis state), k=3 L=9
+// k_set_rows_turboq2_tcq: 256-thread block (one per trellis state), k=2 L=8
+// Codebooks live in turbo-quant.cuh; GET_ROWS dequant also lives there.
+// =====================================================================================
+
+// TCQ SET_ROWS encode: Viterbi optimal path with right-shift trellis
+// 512 threads per block (one per trellis state), one block per 128-element group
+// Backtrace stored in shared memory (32KB, 4-bit packed)
+template<typename idx_t>
+static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
+        const float * __restrict__ src0, const idx_t * __restrict__ src1,
+        block_turboq3_tcq * __restrict__ dst, const int64_t ne_total_groups,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02,
+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
+        const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t s10, const int64_t s11, const int64_t s12,
+        const int innerq_is_k,
+        const int64_t s1,  const int64_t s2,  const int64_t s3,
+        const uint3 ne00_fd, const uint3 ne01_fd, const uint3 ne02_fd,
+        const uint3 ne11_fd, const uint3 ne12_fd) {
+
+    const int64_t group = blockIdx.x;
+    if (group >= ne_total_groups) return;
+
+    const int sid = threadIdx.x; // state index 0..511
+
+    // Compute source and destination pointers (same index math as turbo3)
+    const int64_t i_base = group * QK_TURBOQ3_TCQ;
+    uint32_t tmp = (uint32_t)i_base; uint2 div_mod;
+    div_mod = fast_div_modulo(tmp, ne00_fd); const int64_t i00 = div_mod.y; tmp = div_mod.x;
+    div_mod = fast_div_modulo(tmp, ne01_fd); const int64_t i01 = div_mod.y; tmp = div_mod.x;
+    div_mod = fast_div_modulo(tmp, ne02_fd); const int64_t i02 = div_mod.y; const int64_t i03 = div_mod.x;
+    const int64_t i12 = fastmodulo((uint32_t)i03, ne12_fd);
+    const int64_t i11 = fastmodulo((uint32_t)i02, ne11_fd);
+    const int64_t dst_row = *(src1 + i01*s10 + i11*s11 + i12*s12);
+    const float * grp_src = src0 + i01*s01 + i02*s02 + i03*s03 + i00;
+    block_turboq3_tcq * dst_blk = (block_turboq3_tcq *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3)
+                                  + (i00 / QK_TURBOQ3_TCQ);
+
+    // Shared memory layout:
+    // x[128]     : rotated+normalized input
+    // cost[512]  : current path costs
+    // bt[128][256]: backtrace, 4-bit packed (best predecessor index 0-7)
+    __shared__ float x[128];
+    __shared__ float cost[512];
+    __shared__ uint8_t bt[128][256]; // 32KB: bt[t][s/2] = (pred_s_even) | (pred_s_odd << 4)
+
+    // Thread 0: read source, compute norm, apply InnerQ, normalize, FWHT
+    // Compute directly in shared x[] to avoid register-heavy local array
+    if (sid == 0) {
+        float norm_sq = 0.0f;
+        for (int j = 0; j < 128; j++) { x[j] = grp_src[j]; norm_sq += x[j] * x[j]; }
+
+        // InnerQ scaling
+        if (d_innerq_calibrating) {
+            for (int j = 0; j < 128; j++) {
+                atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
+            }
+            atomicAdd(&d_innerq_count, 1);
+        }
+        if (d_innerq_active) { for (int j = 0; j < 128; j++) x[j] *= d_innerq_scale[j]; }
+
+        // Recompute norm after InnerQ
+        norm_sq = 0.0f;
+        for (int j = 0; j < 128; j++) norm_sq += x[j] * x[j];
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < 128; j++) x[j] *= inv_norm;
+
+        // FWHT rotation (operates on shared memory x[] directly)
+        turbo_rotate_forward(x);
+
+        // Post-rotation extraction (if enabled)
+        // (yggdrasil: TURBO_EXTRACT data-collection elided — see [[obliteratus-recon-2026-05-08]] for an external sidecar path if needed)
+
+        // Store norm (reuse cost[0] temporarily)
+        cost[0] = grp_norm;
+    }
+    __syncthreads();
+
+    float saved_norm = cost[0];
+
+    // Initialize Viterbi: free initial state (all states equally viable)
+    cost[sid] = 0.0f;
+    __syncthreads();
+
+    // Forward pass: 128 time steps, fully parallel across 512 states
+    for (int t = 0; t < 128; t++) {
+        float xt = x[t];
+
+        // For state sid: find best predecessor
+        // Right-shift trellis: ns = (prev >> 3) | (out << 6)
+        // Predecessors of sid: prev = ((sid & 0x3F) << 3) | p, for p = 0..7
+        int base_prev = (sid & 0x3F) << 3;
+        float dist = xt - d_turboq3_tcq_codebook[sid];
+        dist = dist * dist;
+
+        float best = 1e30f;
+        int best_p = 0;
+        for (int p = 0; p < 8; p++) {
+            float c = cost[base_prev | p];
+            if (c < best) {
+                best = c;
+                best_p = p;
+            }
+        }
+
+        __syncthreads();
+        cost[sid] = best + dist;
+
+        // Store backtrace: 4-bit packed, 2 entries per byte
+        if (sid % 2 == 0) {
+            bt[t][sid / 2] = (uint8_t)best_p;
+        }
+        __syncthreads();
+        if (sid % 2 == 1) {
+            bt[t][sid / 2] |= ((uint8_t)best_p) << 4;
+        }
+        __syncthreads();
+    }
+
+    // Thread 0: find best final state, backtrack, pack bitstream
+    if (sid == 0) {
+        // Find best final state
+        float min_cost = cost[0];
+        int min_state = 0;
+        for (int s = 1; s < 512; s++) {
+            if (cost[s] < min_cost) {
+                min_cost = cost[s];
+                min_state = s;
+            }
+        }
+
+        // Backtrack: recover outputs (reuse x[] shared memory as byte array)
+        uint8_t * outputs = (uint8_t *)x; // x[] no longer needed after forward pass
+        int state = min_state;
+        for (int t = 127; t >= 0; t--) {
+            outputs[t] = (uint8_t)(state >> 6); // output = top 3 bits (right-shift trellis)
+            int p = (bt[t][state / 2] >> ((state % 2) * 4)) & 0xF;
+            state = ((state & 0x3F) << 3) | p; // reconstruct predecessor
+        }
+
+        // After backtrack, 'state' is the initial state chosen by Viterbi
+        const int initial_state = state;
+
+        // Compute reconstruction norm by replaying trellis from initial state
+        float recon_norm_sq = 0.0f;
+        int cur_state = initial_state;
+        for (int t = 0; t < 128; t++) {
+            cur_state = (cur_state >> 3) | (outputs[t] << 6);
+            float c = d_turboq3_tcq_codebook[cur_state];
+            recon_norm_sq += c * c;
+        }
+        float recon_norm = sqrtf(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
+
+        // Pack bitstream: [6 prefix bits] [out_0 (3 bits)] ... [out_127 (3 bits)]
+        for (int j = 0; j < 49; j++) dst_blk->qs[j] = 0;
+
+        // Write initial state prefix (upper 6 bits = initial_state >> 3)
+        dst_blk->qs[0] = (uint8_t)((initial_state >> 3) & 0x3F);
+
+        for (int t = 0; t < 128; t++) {
+            const int bit_pos = 6 + t * 3;
+            const int byte_idx = bit_pos / 8;
+            const int bit_off = bit_pos % 8;
+            const int out = outputs[t] & 0x7;
+            dst_blk->qs[byte_idx] |= (uint8_t)(out << bit_off);
+            if (bit_off > 5) { // 3 bits cross byte boundary
+                dst_blk->qs[byte_idx + 1] |= (uint8_t)(out >> (8 - bit_off));
+            }
+        }
+
+        dst_blk->norm = __float2half(corrected_norm);
+    }
+}
+
+// 2-bit TCQ SET_ROWS encode: Viterbi optimal path with right-shift trellis (k=2, L=8)
+template<typename idx_t>
+static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
+        const float * __restrict__ src0, const idx_t * __restrict__ src1,
+        block_turboq2_tcq * __restrict__ dst, const int64_t ne_total_groups,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02,
+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
+        const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t s10, const int64_t s11, const int64_t s12,
+        const int iq_is_k,
+        const int64_t s1, const int64_t s2, const int64_t s3,
+        const uint3 ne00_fd, const uint3 ne01_fd, const uint3 ne02_fd,
+        const uint3 ne11_fd, const uint3 ne12_fd) {
+
+    const int grp = blockIdx.x;
+    if (grp >= ne_total_groups) return;
+    const int sid = threadIdx.x; // 0..255 = trellis state
+
+    // Compute source and destination pointers (all threads, used by thread 0)
+    const int64_t i_base = int64_t(grp) * QK_TURBOQ2_TCQ;
+    uint32_t tmp = (uint32_t)i_base; uint2 div_mod;
+    div_mod = fast_div_modulo(tmp, ne00_fd); const int64_t i00 = div_mod.y; tmp = div_mod.x;
+    div_mod = fast_div_modulo(tmp, ne01_fd); const int64_t i01 = div_mod.y; tmp = div_mod.x;
+    div_mod = fast_div_modulo(tmp, ne02_fd); const int64_t i02 = div_mod.y; const int64_t i03 = div_mod.x;
+    const int64_t i12 = fastmodulo((uint32_t)i03, ne12_fd);
+    const int64_t i11 = fastmodulo((uint32_t)i02, ne11_fd);
+    const int64_t dst_row = *(src1 + i01*s10 + i11*s11 + i12*s12);
+    const float * grp_src = src0 + i01*s01 + i02*s02 + i03*s03 + i00;
+    block_turboq2_tcq * dst_blk = (block_turboq2_tcq *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3)
+                               + (i00 / QK_TURBOQ2_TCQ);
+
+    __shared__ float x[128];
+    __shared__ float cost[256];
+    __shared__ uint8_t bt[128][128]; // 256 states, 4-bit packed (2 per byte), safe even/odd serialization
+
+    // Thread 0: load data, apply InnerQ, normalize, rotate (same order as turboq3_tcq)
+    if (sid == 0) {
+        float norm_sq = 0.0f;
+        for (int j = 0; j < 128; j++) { x[j] = grp_src[j]; norm_sq += x[j] * x[j]; }
+
+        // InnerQ scaling (on raw data, before normalization)
+        if (d_innerq_calibrating) {
+            for (int j = 0; j < 128; j++) {
+                atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
+            }
+            atomicAdd(&d_innerq_count, 1);
+        }
+        if (d_innerq_active) { for (int j = 0; j < 128; j++) x[j] *= d_innerq_scale[j]; }
+
+        // Compute norm after InnerQ, then normalize
+        norm_sq = 0.0f;
+        for (int j = 0; j < 128; j++) norm_sq += x[j] * x[j];
+        float grp_norm = sqrtf(norm_sq);
+        float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < 128; j++) x[j] *= inv_norm;
+
+        // Forward FWHT
+        turbo_rotate_forward(x);
+
+        // Post-rotation extraction (if enabled)
+        // (yggdrasil: TURBO_EXTRACT data-collection elided — see [[obliteratus-recon-2026-05-08]] for an external sidecar path if needed)
+
+        cost[0] = grp_norm; // stash norm
+    }
+    __syncthreads();
+
+    float saved_norm = cost[0];
+
+    // Initialize Viterbi: free initial state (all 256 states equally viable)
+    cost[sid] = 0.0f;
+    __syncthreads();
+
+    // Forward pass: 128 time steps, parallel across 256 states
+    for (int t = 0; t < 128; t++) {
+        float xt = x[t];
+
+        // Right-shift trellis (k=2, L=8): ns = (prev >> 2) | (out << 6)
+        // Predecessors of sid: prev = ((sid & 0x3F) << 2) | p, for p = 0..3
+        int base_prev = (sid & 0x3F) << 2;
+        float dist = xt - d_turboq2_tcq_codebook[sid];
+        dist = dist * dist;
+
+        float best = 1e30f;
+        int best_p = 0;
+        for (int p = 0; p < 4; p++) {
+            float c = cost[base_prev | p];
+            if (c < best) {
+                best = c;
+                best_p = p;
+            }
+        }
+
+        __syncthreads();
+        cost[sid] = best + dist;
+
+        // Store backtrace: 4-bit packed, 2 entries per byte (safe even/odd serialization)
+        if (sid % 2 == 0) {
+            bt[t][sid / 2] = (uint8_t)(best_p & 0x3);
+        }
+        __syncthreads();
+        if (sid % 2 == 1) {
+            bt[t][sid / 2] |= ((uint8_t)(best_p & 0x3)) << 4;
+        }
+        __syncthreads();
+    }
+
+    // Thread 0: find best final state, backtrack, pack bitstream
+    if (sid == 0) {
+        float min_cost = cost[0];
+        int min_state = 0;
+        for (int s = 1; s < 256; s++) {
+            if (cost[s] < min_cost) {
+                min_cost = cost[s];
+                min_state = s;
+            }
+        }
+
+        // Backtrack
+        uint8_t * outputs = (uint8_t *)x;
+        int state = min_state;
+        for (int t = 127; t >= 0; t--) {
+            outputs[t] = (uint8_t)(state >> 6); // output = top 2 bits (k=2)
+            int p = (bt[t][state / 2] >> ((state % 2) * 4)) & 0x3;
+            state = ((state & 0x3F) << 2) | p; // reconstruct predecessor
+        }
+
+        const int initial_state = state;
+
+        // Compute reconstruction norm by replaying trellis from initial state
+        float recon_norm_sq = 0.0f;
+        int cur_state = initial_state;
+        for (int t = 0; t < 128; t++) {
+            cur_state = (cur_state >> 2) | (outputs[t] << 6);
+            float c = d_turboq2_tcq_codebook[cur_state];
+            recon_norm_sq += c * c;
+        }
+        float recon_norm = sqrtf(recon_norm_sq);
+        float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
+
+        // Pack bitstream: [6 prefix bits] [out_0 (2 bits)] ... [out_127 (2 bits)]
+        for (int j = 0; j < 33; j++) dst_blk->qs[j] = 0;
+
+        // Write initial state prefix (upper 6 bits = initial_state >> 2)
+        dst_blk->qs[0] = (uint8_t)((initial_state >> 2) & 0x3F);
+
+        for (int t = 0; t < 128; t++) {
+            const int bit_pos = 6 + t * 2;
+            const int byte_idx = bit_pos / 8;
+            const int bit_off = bit_pos % 8;
+            const int out = outputs[t] & 0x3;
+            dst_blk->qs[byte_idx] |= (uint8_t)(out << bit_off);
+            // 2 bits starting at bit_off: max bit_off=6, so 6+2=8 fits in one byte
+            // But bit_off can be 0,2,4,6 (always even) so never crosses boundary
+        }
+
+        dst_blk->norm = __float2half(corrected_norm);
+    }
+}
+
+
+template <typename idx_t>
+static void set_rows_cuda_turboq3_tcq(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+
+    const float * src0_d = (const float *)src0->data;
+    const idx_t * src1_d = (const idx_t *)src1->data;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_TURBOQ3_TCQ == 0);
+
+    cudaStream_t stream = ctx.stream();
+
+    const int64_t s01_f = nb01/sizeof(float);
+    const int64_t s02_f = nb02/sizeof(float);
+    const int64_t s03_f = nb03/sizeof(float);
+    const int64_t s10_i = nb10/sizeof(idx_t);
+    const int64_t s11_i = nb11/sizeof(idx_t);
+    const int64_t s12_i = nb12/sizeof(idx_t);
+
+    // InnerQ: check/finalize calibration before kernel launch
+    turbo_innerq_check_finalize(QK_TURBOQ3_TCQ, ne00);
+
+    const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ3_TCQ;
+    if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
+        const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
+        const uint3 ne01_fd = init_fastdiv_values((uint32_t) ne01);
+        const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
+        const uint3 ne11_fd = init_fastdiv_values((uint32_t) ne11);
+        const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
+        k_set_rows_turboq3_tcq<idx_t><<<(int)ne_total_groups, 512, 0, stream>>>(
+            src0_d, src1_d, (block_turboq3_tcq *)dst->data,
+            ne_total_groups, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
+            s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
+            /*innerq_is_k=*/0,
+            nb1, nb2, nb3,
+            ne00_fd, ne01_fd, ne02_fd, ne11_fd, ne12_fd);
+    }
+}
+
+template <typename idx_t>
+static void set_rows_cuda_turboq2_tcq(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+
+    const float * src0_d = (const float *)src0->data;
+    const idx_t * src1_d = (const idx_t *)src1->data;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_TURBOQ2_TCQ == 0);
+
+    cudaStream_t stream = ctx.stream();
+
+    const int64_t s01_f = nb01/sizeof(float);
+    const int64_t s02_f = nb02/sizeof(float);
+    const int64_t s03_f = nb03/sizeof(float);
+    const int64_t s10_i = nb10/sizeof(idx_t);
+    const int64_t s11_i = nb11/sizeof(idx_t);
+    const int64_t s12_i = nb12/sizeof(idx_t);
+
+    turbo_innerq_check_finalize(QK_TURBOQ2_TCQ, ne00);
+
+    const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ2_TCQ;
+    if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
+        const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
+        const uint3 ne01_fd = init_fastdiv_values((uint32_t) ne01);
+        const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
+        const uint3 ne11_fd = init_fastdiv_values((uint32_t) ne11);
+        const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
+        k_set_rows_turboq2_tcq<idx_t><<<(int)ne_total_groups, 256, 0, stream>>>(
+            src0_d, src1_d, (block_turboq2_tcq *)dst->data,
+            ne_total_groups, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
+            s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
+            /*iq_is_k=*/0,
+            nb1, nb2, nb3,
+            ne00_fd, ne01_fd, ne02_fd, ne11_fd, ne12_fd);
+    }
+}
+
+
 template<typename src_t, typename idx_t>
 static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const src_t * src0_d = (const src_t *)src0->data;
@@ -1075,6 +1499,10 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
         set_rows_cuda_turboq3<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ4_0) {
         set_rows_cuda_turboq4<idx_t>(ctx, src0, src1, dst);
+    } else if (dst->type == GGML_TYPE_TURBOQ3_TCQ) {
+        set_rows_cuda_turboq3_tcq<idx_t>(ctx, src0, src1, dst);
+    } else if (dst->type == GGML_TYPE_TURBOQ2_TCQ) {
+        set_rows_cuda_turboq2_tcq<idx_t>(ctx, src0, src1, dst);
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }

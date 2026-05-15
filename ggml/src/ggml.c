@@ -773,6 +773,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_turboq4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turboq4_0_ref,
     },
+    [GGML_TYPE_TURBOQ2_TCQ] = {
+        .type_name                = "turboq2_tcq",
+        .blck_size                = QK_TURBOQ2_TCQ,
+        .type_size                = sizeof(block_turboq2_tcq),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turboq2_tcq,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turboq2_tcq_ref,
+    },
+    [GGML_TYPE_TURBOQ3_TCQ] = {
+        .type_name                = "turboq3_tcq",
+        .blck_size                = QK_TURBOQ3_TCQ,
+        .type_size                = sizeof(block_turboq3_tcq),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turboq3_tcq,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turboq3_tcq_ref,
+    },
     [GGML_TYPE_WHT3_0] = {
         .type_name                = "wht3_0",
         .blck_size                = QK_TQ3_0,
@@ -7836,6 +7852,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBOQ2_0: result = quantize_turboq2_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ3_0: result = quantize_turboq3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ4_0: result = quantize_turboq4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBOQ2_TCQ: result = quantize_turboq2_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBOQ3_TCQ: result = quantize_turboq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT3_0:  result = quantize_wht3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT4_0:  result = quantize_wht4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:

@@ -113,6 +113,15 @@ GGML_API size_t quantize_turboq2_0(const float * GGML_RESTRICT src, void * GGML_
 GGML_API size_t quantize_turboq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+// TurboQuant TCQ KV cache (Trellis-Coded Quantization) — source: buun master TURBO[23]_TCQ
+GGML_API void quantize_row_turboq3_tcq_ref(const float * GGML_RESTRICT x, block_turboq3_tcq * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_turboq3_tcq(const block_turboq3_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_turboq3_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_turboq2_tcq_ref(const float * GGML_RESTRICT x, block_turboq2_tcq * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_turboq2_tcq(const block_turboq2_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max)
 GGML_API void quantize_row_wht3_0_ref(const float * GGML_RESTRICT x, block_wht3_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_wht3_0(const block_wht3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
