@@ -292,6 +292,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_linear(params);
         case LLM_ARCH_STEP35:
             return new llama_model_step35(params);
+        case LLM_ARCH_ZAYA:
+            return new llama_model_zaya(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -2009,13 +2011,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](int32_t il) {
                             return hparams.is_recurrent(il) && hparams.n_ff(il) == 0;
                         };
-                    } else if (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
-                        const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
-                        filter_attn = [&, n_main](int32_t il) {
-                            return (uint32_t)il < n_main && !hparams.is_recurrent(il);
+                    } else if (arch == LLM_ARCH_ZAYA) {
+                        // ZAYA1: even layers carry CCA (recurrent conv state); odd layers are MoE FFN
+                        filter_attn = [&](int32_t il) {
+                            return il % 2 == 0;
                         };
-                        filter_recr = [&, n_main](int32_t il) {
-                            return (uint32_t)il < n_main && hparams.is_recurrent(il);
+                        filter_recr = [&](int32_t il) {
+                            return il % 2 == 0;
                         };
                     }
 
@@ -2382,6 +2384,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
+        case LLM_ARCH_ZAYA:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
