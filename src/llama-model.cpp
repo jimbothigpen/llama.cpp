@@ -1437,6 +1437,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // Gemma 4 assistant: prefix all tensors with "mtp." so they can be uniquely
+    // targeted by -ot rules (e.g. -ot 'mtp\..*=CUDA0') without colliding with
+    // the backbone model's identically-named tensors. Tensors already prefixed
+    // are left unchanged. In-memory only — GGUF and arch names are unchanged.
+    if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        for (auto & kv : tensors_by_name) {
+            if (kv.first.compare(0, 4, "mtp.") != 0) {
+                std::string new_name = "mtp." + kv.first;
+                ggml_set_name(kv.second, new_name.c_str());
+                kv.first = new_name;
+            }
+        }
+    }
+
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
