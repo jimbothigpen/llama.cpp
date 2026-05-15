@@ -71,6 +71,7 @@ Status updated per layer landing. Initial state derived from
 
 | Feature | Layer | ROCm status | Vulkan status | Vulkan port priority |
 |---|---|---|---|---|
+| Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3.5 (ai01); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
 | TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
 | WHT weight quants (WHT3_0) | 1 | **RELEASED** | **deferred** — no TQ3_1S shaders in upstream; tracked as yggdrasil-original port | P2 — yggdrasil-original ~50-100 LOC; lands alongside RotorQuant Phase 5 |
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |

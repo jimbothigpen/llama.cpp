@@ -11,6 +11,73 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 Phase 2 (MTP spec-decode spine) in design.
 
+### Added — Novel model architecture: Zyphra ZAYA1-8B (2026-05-15, `64a481bb6 → cc8455581` on `main`)
+
+In-tree port of the Zyphra ZAYA1-8B hybrid MoE — first novel-arch model
+port in yggdrasil that did not originate in mainline llama.cpp or any of
+the six tracked sibling forks. Reference impl was the unmerged
+`Zyphra/vllm@zaya1-pr` branch + a sibling `transformers@zaya1` branch.
+
+- **`LLM_ARCH_ZAYA`** registered in `src/llama-arch.{cpp,h}` with 25 new
+  per-layer tensor enums covering CCA (Mamba-cached convolutional attention),
+  EDA (depth-recurrent router state averaging), and ResidualScaling.
+- **`src/models/zaya.cpp`** — full graph builder: per-layer residual
+  scaling, CCA attention on even layers (depthwise conv → grouped conv →
+  L2-norm → k-scale → NEOX partial-0.5 RoPE → GQA attention), MoE on odd
+  layers (down → optional EDA → RMSNorm → GELU MLP → 17-logit head →
+  softmax → MoD-skip → top-1 over 16 experts), top-level final residual
+  scale, output_norm, tied-embedding LM head.
+- **HF → GGUF converter** in `convert_hf_to_gguf.py` plus `gguf-py/gguf/`
+  metadata (incl. Gemma 262 144-token vocabulary; bos=2/eos=106).
+- **`ggml_conv_1d_grouped`** helper ported from the Zyphra fork into
+  `ggml/src/ggml.c` — pure C composition of `view_3d` / `conv_1d` /
+  `concat`. **No new GGML_OP** and no backend changes.
+- **`LLAMA_EXPERT_GATING_FUNC_TYPE_NONE`** case added to `build_moe_ffn`
+  in `src/llama-graph.cpp` — the enum value already existed in
+  `llama-hparams.h` but the switch aborted on it.
+- **Multi-seq path fully functional.** Four bugs identified and fixed:
+  - `prev_hs` non-contig view of `cca_state` for `n_seqs>1` → add `ggml_cont`.
+  - `ggml_conv_1d_dw` asserts `b->ne[3]==1` from internal reshape →
+    replaced with `ggml_ssm_conv` (natively sequence-batched depthwise).
+  - `cont(transpose(QKraw))+reshape_3d` silently scrambled channel/seq for
+    `n_seqs>1` → direct `reshape_3d(n_qk, n_seq_tokens, n_seqs) +
+    permute(1,0,2,3) + cont` (memory-preserving; ubatch is seq-major).
+  - **Latent mainline bug in `ggml_conv_1d`'s final mul_mat → reshape_3d**
+    scrambles `(OL, OC, N)` layout for any input batch `N > 1` (channel 0
+    matches by coincidence because the seq-stride dim collapses; channels 1+
+    cross-mix with the seq dim). Local workaround: `conv_1d_grouped_multiseq`
+    lambda inside `src/models/zaya.cpp` using corrected `reshape_3d(OL, N, OC)
+    + permute(0,2,1,3) + cont`. **No ggml-core changes** per mainline-fidelity
+    policy; future yggdrasil models calling `ggml_conv_1d` /
+    `ggml_conv_1d_grouped` with `n_seqs > 1` must use the lambda or discuss
+    a ggml-core fix with the user first.
+
+PPL gates (ai01 Vulkan, 80 chunks, c=512, wikitext-2-raw-test):
+
+| Quant | Bits | Single-seq PPL | Multi-seq PPL | Δ |
+|---|---|---|---|---|
+| F16 | 16 | 30.5016 | 30.5270 | +0.08% |
+| Q8_0 | 8.5 | 30.5031 | 30.5231 | +0.07% |
+| Q5_K_M | 5.5 | 29.9358 | 29.9468 | +0.04% |
+| IQ4_XS-imat-guq5k | 4.25 | 31.9483 | 32.0073 | +0.18% |
+
+All four within ±0.5% release threshold for single-vs-multi-seq parity.
+Full-corpus (570-chunk) F16 multi-seq = 31.4802 ± 0.34 (higher than 80-chunk
+because later wikitext chunks are harder; consistent with single-seq).
+
+### Added — Multi-seq diagnostic tooling (2026-05-15, `cc8455581` on `main`)
+
+- `examples/eval-callback`: `-np N` partitions the prompt tokens into N
+  sequences of equal length, each starting at pos 0, for layer-by-layer
+  multi-seq-vs-single-seq activation diffs (seq 0 sees the same head as
+  a single-seq run on the same prompt).
+- `examples/eval-callback`: example category switched to
+  `LLAMA_EXAMPLE_DEBUG` so `--tensor-filter REGEX` is recognized; wires
+  `params.tensor_filter` into `common_debug_cb_user_data`.
+- `common/debug.cpp`: skip the GPU→host `ggml_backend_tensor_get` when the
+  tensor name doesn't match the filter — significant PCIe-bound speedup
+  for narrow filters on large models.
+
 ---
 
 ## [`milestone/phase-1-turboquant-kv-foundation`] — 2026-05-21
