@@ -166,6 +166,45 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
     ggml_tensor * residual    = nullptr;
     ggml_tensor * prev_router = nullptr;
 
+    // ggml_conv_1d's final reshape (im2col->mul_mat->reshape_3d) scrambles the (OL, OC, N) layout
+    // for any input batch N>1 — it coincidentally matches for N=1 because the seq stride is unused.
+    // This local re-implementation does the correct reshape+permute+cont. Used for the CCA grouped
+    // conv where N = ubatch.n_seqs can exceed 1.
+    const auto conv_1d_grouped_multiseq = [&](ggml_tensor * weight, ggml_tensor * input, int groups) -> ggml_tensor * {
+        const int64_t OC   = weight->ne[2];
+        const int64_t IC_G = weight->ne[1];
+        const int64_t OC_G = OC / groups;
+        const int64_t IC_G_in = input->ne[1] / groups;
+        GGML_ASSERT(IC_G == IC_G_in);
+        const int64_t N = input->ne[2];
+
+        ggml_tensor * out = nullptr;
+        for (int g = 0; g < groups; ++g) {
+            ggml_tensor * a_g = ggml_view_3d(ctx0, weight,
+                    weight->ne[0], IC_G, OC_G,
+                    weight->nb[1], weight->nb[2], g * OC_G * weight->nb[2]);
+            ggml_tensor * b_g = ggml_view_3d(ctx0, input,
+                    input->ne[0], IC_G, N,
+                    input->nb[1], input->nb[2], g * IC_G * input->nb[1]);
+
+            ggml_tensor * im2col = ggml_im2col(ctx0, a_g, b_g, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
+            const int64_t OL = im2col->ne[1];
+
+            ggml_tensor * mm = ggml_mul_mat(ctx0,
+                    ggml_reshape_2d(ctx0, im2col, im2col->ne[0], OL * N),
+                    ggml_reshape_2d(ctx0, a_g, a_g->ne[0] * a_g->ne[1], OC_G));
+            // mm: (OL*N, OC_G) with position varying fastest, seq next, channel slowest.
+
+            ggml_tensor * out_g = ggml_reshape_3d(ctx0, mm, OL, N, OC_G);
+            out_g = ggml_cont(ctx0, ggml_permute(ctx0, out_g, 0, 2, 1, 3));
+            // (OL, OC_G, N).
+
+            if (out == nullptr) out = out_g;
+            else                out = ggml_concat(ctx0, out, out_g, 1);
+        }
+        return out;
+    };
+
     const auto apply_res_scale = [&](ggml_tensor * x, ggml_tensor * scale, ggml_tensor * bias, const char * name, int il) {
         if (scale == nullptr) {
             return x;
@@ -234,7 +273,9 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_tensor * cur_state_src = ggml_cont(ctx0, cur);
             ggml_tensor * cur_seq = ggml_reshape_3d(ctx0, cur_state_src, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * hs_d = ggml_reshape_3d(ctx0, prev_hs, n_embd, 1, n_seqs);
+            // prev_hs is a strided view_2d of cca_state; not contig for n_seqs>1.
+            ggml_tensor * prev_hs_cont = ggml_cont(ctx0, prev_hs);
+            ggml_tensor * hs_d = ggml_reshape_3d(ctx0, prev_hs_cont, n_embd, 1, n_seqs);
             if (n_seq_tokens > 1) {
                 ggml_tensor * cur_shift = ggml_view_3d(ctx0, cur_seq, n_embd, n_seq_tokens - 1, n_seqs,
                         cur_seq->nb[1],
@@ -274,8 +315,11 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_tensor * qk_mean_k = ggml_scale(ctx0, ggml_add(ctx0, Qmean, Kpre), 0.5f);
             cb(qk_mean_k, "qk_mean_k", il);
 
-            ggml_tensor * QKraw_t = ggml_cont(ctx0, ggml_transpose(ctx0, QKraw));
-            QKraw_t = ggml_reshape_3d(ctx0, QKraw_t, n_seq_tokens, n_qk, n_seqs);
+            // ubatch packs seq-major (split_equal concatenates per-seq token lists), so reshape
+            // directly to (n_qk, n_seq_tokens, n_seqs); permute then yields the per-seq channel layout.
+            // The prior cont(transpose)+reshape silently scrambled channel/seq for n_seqs>1.
+            ggml_tensor * QKraw_3d = ggml_reshape_3d(ctx0, QKraw, n_qk, n_seq_tokens, n_seqs);
+            ggml_tensor * QKraw_t  = ggml_cont(ctx0, ggml_permute(ctx0, QKraw_3d, 1, 0, 2, 3));
 
             ggml_tensor * conv_input = ggml_concat(ctx0, conv_state, QKraw_t, 0);
             cb(conv_input, "cca_conv_input", il);
@@ -304,14 +348,16 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             if (conv_dw->type != GGML_TYPE_F32) {
                 conv_dw = ggml_cast(ctx0, conv_dw, GGML_TYPE_F32);
             }
-            conv_dw = ggml_reshape_3d(ctx0, conv_dw, conv_dw->ne[0], 1, n_qk);
-            ggml_tensor * QK = ggml_conv_1d_dw(ctx0, conv_dw, conv_input, 1, 0, 1);
+            // ssm_conv (batched k=2 s=1 p=0 depthwise) replaces conv_1d_dw which asserts batch=1.
+            // ssm output is (n_qk, n_seq_tokens+1, n_seqs); transpose to length-major to feed conv_1d_grouped.
+            ggml_tensor * QK_ssm = ggml_ssm_conv(ctx0, conv_input, conv_dw);
+            ggml_tensor * QK     = ggml_cont(ctx0, ggml_transpose(ctx0, QK_ssm));
             if (layer.cca_conv_dw_b) {
                 QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_dw_b, 1, n_qk, 1));
             }
             cb(QK, "QK_dw", il);
 
-            QK = ggml_conv_1d_grouped(ctx0, layer.cca_conv_grp, QK, 1, 0, 1, n_groups);
+            QK = conv_1d_grouped_multiseq(layer.cca_conv_grp, QK, (int) n_groups);
             QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_grp_b, 1, n_qk, 1));
             cb(QK, "QK_grp", il);
 
