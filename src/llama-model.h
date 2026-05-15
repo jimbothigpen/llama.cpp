@@ -494,6 +494,34 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    // ZAYA1 CCA attention (even layers)
+    struct ggml_tensor * cca_conv_dw   = nullptr;
+    struct ggml_tensor * cca_conv_dw_b = nullptr;
+    struct ggml_tensor * cca_conv_grp   = nullptr;
+    struct ggml_tensor * cca_conv_grp_b = nullptr;
+    struct ggml_tensor * cca_qk_norm   = nullptr;
+    struct ggml_tensor * cca_k_scale   = nullptr;
+    struct ggml_tensor * cca_val_proj1 = nullptr;
+    struct ggml_tensor * cca_val_proj2 = nullptr;
+
+    // ZAYA1 per-layer residual scaling
+    struct ggml_tensor * res_scale_hs    = nullptr;
+    struct ggml_tensor * res_scale_hs_b  = nullptr;
+    struct ggml_tensor * res_scale_res   = nullptr;
+    struct ggml_tensor * res_scale_res_b = nullptr;
+
+    // ZAYA1 MoE router (odd layers)
+    struct ggml_tensor * zaya_router_down       = nullptr;
+    struct ggml_tensor * zaya_router_down_b     = nullptr;
+    struct ggml_tensor * zaya_router_norm       = nullptr;
+    struct ggml_tensor * zaya_router_mlp0       = nullptr;
+    struct ggml_tensor * zaya_router_mlp0_b     = nullptr;
+    struct ggml_tensor * zaya_router_mlp2       = nullptr;
+    struct ggml_tensor * zaya_router_mlp2_b     = nullptr;
+    struct ggml_tensor * zaya_router_mlp4       = nullptr;
+    struct ggml_tensor * zaya_router_biases     = nullptr;
+    struct ggml_tensor * zaya_router_eda_scale  = nullptr;
 };
 
 struct llama_device {
@@ -532,6 +560,12 @@ struct llama_model {
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
+
+    // ZAYA1 top-level final residual scale (applied after the layer stack, before output_norm)
+    struct ggml_tensor * zaya_res_scale_hs    = nullptr;
+    struct ggml_tensor * zaya_res_scale_hs_b  = nullptr;
+    struct ggml_tensor * zaya_res_scale_res   = nullptr;
+    struct ggml_tensor * zaya_res_scale_res_b = nullptr;
 
     // gemma4_assistant (MTP drafter): backbone <-> assistant projections and
     // optional centroid-clustered output head.
