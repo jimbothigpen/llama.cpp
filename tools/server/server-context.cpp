@@ -2373,9 +2373,17 @@ private:
 
                         slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
 
+                        // Clamp dp.n_max by the user-set --spec-draft-n-max (or the
+                        // "speculative.n_max" request field). get_n_draft_max() returns
+                        // the "fits in remaining ctx" bound only, so without this clamp
+                        // the per-task n_max is silently ignored on the MTP path.
+                        const int32_t user_n_max = slot.task->params.speculative.draft.n_max;
+                        const int     dp_n_max   = user_n_max > 0
+                            ? std::min(n_draft_max, (int) user_n_max)
+                            : n_draft_max;
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
-                            /* .n_max    = */ n_draft_max,
+                            /* .n_max    = */ dp_n_max,
                             /* .n_past   = */ slot.prompt.n_tokens(),
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
