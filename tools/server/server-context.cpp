@@ -3418,7 +3418,15 @@ private:
                                 SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
                             }
 
-                            // partial acceptance is not supported by the context -> truncate the draft and restore the state
+                            // partial acceptance is not supported by the context -> truncate the draft and restore the state.
+                            // Drop the resample (last entry of `accepted`) before reusing as the next draft. Without this,
+                            // restored ctx + restored sampler + deterministic FA regenerates the identical accept_n result,
+                            // producing an infinite "accepted N/M (restore checkpoint)" loop with no forward progress.
+                            // With the drop, the next iteration drafts only the N already-validated tokens; under restored
+                            // state they re-validate without divergence, accept_n returns N+1 (full accept), the success
+                            // branch fires, and all tokens emit. Worst case if divergence recurs: draft shrinks by 1 each
+                            // restore until empty, falling back to non-spec single-token decode — progress guaranteed.
+                            accepted.pop_back();
                             slot.spec_draft = std::move(accepted);
 
                             const auto & ckpt = slot.spec_ckpt;
