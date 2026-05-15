@@ -107,6 +107,7 @@ class TensorNameMap:
             "model.transformer.ln_f",                  # llada
             "final_norm",                              # modern-bert
             "model.norm",                              # cogvlm
+            "model.final_norm",                        # Zaya
         ),
 
         # Rope frequencies
@@ -223,6 +224,7 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
+            "model.layers.{bid}.input_norm",                        # Zaya
         ),
 
         # Attention norm 2
@@ -275,6 +277,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
+            "model.layers.{bid}.self_attn.qkv.linear_q",                 # Zaya
         ),
 
         # Attention key
@@ -295,6 +298,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
+            "model.layers.{bid}.self_attn.qkv.linear_k",               # Zaya
         ),
 
         # Attention value
