@@ -9288,6 +9288,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 1, {8, 1}, 256, 8, true, false, 0, 0, GGML_PREC_DEFAULT, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 1, {8, 1}, 256, 8, true, false, 0, 0, GGML_PREC_F32,     GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // s46 — Qwen3.5-35B-A3B-MTP spec-decode-time FA geometry sweep: small nb (=draft+1) over
+    // growing KV. The s45 case above pinned the lockup geometry at nb=8/kv=256; runtime spec-decode
+    // operates at nb=2-5 with KV climbing past 2000. cm1+split_k>1 still differs from cm1+split_k=1
+    // here even though n_tokens=1 PPL is bit-identical — see closeout-session-46.md.
+    for (int kv : {1024, 2048, 4096}) {
+        for (int nb : {2, 3, 4}) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 1, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_DEFAULT, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));
