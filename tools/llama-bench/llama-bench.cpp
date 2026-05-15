@@ -502,6 +502,12 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "turboq4") {
         return GGML_TYPE_TURBOQ4_0;
     }
+    if (s == "turboq2_tcq") {
+        return GGML_TYPE_TURBOQ2_TCQ;
+    }
+    if (s == "turboq3_tcq") {
+        return GGML_TYPE_TURBOQ3_TCQ;
+    }
 
     return GGML_TYPE_COUNT;
 }
