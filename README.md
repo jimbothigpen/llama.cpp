@@ -213,6 +213,45 @@ Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path, not the
 output distribution, so there is no PPL gate — correctness is verified by
 output coherence plus accept rate.
 
+### Novel model architectures (in-tree ports)
+
+In addition to all mainline-supported architectures (inherited via upstream
+sync), yggdrasil ships in-tree ports for novel hybrid architectures that
+mainline does not yet recognize.
+
+**Zyphra ZAYA1-8B** (`LLM_ARCH_ZAYA`) — 8.4B-param (760M active) hybrid MoE with
+80 layers alternating CCA (Mamba-cached convolutional attention) and 16-expert
+top-1 MoE, plus a depth-recurrent router state averaging (EDA) second hidden
+stream, mixture-of-depths (MoD) skip routing, and per-layer learned residual
+scaling. Gemma-family tokenizer (262 144 vocab), 131K context, partial-RoPE
+0.5, GQA 8/2. Runs end-to-end under default-flag llama-perplexity / llama-server
+(both single-seq and multi-seq paths validated). 3 shipping quants:
+
+```bash
+# Convert (Zyphra HF release):
+python3 convert_hf_to_gguf.py Zyphra/ZAYA1-8B \
+    --outfile zaya1-8B-F16.gguf --outtype f16
+
+# Quantize (use bundled tensor-override list to protect kernel-2 conv,
+# top-1 routing, tied LM head, and deep router MLP — see docs/zaya1.md):
+llama-quantize --imatrix imatrix.dat --override-tensor zaya1-overrides.txt \
+    zaya1-8B-F16.gguf zaya1-8B-IQ4_XS-imat-guq5k.gguf IQ4_XS
+```
+
+PPL gates (80 chunks, c=512, wikitext-2-raw-test, default multi-seq `-np 4`):
+
+| Quant | Bits | Multi-seq PPL | vs F16 30.5270 |
+|---|---|---|---|
+| F16 | 16 | 30.5270 | — |
+| Q8_0 | 8.5 | 30.5231 | -0.01% |
+| Q5_K_M | 5.5 | 29.9468 | -1.9% (PPL improves slightly; in-noise) |
+| IQ4_XS-imat-guq5k | 4.25 | 32.0073 | +4.9% |
+
+All four within ±5% F16 on this single-corpus measurement; Q8_0 and Q5_K_M
+are within ±0.5% release parity gate. See [docs/zaya1.md](docs/zaya1.md)
+for converter details, the override-tensor list, multi-seq fix history,
+and the latent `ggml_conv_1d` N>1 reshape workaround.
+
 ### Build flags
 
 Phase 1 features are built unconditionally as part of the standard cmake
@@ -247,6 +286,11 @@ to AMD upstream Tensile/hipBLAS GEMM gaps. See
   gfx1102/1103 partial-scope (smoke target) recipe.
 - [**docs/IK_LLAMA_PORTS.md**](docs/IK_LLAMA_PORTS.md) — subsystem tracker
   for ik_llama backports (not a git remote).
+- [**docs/gemma4-assistant.md**](docs/gemma4-assistant.md) — Gemma 4 MTP
+  assistant arch (`gemma4-assistant`): GGUF format, conversion, tensor schema.
+- [**docs/zaya1.md**](docs/zaya1.md) — Zyphra ZAYA1-8B arch (`LLM_ARCH_ZAYA`):
+  CCA / EDA / MoD architecture, conversion, tensor schema, quant overrides,
+  multi-seq fix history.
 - [**README.upstream.md**](README.upstream.md) — preserved mainline llama.cpp
   README for reference on build/usage docs that aren't yggdrasil-specific.
 
