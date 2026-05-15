@@ -293,6 +293,30 @@ typedef struct {
 } block_turboq2_0;
 static_assert(sizeof(block_turboq2_0) == sizeof(ggml_half) + QK_TURBOQ2/4, "wrong turboq2_0 block size/padding");
 
+// TurboQuant 3-bit TCQ: Trellis-Coded Quantization (right-shift bitshift trellis, k=3, L=9)
+// One block = one 128-element rotation group. Bitstream: 6 zero-prefix + 128×3-bit outputs = 390 bits = 49 bytes.
+// Decode: state_t = read_9_bits(qs, t*3), recon_t = codebook[state_t] * norm
+// = 3.1875 bits/value → 5.0× compression vs fp16
+#define QK_TURBOQ3_TCQ 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected group L2 norm
+    uint8_t    qs[49];                  // 49 bytes: 390-bit trellis bitstream (2 padding bits)
+    uint8_t    pad;                     //  1 byte:  alignment padding
+} block_turboq3_tcq;                    // 52 bytes total for 128 values (3.25 bpv)
+static_assert(sizeof(block_turboq3_tcq) == sizeof(ggml_half) + 50, "wrong turboq3_tcq block size/padding");
+
+// TurboQuant 2-bit TCQ: Trellis-Coded Quantization (right-shift bitshift trellis, k=2, L=8)
+// One block = one 128-element rotation group. Bitstream: 6 prefix + 128×2-bit outputs = 262 bits = 33 bytes.
+// Decode: state_t = read_8_bits(qs, t*2), recon_t = codebook[state_t] * norm
+// = 2.25 bits/value → 7.1× compression vs fp16
+#define QK_TURBOQ2_TCQ 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: corrected group L2 norm
+    uint8_t    qs[33];                  // 33 bytes: 262-bit trellis bitstream (2 padding bits)
+    uint8_t    pad;                     //  1 byte:  alignment padding
+} block_turboq2_tcq;                    // 36 bytes total for 128 values (2.25 bpv)
+static_assert(sizeof(block_turboq2_tcq) == sizeof(ggml_half) + 34, "wrong turboq2_tcq block size/padding");
+
 // TurboQuant 3-bit: 2-bit PolarQuant indices + 1-bit QJL signs
 // Block size = 128 (one block per rotation group, eliminates redundant norms)
 // Per block: norm(fp16) + 2-bit indices (32 bytes) + 1-bit signs (16 bytes)

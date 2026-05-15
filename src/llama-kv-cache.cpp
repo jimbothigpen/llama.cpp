@@ -208,8 +208,8 @@ llama_kv_cache::llama_kv_cache(
         // TurboQuant requires head_dim (n_embd_head_k) divisible by 128.
         // For models with non-128-aligned heads (e.g. DeepSeek2 MLA with head_dim=192/576),
         // fall back to q8_0 with a clear message instead of asserting later.
-        const bool is_turbo_type = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 ||
-                                    type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0);
+        const bool is_turbo_type = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ ||
+                                    type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ);
         const uint32_t n_embd_head_k_layer = hparams.n_embd_head_k(il);
         if (is_turbo_type && n_embd_head_k_layer % 128 != 0) {
             if (il == 0) {
@@ -241,8 +241,8 @@ llama_kv_cache::llama_kv_cache(
         {
             const char * env = getenv("TURBO_LAYER_ADAPTIVE");
             const int adaptive_mode = env ? atoi(env) : 0;
-            const bool is_turbo = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0);
-            const bool v_is_turbo = (type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0);
+            const bool is_turbo = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ);
+            const bool v_is_turbo = (type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ);
             const uint32_t n_layer = hparams.n_layer;
             if (!la_log_emitted && adaptive_mode > 0) {
                 LLAMA_LOG_INFO("%s: layer-adaptive mode %d enabled (TURBO_LAYER_ADAPTIVE)\n", __func__, adaptive_mode);
