@@ -435,6 +435,21 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
+    // TCQ CPU traits — stub from_float only (Viterbi encode is GPU-only;
+    // CPU set_rows on this type writes norm + zero bitstream per [[cpu-type-traits-required-for-fork-quants]]).
+    // vec_dot left NULL: CPU mul_mat on this type is not supported.
+    [GGML_TYPE_TURBOQ2_TCQ] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turboq2_tcq_ref,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBOQ3_TCQ] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turboq3_tcq_ref,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_WHT3_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_wht3_0_ref,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_wht3_0_q8_0,
