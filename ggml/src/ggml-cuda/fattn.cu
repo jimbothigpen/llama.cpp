@@ -360,6 +360,24 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ2_0)
 
+    // TURBOQ3_TCQ KV cache types
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ3_TCQ)
+    // TURBOQ2_TCQ KV cache types
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ2_TCQ)
+    // Mixed TCQ3/TCQ2
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ2_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ3_TCQ)
+    // Mixed TCQ/q8_0
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,        GGML_TYPE_TURBOQ3_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,        GGML_TYPE_TURBOQ2_TCQ)
+    // Mixed TCQ/f16
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,         GGML_TYPE_TURBOQ3_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,         GGML_TYPE_TURBOQ2_TCQ)
+
     GGML_ABORT("fatal error");
 }
 
@@ -461,6 +479,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         // Allow mixed KV types for turbo + q8_0/f16/bf16 (FA template instances compiled in).
         auto is_kv_compat = [](ggml_type t) {
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
+                || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16;
         };
         if (!is_kv_compat(K->type) || !is_kv_compat(V->type)) {
@@ -486,6 +505,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_TURBOQ2_0:
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:
+        case GGML_TYPE_TURBOQ2_TCQ:
+        case GGML_TYPE_TURBOQ3_TCQ:
             // turbo VEC kernels instantiated for D in {64, 128, 256}.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
