@@ -1088,10 +1088,20 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     // Parallel norm reduction: tree-reduce x[i]^2 via cost[0..511] → cost[0]
     cost[sid] = (sid < 128) ? x[sid] * x[sid] : 0.0f;
     __syncthreads();
-    for (int stride = 256; stride > 0; stride >>= 1) {
+    for (int stride = 256; stride >= 32; stride >>= 1) {
         if (sid < stride) cost[sid] += cost[sid + stride];
         __syncthreads();
     }
+    if (sid < 32) {
+        float v = cost[sid];
+        v += __shfl_down_sync(0xFFFFFFFF, v, 16, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  8, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  4, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  2, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  1, WARP_SIZE);
+        if (sid == 0) cost[0] = v;
+    }
+    __syncthreads();
     float grp_norm = sqrtf(cost[0]);
     float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
 
@@ -1172,10 +1182,9 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
             int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset, WARP_SIZE);
             if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
         }
-        const int warp_id = sid / 32;
         if (sid % 32 == 0) {
-            warp_min_cost[warp_id] = my_cost;
-            warp_min_idx[warp_id]  = my_idx;
+            warp_min_cost[sid / 32] = my_cost;
+            warp_min_idx[sid / 32]  = my_idx;
         }
     }
     __syncthreads();
@@ -1185,7 +1194,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         for (int w = 1; w < 16; w++) {
             if (warp_min_cost[w] < best) { best = warp_min_cost[w]; best_idx = warp_min_idx[w]; }
         }
-        shared_initial_state = best_idx; // temporarily holds best final state
+        shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
     }
     __syncthreads();
 
@@ -1221,13 +1230,23 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         float c = d_turboq3_tcq_codebook[cur_state];
         my_recon_sq = c * c;
     }
-    // Tree-reduce recon_norm_sq via cost[]
+    // Tree-reduce recon_norm_sq via cost[], warp-shuffle the final 5 strides
     cost[sid] = my_recon_sq;
     __syncthreads();
-    for (int stride = 256; stride > 0; stride >>= 1) {
+    for (int stride = 256; stride >= 32; stride >>= 1) {
         if (sid < stride) cost[sid] += cost[sid + stride];
         __syncthreads();
     }
+    if (sid < 32) {
+        float v = cost[sid];
+        v += __shfl_down_sync(0xFFFFFFFF, v, 16, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  8, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  4, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  2, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  1, WARP_SIZE);
+        if (sid == 0) cost[0] = v;
+    }
+    __syncthreads();
     float recon_norm = sqrtf(cost[0]);
     float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
     corrected_norm *= innerq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
@@ -1306,10 +1325,20 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     // Parallel norm reduction: tree-reduce x[i]^2 via cost[0..255] → cost[0]
     cost[sid] = (sid < 128) ? x[sid] * x[sid] : 0.0f;
     __syncthreads();
-    for (int stride = 128; stride > 0; stride >>= 1) {
+    for (int stride = 128; stride >= 32; stride >>= 1) {
         if (sid < stride) cost[sid] += cost[sid + stride];
         __syncthreads();
     }
+    if (sid < 32) {
+        float v = cost[sid];
+        v += __shfl_down_sync(0xFFFFFFFF, v, 16, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  8, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  4, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  2, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  1, WARP_SIZE);
+        if (sid == 0) cost[0] = v;
+    }
+    __syncthreads();
     float grp_norm = sqrtf(cost[0]);
     float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
 
@@ -1389,10 +1418,9 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
             int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset, WARP_SIZE);
             if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
         }
-        const int warp_id = sid / 32;
         if (sid % 32 == 0) {
-            warp_min_cost[warp_id] = my_cost;
-            warp_min_idx[warp_id]  = my_idx;
+            warp_min_cost[sid / 32] = my_cost;
+            warp_min_idx[sid / 32]  = my_idx;
         }
     }
     __syncthreads();
@@ -1402,7 +1430,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         for (int w = 1; w < 8; w++) {
             if (warp_min_cost[w] < best) { best = warp_min_cost[w]; best_idx = warp_min_idx[w]; }
         }
-        shared_initial_state = best_idx; // temporarily holds best final state
+        shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
     }
     __syncthreads();
 
@@ -1438,13 +1466,23 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         float c = d_turboq2_tcq_codebook[cur_state];
         my_recon_sq = c * c;
     }
-    // Tree-reduce recon_norm_sq via cost[]
+    // Tree-reduce recon_norm_sq via cost[], warp-shuffle the final 5 strides
     cost[sid] = my_recon_sq;
     __syncthreads();
-    for (int stride = 128; stride > 0; stride >>= 1) {
+    for (int stride = 128; stride >= 32; stride >>= 1) {
         if (sid < stride) cost[sid] += cost[sid + stride];
         __syncthreads();
     }
+    if (sid < 32) {
+        float v = cost[sid];
+        v += __shfl_down_sync(0xFFFFFFFF, v, 16, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  8, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  4, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  2, WARP_SIZE);
+        v += __shfl_down_sync(0xFFFFFFFF, v,  1, WARP_SIZE);
+        if (sid == 0) cost[0] = v;
+    }
+    __syncthreads();
     float recon_norm = sqrtf(cost[0]);
     float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
     corrected_norm *= iq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
