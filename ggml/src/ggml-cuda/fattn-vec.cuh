@@ -123,6 +123,26 @@ static __global__ void flash_attn_ext_vec(
     const int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
     __builtin_assume(tid < nthreads);
 
+    // TCQ codebook in shared memory for K dot and inline V dequant.
+    // __constant__ memory serializes when threads in a warp hit different 32B cache
+    // lines during random codebook lookups; __shared__ gives full 32-bank parallel
+    // access. Port buun 692cffde1.
+    constexpr bool tcq_is_tcq3 = (type_K == GGML_TYPE_TURBOQ3_TCQ) || (type_V == GGML_TYPE_TURBOQ3_TCQ);
+    constexpr bool tcq_is_tcq2 = (type_K == GGML_TYPE_TURBOQ2_TCQ) || (type_V == GGML_TYPE_TURBOQ2_TCQ);
+    constexpr int  tcq_smem_cb_size = tcq_is_tcq3 ? 512 : (tcq_is_tcq2 ? 256 : 0);
+    __shared__ float tcq_smem_codebook[tcq_smem_cb_size > 0 ? tcq_smem_cb_size : 1];
+    if constexpr (tcq_is_tcq3) {
+        for (int i = tid; i < 512; i += nthreads) {
+            tcq_smem_codebook[i] = d_turboq3_tcq_codebook[i];
+        }
+        __syncthreads();
+    } else if constexpr (tcq_is_tcq2) {
+        for (int i = tid; i < 256; i += nthreads) {
+            tcq_smem_codebook[i] = d_turboq2_tcq_codebook[i];
+        }
+        __syncthreads();
+    }
+
     constexpr int ne_KQ      = ncols*D;
     constexpr int ne_combine = nwarps*V_cols_per_iter*D;
 #ifdef V_DOT2_F32_F16_AVAILABLE
@@ -345,7 +365,15 @@ static __global__ void flash_attn_ext_vec(
                                 __half2float(turbo_lut[d0+7][(qs1>>6)&3])) * norm;
                     }
                 } else {
-                    sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                    if constexpr (type_K == GGML_TYPE_TURBOQ3_TCQ) {
+                        sum = vec_dot_fattn_vec_KQ_turboq3_tcq_cb<D, nthreads_KQ>(
+                            K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j], tcq_smem_codebook);
+                    } else if constexpr (type_K == GGML_TYPE_TURBOQ2_TCQ) {
+                        sum = vec_dot_fattn_vec_KQ_turboq2_tcq_cb<D, nthreads_KQ>(
+                            K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j], tcq_smem_codebook);
+                    } else {
+                        sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                    }
                     sum = warp_reduce_sum<nthreads_KQ>(sum);
                 }
 
@@ -604,7 +632,7 @@ static __global__ void flash_attn_ext_vec(
                         const uint16_t raw = (uint16_t) vb[ib].qs[byte_idx]
                                            | ((uint16_t) vb[ib].qs[byte_idx + 1] << 8);
                         const int state = (raw >> bit_off) & 0xFF;
-                        v[e] = d_turboq2_tcq_codebook[state] * norm;
+                        v[e] = tcq_smem_codebook[state] * norm;
                     }
 
 #pragma unroll
@@ -641,7 +669,7 @@ static __global__ void flash_attn_ext_vec(
                         const uint16_t raw = (uint16_t) vb[ib].qs[byte_idx]
                                            | ((uint16_t) vb[ib].qs[byte_idx + 1] << 8);
                         const int state = (raw >> bit_off) & 0x1FF;
-                        v[e] = d_turboq3_tcq_codebook[state] * norm;
+                        v[e] = tcq_smem_codebook[state] * norm;
                     }
 
 #pragma unroll
