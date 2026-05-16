@@ -3419,14 +3419,28 @@ private:
                             }
 
                             // partial acceptance is not supported by the context -> truncate the draft and restore the state.
-                            // Drop the resample (last entry of `accepted`) before reusing as the next draft. Without this,
-                            // restored ctx + restored sampler + deterministic FA regenerates the identical accept_n result,
-                            // producing an infinite "accepted N/M (restore checkpoint)" loop with no forward progress.
-                            // With the drop, the next iteration drafts only the N already-validated tokens; under restored
-                            // state they re-validate without divergence, accept_n returns N+1 (full accept), the success
-                            // branch fires, and all tokens emit. Worst case if divergence recurs: draft shrinks by 1 each
-                            // restore until empty, falling back to non-spec single-token decode — progress guaranteed.
-                            accepted.pop_back();
+                            //
+                            // For MTP-driven speculation (slot.is_mtp_enabled) the MTP head's per-step state is not
+                            // captured by ckpt.load_dft, so reusing `accepted` verbatim — including the resampled
+                            // tail — can desync the next accept_n trace from the original sampler trace and lock the
+                            // partial-accept loop indefinitely. The original symptom was observed on Qwen3.5-35B-A3B-
+                            // MTP-Q4_K_M with cm1+split_k>1 on Strix Halo Vulkan (~1400 consecutive identical
+                            // "accepted N/M (restore checkpoint)" events, n_decoded stuck). Dropping the resample
+                            // pop_back forces the next iteration to use only the N validated drafts, which converge
+                            // under the restored state. See yggdrasil commit 13d638b2f.
+                            //
+                            // For non-MTP spec types (draft-simple, ngram-*, eagle3) the draft impl owns fully
+                            // restorable state (a separate draft-model KV cache or a stateless n-gram lookup), so
+                            // the upstream behavior — reusing accepted verbatim — converges cleanly under
+                            // deterministic FA on the retry. Applying pop_back there is actively harmful: when N=0
+                            // (size-1 accepted, zero drafts matched) it collapses spec_draft to empty, the next
+                            // iteration regenerates the same drafts from unchanged context, and the divergence
+                            // repeats with no forward progress. This is the dense-Qwen3.5 + draft-simple hang
+                            // (n_decoded freezes ~38) and the matching ngram-cache runaway-draft regression.
+                            // Gate the workaround to MTP only so both fixes coexist.
+                            if (slot.is_mtp_enabled) {
+                                accepted.pop_back();
+                            }
                             slot.spec_draft = std::move(accepted);
 
                             const auto & ckpt = slot.spec_ckpt;
