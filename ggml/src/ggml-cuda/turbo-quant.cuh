@@ -604,6 +604,13 @@ static __constant__ float d_turboq2_tcq_codebook[256] = {
 static __constant__ float d_tcq_norm_alpha   = 1.0f;
 static __constant__ float d_tcq_norm_alpha_v = 1.0f;
 
+// TCQ error dump: save post-FWHT normalized values and output symbols for
+// autocorrelation analysis. Opt-in via TURBO_TCQ_DUMP_ERRORS=N (port of buun
+// 764c686b0). Defaults to 0 → kernels short-circuit, no parity impact.
+static __device__ float   * d_tcq_dump_x_buf   = nullptr; // [max_groups][128] post-FWHT values
+static __device__ uint8_t * d_tcq_dump_out_buf = nullptr; // [max_groups][128] Viterbi output symbols
+static __device__ int       d_tcq_dump_max     = 0;       // max groups to dump (0 = disabled)
+
 
 // 2-bit TCQ GET_ROWS dequantize
 #define QR_TURBOQ2_TCQ 2
