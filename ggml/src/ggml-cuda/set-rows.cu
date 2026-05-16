@@ -2,6 +2,54 @@
 #include "cpy-utils.cuh"
 #include "turbo-quant.cuh"
 #include <cstring>
+#include <cerrno>
+#include <cstdlib>
+
+// One-shot loader for TURBO_TCQ_ALPHA (K) and TURBO_TCQ_ALPHA_V (V) env vars.
+// Updates the d_tcq_norm_alpha{,_v} __constant__ symbols in turbo-quant.cuh.
+// If both env vars are unset, keep the compiled-in defaults (K=1.1, V=1.3).
+// If TURBO_TCQ_ALPHA is set alone, V tracks K (backwards-compat).
+// If TURBO_TCQ_ALPHA_V is set, it sets V independently of K.
+// Called on first TURBOQ{3,2}_TCQ SET_ROWS dispatch; idempotent thereafter.
+static void load_tcq_norm_alpha() {
+    static bool loaded = false;
+    if (loaded) return;
+    loaded = true;
+    const char * s  = getenv("TURBO_TCQ_ALPHA");
+    const char * sv = getenv("TURBO_TCQ_ALPHA_V");
+    if (!s && !sv) return; // use compiled-in defaults
+    float alpha_k = 1.0f; // matches d_tcq_norm_alpha compiled-in default
+    bool k_set = false;
+    if (s) {
+        char * end;
+        errno = 0;
+        float a = strtof(s, &end);
+        if (end == s || errno != 0 || a <= 0.0f || a >= 10.0f) {
+            fprintf(stderr, "TCQ: invalid TURBO_TCQ_ALPHA='%s'\n", s);
+        } else {
+            alpha_k = a;
+            k_set = true;
+            cudaMemcpyToSymbol(d_tcq_norm_alpha, &alpha_k, sizeof(float));
+        }
+    }
+    if (sv) {
+        char * end;
+        errno = 0;
+        float a = strtof(sv, &end);
+        if (end == sv || errno != 0 || a <= 0.0f || a >= 10.0f) {
+            fprintf(stderr, "TCQ: invalid TURBO_TCQ_ALPHA_V='%s'\n", sv);
+        } else {
+            cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &a, sizeof(float));
+            fprintf(stderr, "TCQ: norm alpha K=%.3f V=%.3f\n", alpha_k, a);
+            return;
+        }
+    }
+    // TURBO_TCQ_ALPHA set without TURBO_TCQ_ALPHA_V: V matches K (backwards-compat).
+    if (k_set) {
+        cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &alpha_k, sizeof(float));
+        fprintf(stderr, "TCQ: norm alpha K=V=%.3f\n", alpha_k);
+    }
+}
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
@@ -1128,6 +1176,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         }
         float recon_norm = sqrtf(recon_norm_sq);
         float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
+        corrected_norm *= innerq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
 
         // Pack bitstream: [6 prefix bits] [out_0 (3 bits)] ... [out_127 (3 bits)]
         for (int j = 0; j < 49; j++) dst_blk->qs[j] = 0;
@@ -1288,6 +1337,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         }
         float recon_norm = sqrtf(recon_norm_sq);
         float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
+        corrected_norm *= iq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
 
         // Pack bitstream: [6 prefix bits] [out_0 (2 bits)] ... [out_127 (2 bits)]
         for (int j = 0; j < 33; j++) dst_blk->qs[j] = 0;
@@ -1335,6 +1385,9 @@ static void set_rows_cuda_turboq3_tcq(
     // InnerQ: check/finalize calibration before kernel launch
     turbo_innerq_check_finalize(QK_TURBOQ3_TCQ, ne00);
 
+    // Resolve TURBO_TCQ_ALPHA{,_V} env vars (one-shot; updates __constants__).
+    load_tcq_norm_alpha();
+
     // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
     // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
     const int innerq_is_k = (strncmp(dst->name, "cache_k_", 8) == 0) ? 1 : 0;
@@ -1379,6 +1432,9 @@ static void set_rows_cuda_turboq2_tcq(
     const int64_t s12_i = nb12/sizeof(idx_t);
 
     turbo_innerq_check_finalize(QK_TURBOQ2_TCQ, ne00);
+
+    // Resolve TURBO_TCQ_ALPHA{,_V} env vars (one-shot; updates __constants__).
+    load_tcq_norm_alpha();
 
     // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
     // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
