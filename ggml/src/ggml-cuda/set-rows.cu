@@ -1168,8 +1168,8 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         int   my_idx  = sid;
         #pragma unroll
         for (int offset = 16; offset > 0; offset >>= 1) {
-            float other_cost = __shfl_xor_sync(0xFFFFFFFF, my_cost, offset);
-            int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset);
+            float other_cost = __shfl_xor_sync(0xFFFFFFFF, my_cost, offset, WARP_SIZE);
+            int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset, WARP_SIZE);
             if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
         }
         const int warp_id = sid / 32;
@@ -1385,8 +1385,8 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         int   my_idx  = sid;
         #pragma unroll
         for (int offset = 16; offset > 0; offset >>= 1) {
-            float other_cost = __shfl_xor_sync(0xFFFFFFFF, my_cost, offset);
-            int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset);
+            float other_cost = __shfl_xor_sync(0xFFFFFFFF, my_cost, offset, WARP_SIZE);
+            int   other_idx  = __shfl_xor_sync(0xFFFFFFFF, my_idx,  offset, WARP_SIZE);
             if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
         }
         const int warp_id = sid / 32;
