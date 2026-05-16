@@ -739,9 +739,13 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq4_0(
 // TURBOQ2_TCQ KQ dot product: 2-bit Trellis-Coded Quantization (k=2, L=8, 256 states).
 // Decode of element t: 8-bit sliding window starting at bit t*2; state indexes a 256-entry codebook.
 // Block size QK_TURBOQ2_TCQ = 128 elements; layout = norm(fp16) + qs[33] bitstream.
+// Core takes explicit codebook pointer so the VEC kernel can pass a __shared__
+// copy (port buun 692cffde1); thin wrapper below preserves the __constant__
+// call signature for non-VEC dispatch via get_vec_dot_KQ.
 template <int D, int nthreads>
-static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_tcq(
-    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_tcq_cb(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v,
+    const float * __restrict__ cb) {
 
     const block_turboq2_tcq * K_turbo = (const block_turboq2_tcq *) K_c;
     GGML_UNUSED(Q_q8);
@@ -782,8 +786,8 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_tcq(
             const int state1 = (raw1 >> bit_off1) & 0xFF;
 
             float2 kv;
-            kv.x = d_turboq2_tcq_codebook[state0] * norm;
-            kv.y = d_turboq2_tcq_codebook[state1] * norm;
+            kv.x = cb[state0] * norm;
+            kv.y = cb[state1] * norm;
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
@@ -798,12 +802,21 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_tcq(
     return sum;
 }
 
+// Wrapper using __constant__ codebook (for function-pointer dispatch via get_vec_dot_KQ).
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq2_tcq(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    return vec_dot_fattn_vec_KQ_turboq2_tcq_cb<D, nthreads>(K_c, Q_v, Q_q8, Q_ds_v, d_turboq2_tcq_codebook);
+}
+
 // TURBOQ3_TCQ KQ dot product: 3-bit Trellis-Coded Quantization (k=3, L=9, 512 states).
 // Decode of element t: 9-bit sliding window starting at bit t*3; state indexes a 512-entry codebook.
 // Block size QK_TURBOQ3_TCQ = 128 elements; layout = norm(fp16) + qs[49] bitstream.
+// _cb variant takes explicit codebook pointer (port buun 692cffde1).
 template <int D, int nthreads>
-static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq3_tcq(
-    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq3_tcq_cb(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v,
+    const float * __restrict__ cb) {
 
     const block_turboq3_tcq * K_turbo = (const block_turboq3_tcq *) K_c;
     GGML_UNUSED(Q_q8);
@@ -843,8 +856,8 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq3_tcq(
             const int state1 = (raw1 >> bit_off1) & 0x1FF;
 
             float2 kv;
-            kv.x = d_turboq3_tcq_codebook[state0] * norm;
-            kv.y = d_turboq3_tcq_codebook[state1] * norm;
+            kv.x = cb[state0] * norm;
+            kv.y = cb[state1] * norm;
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
@@ -857,6 +870,13 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq3_tcq(
     }
 
     return sum;
+}
+
+// Wrapper using __constant__ codebook (for function-pointer dispatch via get_vec_dot_KQ).
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq3_tcq(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    return vec_dot_fattn_vec_KQ_turboq3_tcq_cb<D, nthreads>(K_c, Q_v, Q_q8, Q_ds_v, d_turboq3_tcq_codebook);
 }
 
 // === TurboQuant V dequantize functions (turboq2, turboq3, turboq4) ===
@@ -1045,8 +1065,13 @@ static __device__ __forceinline__ void dequantize_V_turboq4_0(const void * __res
 
 // TURBOQ2_TCQ V dequantize: 2-bit sliding-window trellis decode.
 // Block size QK_TURBOQ2_TCQ = 128. Bit position of element t = t*2.
+// _cb variant takes explicit codebook pointer (port buun 692cffde1). The thin
+// wrapper below preserves the function-pointer signature used by get_dequantize_V
+// in non-VEC dispatch paths.
 template <typename T, int ne>
-static __device__ __forceinline__ void dequantize_V_turboq2_tcq(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static __device__ __forceinline__ void dequantize_V_turboq2_tcq_cb(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0,
+        const float * __restrict__ cb) {
     const block_turboq2_tcq * x = (const block_turboq2_tcq *) vx;
 
     const int64_t ib   = i0 / QK_TURBOQ2_TCQ;
@@ -1062,7 +1087,7 @@ static __device__ __forceinline__ void dequantize_V_turboq2_tcq(const void * __r
         const uint16_t raw = (uint16_t) x[ib].qs[byte_idx]
                            | ((uint16_t) x[ib].qs[byte_idx + 1] << 8);
         const int state = (raw >> bit_off) & 0xFF;
-        return d_turboq2_tcq_codebook[state] * norm;
+        return cb[state] * norm;
     };
 
     if constexpr (ne == 4) {
@@ -1099,10 +1124,20 @@ static __device__ __forceinline__ void dequantize_V_turboq2_tcq(const void * __r
     }
 }
 
+// Wrapper using __constant__ codebook (for function-pointer dispatch via get_dequantize_V).
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_turboq2_tcq(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    dequantize_V_turboq2_tcq_cb<T, ne>(vx, dst, i0, d_turboq2_tcq_codebook);
+}
+
 // TURBOQ3_TCQ V dequantize: 3-bit sliding-window trellis decode.
 // Block size QK_TURBOQ3_TCQ = 128. Bit position of element t = t*3.
+// _cb variant takes explicit codebook pointer (port buun 692cffde1).
 template <typename T, int ne>
-static __device__ __forceinline__ void dequantize_V_turboq3_tcq(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static __device__ __forceinline__ void dequantize_V_turboq3_tcq_cb(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0,
+        const float * __restrict__ cb) {
     const block_turboq3_tcq * x = (const block_turboq3_tcq *) vx;
 
     const int64_t ib   = i0 / QK_TURBOQ3_TCQ;
@@ -1118,7 +1153,7 @@ static __device__ __forceinline__ void dequantize_V_turboq3_tcq(const void * __r
         const uint16_t raw = (uint16_t) x[ib].qs[byte_idx]
                            | ((uint16_t) x[ib].qs[byte_idx + 1] << 8);
         const int state = (raw >> bit_off) & 0x1FF;
-        return d_turboq3_tcq_codebook[state] * norm;
+        return cb[state] * norm;
     };
 
     if constexpr (ne == 4) {
@@ -1153,6 +1188,13 @@ static __device__ __forceinline__ void dequantize_V_turboq3_tcq(const void * __r
             static_assert(std::is_same_v<T, void>, "unsupported type");
         }
     }
+}
+
+// Wrapper using __constant__ codebook (for function-pointer dispatch via get_dequantize_V).
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_turboq3_tcq(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    dequantize_V_turboq3_tcq_cb<T, ne>(vx, dst, i0, d_turboq3_tcq_codebook);
 }
 
 
