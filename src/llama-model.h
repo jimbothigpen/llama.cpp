@@ -574,6 +574,10 @@ struct llama_model {
     struct ggml_tensor * assist_embed_centroids  = nullptr; // [hidden, num_centroids]
     struct ggml_tensor * assist_token_ordering   = nullptr; // i32 [vocab_size]
 
+    // NVFP4 per-tensor scale2, input_scale for LM head
+    struct ggml_tensor * output_s    = nullptr;
+    struct ggml_tensor * output_in_s = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;
