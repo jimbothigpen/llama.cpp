@@ -593,6 +593,17 @@ static __constant__ float d_turboq2_tcq_codebook[256] = {
     -0.07465987f, +0.03148096f, -0.01592258f, +0.07807118f, -0.08365041f, -0.00777653f, +0.06189138f, +0.16461129f
 };
 
+// TCQ encode-time temperature scaling for the per-block stored norm.
+// Default disabled (1.0/1.0): s53 A/B probes showed both symmetric 1.2 and
+// buun's asymmetric K=1.1/V=1.3 regress 2K-ctx PPL by 5-6% on
+// Qwen3.5-9B Q4_K_M, contradicting buun's no-regression claim. Buun's gains
+// are likely long-context-only on our model mix. Long-context users can
+// opt in via TURBO_TCQ_ALPHA (K) and TURBO_TCQ_ALPHA_V (V) env vars.
+// K/V routing comes from the innerq_is_k / iq_is_k kernel parameter at the
+// TURBOQ{3,2}_TCQ encode dispatch (set-rows.cu).
+static __constant__ float d_tcq_norm_alpha   = 1.0f;
+static __constant__ float d_tcq_norm_alpha_v = 1.0f;
+
 
 // 2-bit TCQ GET_ROWS dequantize
 #define QR_TURBOQ2_TCQ 2
