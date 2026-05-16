@@ -51,6 +51,63 @@ static void load_tcq_norm_alpha() {
     }
 }
 
+// TCQ error dump (port of buun 764c686b0). Opt-in via TURBO_TCQ_DUMP_ERRORS=N;
+// dumps the first N groups' post-FWHT values + Viterbi output symbols to a
+// binary file at flush time (atexit). Output path defaults to "tcq_errors.bin"
+// in the current working directory; override with TURBO_TCQ_DUMP_PATH. The
+// /tmp default from buun's commit is avoided here per [[ai00-tmp-tmpfs]] —
+// /tmp is a 16G tmpfs on our hosts and large dumps would OOM the ramdisk.
+static int       tcq_dump_n        = 0;
+static float   * tcq_dump_x_host   = nullptr;
+static uint8_t * tcq_dump_out_host = nullptr;
+static float   * tcq_dump_x_dev    = nullptr;
+static uint8_t * tcq_dump_out_dev  = nullptr;
+static const char * tcq_dump_path  = nullptr;
+
+static void tcq_error_dump_flush() {
+    if (tcq_dump_n == 0) return;
+    cudaMemcpy(tcq_dump_x_host,   tcq_dump_x_dev,   tcq_dump_n * 128 * sizeof(float),   cudaMemcpyDeviceToHost);
+    cudaMemcpy(tcq_dump_out_host, tcq_dump_out_dev, tcq_dump_n * 128 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    const char * path = tcq_dump_path ? tcq_dump_path : "tcq_errors.bin";
+    FILE * f = fopen(path, "wb");
+    if (f) {
+        int32_t header[1] = { tcq_dump_n };
+        fwrite(header,           sizeof(int32_t), 1,                  f);
+        fwrite(tcq_dump_x_host,  sizeof(float),   tcq_dump_n * 128,   f);
+        fwrite(tcq_dump_out_host, sizeof(uint8_t), tcq_dump_n * 128,  f);
+        fclose(f);
+        fprintf(stderr, "TCQ: dumped %d groups to %s\n", tcq_dump_n, path);
+    } else {
+        fprintf(stderr, "TCQ: failed to open dump path '%s' for write\n", path);
+    }
+    cudaFree(tcq_dump_x_dev);
+    cudaFree(tcq_dump_out_dev);
+    free(tcq_dump_x_host);
+    free(tcq_dump_out_host);
+}
+
+static void init_tcq_error_dump() {
+    static bool loaded = false;
+    if (loaded) return;
+    loaded = true;
+    const char * s = getenv("TURBO_TCQ_DUMP_ERRORS");
+    if (!s) return;
+    int n = atoi(s);
+    if (n <= 0 || n > 100000) return;
+    tcq_dump_n        = n;
+    tcq_dump_path     = getenv("TURBO_TCQ_DUMP_PATH"); // nullptr → fallback in flush
+    tcq_dump_x_host   = (float   *)malloc(n * 128 * sizeof(float));
+    tcq_dump_out_host = (uint8_t *)malloc(n * 128 * sizeof(uint8_t));
+    cudaMalloc(&tcq_dump_x_dev,   n * 128 * sizeof(float));
+    cudaMalloc(&tcq_dump_out_dev, n * 128 * sizeof(uint8_t));
+    cudaMemcpyToSymbol(d_tcq_dump_x_buf,   &tcq_dump_x_dev,   sizeof(float   *));
+    cudaMemcpyToSymbol(d_tcq_dump_out_buf, &tcq_dump_out_dev, sizeof(uint8_t *));
+    cudaMemcpyToSymbol(d_tcq_dump_max,     &n,                sizeof(int));
+    atexit(tcq_error_dump_flush);
+    fprintf(stderr, "TCQ: will dump errors for first %d groups to %s\n",
+            n, tcq_dump_path ? tcq_dump_path : "tcq_errors.bin (cwd)");
+}
+
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
 // Generic quantized set_rows kernel template
@@ -1198,6 +1255,10 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     }
     __syncthreads();
 
+    // TCQ error dump (port of buun 764c686b0): save post-FWHT x[] before backtrack overwrites it.
+    if (d_tcq_dump_max > 0 && group < d_tcq_dump_max && sid < 128)
+        d_tcq_dump_x_buf[group * 128 + sid] = x[sid];
+
     // Thread 0: backtrack (inherently sequential — each step depends on the next)
     uint8_t * outputs = (uint8_t *)x; // x[] no longer needed after forward pass
     if (sid == 0) {
@@ -1211,6 +1272,10 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         shared_initial_state = state;
     }
     __syncthreads();
+
+    // TCQ error dump: save Viterbi output symbols.
+    if (d_tcq_dump_max > 0 && group < d_tcq_dump_max && sid < 128)
+        d_tcq_dump_out_buf[group * 128 + sid] = outputs[sid];
 
     // Parallel recon norm: for t >= 2, state_t = out[t-2] | (out[t-1]<<3) | (out[t]<<6)
     // For t < 2: sequential chain from initial_state (k=3, 3 shifts of 3 = 9 bits clears prefix)
@@ -1434,6 +1499,10 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     }
     __syncthreads();
 
+    // TCQ error dump (port of buun 764c686b0): save post-FWHT x[] before backtrack overwrites it.
+    if (d_tcq_dump_max > 0 && grp < d_tcq_dump_max && sid < 128)
+        d_tcq_dump_x_buf[grp * 128 + sid] = x[sid];
+
     // Thread 0: backtrack (inherently sequential)
     uint8_t * outputs = (uint8_t *)x;
     if (sid == 0) {
@@ -1446,6 +1515,10 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         shared_initial_state = state;
     }
     __syncthreads();
+
+    // TCQ error dump: save Viterbi output symbols.
+    if (d_tcq_dump_max > 0 && grp < d_tcq_dump_max && sid < 128)
+        d_tcq_dump_out_buf[grp * 128 + sid] = outputs[sid];
 
     // Parallel recon norm: for t >= 3, state_t = out[t-3] | (out[t-2]<<2) | (out[t-1]<<4) | (out[t]<<6)
     // For t < 3: sequential chain from initial_state (k=2, 4 shifts of 2 = 8 bits clears prefix)
@@ -1532,6 +1605,8 @@ static void set_rows_cuda_turboq3_tcq(
 
     // Resolve TURBO_TCQ_ALPHA{,_V} env vars (one-shot; updates __constants__).
     load_tcq_norm_alpha();
+    // Resolve TURBO_TCQ_DUMP_ERRORS env var (one-shot; allocates dump buffers).
+    init_tcq_error_dump();
 
     // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
     // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
@@ -1580,6 +1655,8 @@ static void set_rows_cuda_turboq2_tcq(
 
     // Resolve TURBO_TCQ_ALPHA{,_V} env vars (one-shot; updates __constants__).
     load_tcq_norm_alpha();
+    // Resolve TURBO_TCQ_DUMP_ERRORS env var (one-shot; allocates dump buffers).
+    init_tcq_error_dump();
 
     // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
     // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
