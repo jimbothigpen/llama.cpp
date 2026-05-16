@@ -1,6 +1,7 @@
 #include "set-rows.cuh"
 #include "cpy-utils.cuh"
 #include "turbo-quant.cuh"
+#include <cstring>
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
@@ -1334,6 +1335,10 @@ static void set_rows_cuda_turboq3_tcq(
     // InnerQ: check/finalize calibration before kernel launch
     turbo_innerq_check_finalize(QK_TURBOQ3_TCQ, ne00);
 
+    // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
+    // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
+    const int innerq_is_k = (strncmp(dst->name, "cache_k_", 8) == 0) ? 1 : 0;
+
     const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ3_TCQ;
     if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
         const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
@@ -1345,7 +1350,7 @@ static void set_rows_cuda_turboq3_tcq(
             src0_d, src1_d, (block_turboq3_tcq *)dst->data,
             ne_total_groups, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
             s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
-            /*innerq_is_k=*/0,
+            innerq_is_k,
             nb1, nb2, nb3,
             ne00_fd, ne01_fd, ne02_fd, ne11_fd, ne12_fd);
     }
@@ -1375,6 +1380,10 @@ static void set_rows_cuda_turboq2_tcq(
 
     turbo_innerq_check_finalize(QK_TURBOQ2_TCQ, ne00);
 
+    // Detect K vs V cache by dst tensor name (llama-kv-cache convention: cache_k_l%d / cache_v_l%d).
+    // TODO(yggdrasil): if upstream cache view naming changes, this detection breaks.
+    const int iq_is_k = (strncmp(dst->name, "cache_k_", 8) == 0) ? 1 : 0;
+
     const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ2_TCQ;
     if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
         const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
@@ -1386,7 +1395,7 @@ static void set_rows_cuda_turboq2_tcq(
             src0_d, src1_d, (block_turboq2_tcq *)dst->data,
             ne_total_groups, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
             s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
-            /*iq_is_k=*/0,
+            iq_is_k,
             nb1, nb2, nb3,
             ne00_fd, ne01_fd, ne02_fd, ne11_fd, ne12_fd);
     }
