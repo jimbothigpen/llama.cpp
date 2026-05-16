@@ -520,6 +520,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
+    // TURBOQ_* (TURBOQ_0 + TURBOQ_TCQ): only the VEC kernel has turbo dequant support.
+    // VEC handles arbitrary K->ne[1] lengths, so bypass the FATTN_KQ_STRIDE alignment
+    // constraint that can_use_vector_kernel applies below — otherwise short-K decode
+    // for turbo KV falls through to NONE (per buun 0d52fe00e bug #4).
+    auto is_turbo_type = [](ggml_type t) {
+        return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
+            || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ;
+    };
+    if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
+        if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_NONE;
+    }
+
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
