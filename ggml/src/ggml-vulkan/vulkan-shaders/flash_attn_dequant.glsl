@@ -107,11 +107,7 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     return FLOAT_TYPE(BUF.data[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);          \
 }
 
-// PolarQuant 2-bit centroids (Lloyd-Max for N(0, 1/128)). Matches
-// CENTROIDS_2BIT in ggml-turbo-quant.c and dequantize_row_turboq2_0.
-const float T2C[4] = float[4](
-    -0.133462f, -0.039994f, 0.039994f, 0.133462f
-);
+#include "turboq_centroids.glsl"
 
 #define FA_DEQUANT4_TURBOQ2_0(BUF) {                                                              \
     const uint qb0 = uint(BUF.data[a_offset + ib].qs[(iqs    ) / 4]);                             \
@@ -119,17 +115,10 @@ const float T2C[4] = float[4](
     const uint l1 = (qb0 >> (((iqs + 1) % 4) * 2u)) & 0x3u;                                       \
     const uint l2 = (qb0 >> (((iqs + 2) % 4) * 2u)) & 0x3u;                                       \
     const uint l3 = (qb0 >> (((iqs + 3) % 4) * 2u)) & 0x3u;                                       \
-    FLOAT_TYPEV4 c = FLOAT_TYPEV4(T2C[l0], T2C[l1], T2C[l2], T2C[l3]);                            \
+    FLOAT_TYPEV4 c = FLOAT_TYPEV4(TURBOQ2_CENTROIDS[l0], TURBOQ2_CENTROIDS[l1],                   \
+                                  TURBOQ2_CENTROIDS[l2], TURBOQ2_CENTROIDS[l3]);                  \
     return FLOAT_TYPE(BUF.data[a_offset + ib].norm) * c;                                          \
 }
-
-// PolarQuant 3-bit centroids (Lloyd-Max for Gaussian). Index 0..7 = (1-bit
-// sign << 2) | 2-bit magnitude. Matches CENTROIDS_3BIT in ggml-turbo-quant.c
-// and dequantize_row_turboq3_0.
-const float T3C[8] = float[8](
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
-);
 
 #define FA_DEQUANT4_TURBOQ3_0(BUF) {                                                              \
     const uint qb0 = uint(BUF.data[a_offset + ib].qs[(iqs    ) / 4]);                             \
@@ -143,10 +132,10 @@ const float T3C[8] = float[8](
     const uint h1 = (sb >> ((iqs + 1) % 8)) & 0x1u;                                               \
     const uint h2 = (sb >> ((iqs + 2) % 8)) & 0x1u;                                               \
     const uint h3 = (sb >> ((iqs + 3) % 8)) & 0x1u;                                               \
-    FLOAT_TYPEV4 c = FLOAT_TYPEV4(T3C[l0 | (h0 << 2)],                                            \
-                                  T3C[l1 | (h1 << 2)],                                            \
-                                  T3C[l2 | (h2 << 2)],                                            \
-                                  T3C[l3 | (h3 << 2)]);                                           \
+    FLOAT_TYPEV4 c = FLOAT_TYPEV4(TURBOQ3_CENTROIDS[l0 | (h0 << 2)],                              \
+                                  TURBOQ3_CENTROIDS[l1 | (h1 << 2)],                              \
+                                  TURBOQ3_CENTROIDS[l2 | (h2 << 2)],                              \
+                                  TURBOQ3_CENTROIDS[l3 | (h3 << 2)]);                             \
     return FLOAT_TYPE(BUF.data[a_offset + ib].norm) * c;                                          \
 }
 
