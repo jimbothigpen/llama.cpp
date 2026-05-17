@@ -364,8 +364,8 @@ void main() {
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
     const uint i01 = tmp % p.ne01; tmp /= p.ne01;
-    const uint i02 = tmp % p.ne12;
-    const uint i03 = tmp / p.ne12;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
 
     const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
@@ -477,8 +477,8 @@ void main() {
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
     const uint i01 = tmp % p.ne01; tmp /= p.ne01;
-    const uint i02 = tmp % p.ne12;
-    const uint i03 = tmp / p.ne12;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
 
     const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
@@ -608,8 +608,8 @@ void main() {
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
     const uint i01 = tmp % p.ne01; tmp /= p.ne01;
-    const uint i02 = tmp % p.ne12;
-    const uint i03 = tmp / p.ne12;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
 
     const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
