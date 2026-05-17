@@ -1805,6 +1805,23 @@ struct block_wht4_0
 #define A_TYPE block_wht4_0
 #endif
 
+#define QUANT_K_WHT3_0 32
+#define QUANT_R_WHT3_0 1
+
+struct block_wht3_0
+{
+    float16_t d0;      // scale for elements 0-15
+    float16_t d1;      // scale for elements 16-31
+    uint8_t qs[12];    // 32 × 3-bit indices packed densely (4 groups, 24-bit each)
+};
+
+#if defined(DATA_A_WHT3_0)
+#define QUANT_K QUANT_K_WHT3_0
+#define QUANT_R QUANT_R_WHT3_0
+#define QUANT_AUXF 1
+#define A_TYPE block_wht3_0
+#endif
+
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
