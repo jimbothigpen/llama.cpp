@@ -9331,9 +9331,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                             for (int nb : { 1, 3, 32, 75, }) {
                                                 for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_DEFAULT}) {
                                                     if (hsk != 128 && prec == GGML_PREC_DEFAULT) continue;
-                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ3_TCQ}) {
-                                                        if ((type_KV == GGML_TYPE_TURBOQ2_0 || type_KV == GGML_TYPE_TURBOQ3_0 ||
-                                                             type_KV == GGML_TYPE_TURBOQ2_TCQ || type_KV == GGML_TYPE_TURBOQ3_TCQ) && hsk < 128) continue;
+                                                    // TURBOQ_TCQ deliberately omitted from FA test_KV list: CPU reference
+                                                    // path (ggml_compute_forward_flash_attn_ext) dereferences NULL vec_dot
+                                                    // for TCQ types (no CPU dequant). Vulkan FA TCQ is validated via
+                                                    // model-level PPL with TCQ KV cache, not via test-backend-ops compare.
+                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0}) {
+                                                        if ((type_KV == GGML_TYPE_TURBOQ2_0 || type_KV == GGML_TYPE_TURBOQ3_0) && hsk < 128) continue;
                                                         if (type_KV != GGML_TYPE_F16 && hsk != 64 && hsk != 72 && hsk != 128) continue;
                                                         test_cases.emplace_back(new test_flash_attn_ext(
                                                                     hsk, hsv, nh, {nr2, nr3}, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV, type_KV));
