@@ -263,6 +263,47 @@ struct block_turboq4_0
 #define A_TYPE block_turboq4_0
 #endif
 
+// buun TCQ KV-cache types (Trellis-Coded Quantization, right-shift bitshift trellis).
+// turboq3_tcq: 9-bit state, 512-entry codebook, 3.25 bpv. 6 prefix bits + 128×3-bit symbols
+//              = 390 bits = 49 bytes qs[] + 1 padding byte = 52 B/block.
+// turboq2_tcq: 8-bit state, 256-entry codebook, 2.25 bpv. 6 prefix bits + 128×2-bit symbols
+//              = 262 bits = 33 bytes qs[] + 1 padding byte = 36 B/block.
+// The trailing `pad` byte is load-bearing: the 16-bit sliding-window decoder reads
+// `qs[byte_idx + 1]` at the last symbol, which otherwise overruns.
+#define QUANT_K_TURBOQ3_TCQ 128
+#define QUANT_R_TURBOQ3_TCQ 1
+
+struct block_turboq3_tcq
+{
+    float16_t norm;
+    uint8_t   qs[49];
+    uint8_t   pad;
+};
+
+#if defined(DATA_A_TURBOQ3_TCQ)
+#define QUANT_K QUANT_K_TURBOQ3_TCQ
+#define QUANT_R QUANT_R_TURBOQ3_TCQ
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq3_tcq
+#endif
+
+#define QUANT_K_TURBOQ2_TCQ 128
+#define QUANT_R_TURBOQ2_TCQ 1
+
+struct block_turboq2_tcq
+{
+    float16_t norm;
+    uint8_t   qs[33];
+    uint8_t   pad;
+};
+
+#if defined(DATA_A_TURBOQ2_TCQ)
+#define QUANT_K QUANT_K_TURBOQ2_TCQ
+#define QUANT_R QUANT_R_TURBOQ2_TCQ
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq2_tcq
+#endif
+
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 
