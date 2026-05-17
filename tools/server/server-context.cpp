@@ -801,6 +801,7 @@ private:
             }
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
+            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
             if (ctx_dft == nullptr) {
@@ -872,6 +873,14 @@ private:
 
         // Necessary similarity of prompt for slot selection
         slot_prompt_similarity = params_base.slot_prompt_similarity;
+
+        const bool mtp_enabled = std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                                           COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end();
+        if (mtp_enabled && params_base.n_parallel != 1) {
+            SRV_WRN("hook-driven MTP currently supports only a single sequence; clamping n_parallel from %d to 1\n",
+                    params_base.n_parallel);
+            params_base.n_parallel = 1;
+        }
 
         // setup slots
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);

@@ -1233,6 +1233,25 @@ common_init_result::common_init_result(common_params & params) :
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
+    if (cparams.n_rs_seq > 0 && (llama_model_is_recurrent(model) || llama_model_is_hybrid(model))) {
+        auto & types = params.speculative.types;
+
+        for (int i = 0; i < (int) types.size(); ++i) {
+            if (types[i] == COMMON_SPECULATIVE_TYPE_NONE) {
+                continue;
+            }
+            if (types[i] == COMMON_SPECULATIVE_TYPE_MTP) {
+                continue;
+            }
+
+            cparams.n_rs_seq = 0;
+
+            LOG_WRN("%s: recurrent state rollback is not compatible with speculative type %d - disabling rollback support\n",
+                    __func__, (int) types[i]);
+            break;
+        }
+    }
+
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1421,6 +1440,12 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
@@ -1525,6 +1550,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    if (getenv("LLAMA_DISABLE_MTP_RS_SEQ")) {
+        cparams.n_rs_seq = 0;
+    }
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
