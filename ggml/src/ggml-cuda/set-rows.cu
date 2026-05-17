@@ -1188,31 +1188,18 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     if (sid < 128) x[sid] *= inv_norm;
     __syncthreads();
 
-    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2.
-    // The first five stages are contained within each 32-lane warp, so use
-    // warp shuffles and only synchronize for the two cross-warp stages.
-    if (sid < 128) {
-        float v = x[sid] * TURBO_WHT_SIGNS1[sid];
-        const int lane = sid & 31;
-        #pragma unroll
-        for (int h = 1; h < 32; h <<= 1) {
-            const float other = __shfl_xor_sync(0xFFFFFFFF, v, h, WARP_SIZE);
-            v = (lane & h) ? (other - v) : (v + other);
+    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2
+    // [Cell A bisect: warp-shuffle form from buun 018092c45 reverted to original loop]
+    if (sid < 128) x[sid] *= TURBO_WHT_SIGNS1[sid];
+    __syncthreads();
+    for (int h = 1; h < 128; h *= 2) {
+        if (sid < 64) {
+            int j = (sid / h) * (2 * h) + (sid % h);
+            float a = x[j], b = x[j + h];
+            x[j] = a + b; x[j + h] = a - b;
         }
-        x[sid] = v;
+        __syncthreads();
     }
-    __syncthreads();
-    if (sid < 64) {
-        const int j = ((sid >> 5) << 6) + (sid & 31);
-        float a = x[j], b = x[j + 32];
-        x[j] = a + b; x[j + 32] = a - b;
-    }
-    __syncthreads();
-    if (sid < 64) {
-        float a = x[sid], b = x[sid + 64];
-        x[sid] = a + b; x[sid + 64] = a - b;
-    }
-    __syncthreads();
     constexpr float inv_sqrt_128 = 0.08838834764831845f;
     if (sid < 128) x[sid] *= inv_sqrt_128 * TURBO_WHT_SIGNS2[sid];
     __syncthreads();
