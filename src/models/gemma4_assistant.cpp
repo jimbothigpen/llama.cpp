@@ -330,7 +330,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
         cb(cur, "result_norm", -1);
 
-        cur = build_lora_mm(model.output, cur);
+        cur = build_lora_mm(model.output, cur, model.output_s);
         cb(cur, "result_output", -1);
         res->t_logits = cur;
         ggml_build_forward_expand(gf, cur);
@@ -568,7 +568,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     if (use_ordered_embeddings) {
         cur = build_masked_embedding_logits(cur, model.output);
     } else {
-        cur = build_lora_mm(model.output, cur);
+        cur = build_lora_mm(model.output, cur, model.output_s);
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
