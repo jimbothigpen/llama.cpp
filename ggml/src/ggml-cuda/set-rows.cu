@@ -1228,7 +1228,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
 
     // Initialize Viterbi: free initial state (all states equally viable)
     // Double-buffered cost (1 sync/step, was 3); byte-packed bt in shared or global memory.
-    uint8_t * bt = use_shared_bt ? bt_shared : bt_buf + (int64_t)blockIdx.x * (128 * 64);
+    uint8_t * bt = use_shared_bt ? bt_shared : bt_buf + (int64_t)blockIdx.x * (128 * 512);
     cost[sid] = 0.0f;
     __syncthreads();
 
@@ -1240,32 +1240,26 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
 
         float xt = x[t];
 
-        // Right-shift trellis: ns = (prev >> 3) | (out << 6). The best
-        // predecessor depends only on sid's low 6 bits, so compute those 64
-        // minima once instead of repeating the same 8-way scan for each out.
-        if (sid < 64) {
-            const int base_prev = sid << 3;
-            float best = cost_rd[base_prev];
-            int   best_p = 0;
-            #pragma unroll
-            for (int p = 1; p < 8; p++) {
-                float c = cost_rd[base_prev | p];
-                if (c < best) {
-                    best = c;
-                    best_p = p;
-                }
-            }
-            pred_min_cost[sid] = best;
-            pred_min_p[sid]    = (uint8_t) best_p;
-            bt[t * 64 + sid]   = (uint8_t) best_p;
-        }
-        __syncthreads();
-
-        const int pred_idx = sid & 0x3F;
+        // [Cell B bisect: pred-min split from buun 018092c45 reverted to original per-state 8-way scan]
+        // For state sid: find best predecessor
+        // Right-shift trellis: ns = (prev >> 3) | (out << 6)
+        // Predecessors of sid: prev = ((sid & 0x3F) << 3) | p, for p = 0..7
+        int base_prev = (sid & 0x3F) << 3;
         float dist = xt - d_turboq3_tcq_codebook[sid];
         dist = dist * dist;
 
-        cost_wr[sid] = pred_min_cost[pred_idx] + dist;
+        float best = 1e30f;
+        int best_p = 0;
+        for (int p = 0; p < 8; p++) {
+            float c = cost_rd[base_prev | p];
+            if (c < best) {
+                best = c;
+                best_p = p;
+            }
+        }
+
+        cost_wr[sid] = best + dist;
+        bt[t * 512 + sid] = (uint8_t)best_p;
         __syncthreads();
     }
     // After 128 steps (even count): final costs are in cost[] (step 127 is odd → cost_wr=cost)
@@ -1307,7 +1301,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         int state = shared_initial_state;
         for (int t = 127; t >= 0; t--) {
             outputs[t] = (uint8_t)(state >> 6); // output = top 3 bits (right-shift trellis)
-            int p = bt[t * 64 + (state & 0x3F)];
+            int p = bt[t * 512 + state];
             state = ((state & 0x3F) << 3) | p; // reconstruct predecessor
         }
         // After full backtrack, 'state' is the initial state chosen by Viterbi
@@ -1668,7 +1662,7 @@ static void set_rows_cuda_turboq3_tcq(
         // HIP/MUSA paths skip the probe and always use the global bt_buf branch.
         static int  tcq3_use_shared_bt = 0;
         static bool tcq3_bt_checked    = false;
-        constexpr int tcq3_bt_shared_bytes = 128 * 64;
+        constexpr int tcq3_bt_shared_bytes = 128 * 512;
         if (!tcq3_bt_checked) {
             tcq3_bt_checked = true;
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
@@ -1687,7 +1681,7 @@ static void set_rows_cuda_turboq3_tcq(
 #endif
         }
         if (!tcq3_use_shared_bt) {
-            ensure_tcq_bt_buf(ne_total_groups * 128 * 64);
+            ensure_tcq_bt_buf(ne_total_groups * 128 * 512);
         }
         const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
         const uint3 ne01_fd = init_fastdiv_values((uint32_t) ne01);
