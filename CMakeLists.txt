@@ -300,6 +300,16 @@ install(
         WORLD_EXECUTE
     DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+install(
+    DIRECTORY conversion
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    FILES_MATCHING PATTERN "*.py")
+
+install(
+    DIRECTORY gguf-py/gguf
+    DESTINATION ${CMAKE_INSTALL_BINDIR}/gguf-py
+    FILES_MATCHING PATTERN "*.py" PATTERN "py.typed")
+
 configure_file(cmake/llama.pc.in
         "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         @ONLY)
