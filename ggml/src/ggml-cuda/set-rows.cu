@@ -1084,7 +1084,9 @@ static void set_rows_cuda_turboq4(
 // =====================================================================================
 
 // Global backtrace buffer for TCQ Viterbi (replaces 32KB shared/block + 16KB for 2-bit).
-// Sized to ne_total_groups * 128 * BS (BS=512 for 3-bit, 256 for 2-bit). Grown on demand.
+// Sized to ne_total_groups * 128 * 64 (compressed: 64 low-state groups per step,
+// same layout for both turboq3 and turboq2). Grown on demand. Devices that opt in
+// to per-block shared-memory backtrace bypass this buffer.
 static uint8_t * tcq_bt_buf = nullptr;
 static int64_t   tcq_bt_buf_bytes = 0;
 
@@ -1412,6 +1414,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         const float * __restrict__ src0, const idx_t * __restrict__ src1,
         block_turboq2_tcq * __restrict__ dst, const int64_t ne_total_groups,
         uint8_t * __restrict__ bt_buf,
+        const int use_shared_bt,
         const int64_t ne00, const int64_t ne01, const int64_t ne02,
         const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
         const int64_t s01, const int64_t s02, const int64_t s03,
@@ -1438,12 +1441,32 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     block_turboq2_tcq * dst_blk = (block_turboq2_tcq *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3)
                                + (i00 / QK_TURBOQ2_TCQ);
 
+    // Shared memory layout:
+    // x[128]     : rotated+normalized input (also reused as scratch during reductions)
+    // cost[256]  : path costs buffer A (also reused as norm-reduction scratch)
+    // cost_b[256]: path costs buffer B (double-buffering eliminates 2/3 of syncs)
+    // Backtrace: one predecessor byte for each of the 64 low-state groups per
+    // step (compressed from the old 128x256 layout — the predecessor depends
+    // only on sid's low 6 bits, never on the output bits in sid[7:6]). The
+    // backtrace lives in dynamic shared memory when the device opts in, else
+    // in bt_buf in global memory (still 128x64 bytes per block, byte-packed).
+    extern __shared__ uint8_t bt_shared[];
     __shared__ float x[128];
     __shared__ float cost[256];
-    __shared__ float cost_b[256];   // double-buffering for Viterbi (was bt[128][128], 16KB shared)
+    __shared__ float cost_b[256];
     __shared__ int   warp_min_idx[8];
     __shared__ float warp_min_cost[8];
+    __shared__ float pred_min_cost[64];
     __shared__ int   shared_initial_state;
+    // Dedicated shared buffer for the Viterbi-backtrack output bytes. Previously
+    // aliased onto x[] via (uint8_t *)x, but writing uint8_t into a float-typed
+    // shared array is a strict-aliasing violation: under HIP/ROCm the compiler
+    // can hoist cross-thread reads of outputs[] above the __syncthreads() that
+    // follows the sid==0 backtrack write. The parallel bitpack introduced by
+    // this port reads outputs[sym_idx] from sids 0..32, which would hit the
+    // same hazard turboq3 hit in Phase 3a #20 (+12.7% PPL regression). Apply
+    // the same fix preemptively, as forecast in commit 70b3dd57c.
+    __shared__ uint8_t s_outputs[128];
 
     // Parallel pre-Viterbi: load (threads 0-127)
     if (sid < 128) x[sid] = grp_src[sid];
@@ -1483,17 +1506,31 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     if (sid < 128) x[sid] *= inv_norm;
     __syncthreads();
 
-    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2
-    if (sid < 128) x[sid] *= TURBO_WHT_SIGNS1[sid];
-    __syncthreads();
-    for (int h = 1; h < 128; h *= 2) {
-        if (sid < 64) {
-            int j = (sid / h) * (2 * h) + (sid % h);
-            float a = x[j], b = x[j + h];
-            x[j] = a + b; x[j + h] = a - b;
+    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2.
+    // The first five stages run inside each warp via __shfl_xor_sync; the
+    // last two stages span warps so they fall back to shared memory.
+    if (sid < 128) {
+        float v = x[sid] * TURBO_WHT_SIGNS1[sid];
+        const int lane = sid & 31;
+        #pragma unroll
+        for (int h = 1; h < 32; h <<= 1) {
+            const float other = __shfl_xor_sync(0xFFFFFFFF, v, h, WARP_SIZE);
+            v = (lane & h) ? (other - v) : (v + other);
         }
-        __syncthreads();
+        x[sid] = v;
     }
+    __syncthreads();
+    if (sid < 64) {
+        const int j = ((sid >> 5) << 6) + (sid & 31);
+        float a = x[j], b = x[j + 32];
+        x[j] = a + b; x[j + 32] = a - b;
+    }
+    __syncthreads();
+    if (sid < 64) {
+        float a = x[sid], b = x[sid + 64];
+        x[sid] = a + b; x[sid + 64] = a - b;
+    }
+    __syncthreads();
     constexpr float inv_sqrt_128 = 0.08838834764831845f;
     if (sid < 128) x[sid] *= inv_sqrt_128 * TURBO_WHT_SIGNS2[sid];
     __syncthreads();
@@ -1508,8 +1545,8 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     float saved_norm = cost[0];
 
     // Initialize Viterbi: free initial state (all 256 states equally viable)
-    // Double-buffered cost (1 sync/step, was 3); byte-packed bt in global memory.
-    uint8_t * bt = bt_buf + (int64_t)blockIdx.x * (128 * 256);
+    // Double-buffered cost (1 sync/step, was 3); byte-packed bt in shared or global memory.
+    uint8_t * bt = use_shared_bt ? bt_shared : bt_buf + (int64_t)blockIdx.x * (128 * 64);
     cost[sid] = 0.0f;
     __syncthreads();
 
@@ -1520,24 +1557,31 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
 
         float xt = x[t];
 
-        // Right-shift trellis (k=2, L=8): ns = (prev >> 2) | (out << 6)
-        // Predecessors of sid: prev = ((sid & 0x3F) << 2) | p, for p = 0..3
-        int base_prev = (sid & 0x3F) << 2;
+        // Right-shift trellis (k=2, L=8): ns = (prev >> 2) | (out << 6). The
+        // best predecessor depends only on sid's low 6 bits, so compute those
+        // 64 minima once instead of repeating the same 4-way scan per output.
+        if (sid < 64) {
+            const int base_prev = sid << 2;
+            float best = cost_rd[base_prev];
+            int   best_p = 0;
+            #pragma unroll
+            for (int p = 1; p < 4; p++) {
+                float c = cost_rd[base_prev | p];
+                if (c < best) {
+                    best = c;
+                    best_p = p;
+                }
+            }
+            pred_min_cost[sid] = best;
+            bt[t * 64 + sid]   = (uint8_t) best_p;
+        }
+        __syncthreads();
+
+        const int pred_idx = sid & 0x3F;
         float dist = xt - d_turboq2_tcq_codebook[sid];
         dist = dist * dist;
 
-        float best = 1e30f;
-        int best_p = 0;
-        for (int p = 0; p < 4; p++) {
-            float c = cost_rd[base_prev | p];
-            if (c < best) {
-                best = c;
-                best_p = p;
-            }
-        }
-
-        cost_wr[sid] = best + dist;
-        bt[t * 256 + sid] = (uint8_t)best_p;
+        cost_wr[sid] = pred_min_cost[pred_idx] + dist;
         __syncthreads();
     }
     // After 128 steps (even count): final costs are in cost[] (step 127 is odd → cost_wr=cost)
@@ -1558,13 +1602,20 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         }
     }
     __syncthreads();
-    if (sid == 0) {
-        float best     = warp_min_cost[0];
-        int   best_idx = warp_min_idx[0];
-        for (int w = 1; w < 8; w++) {
-            if (warp_min_cost[w] < best) { best = warp_min_cost[w]; best_idx = warp_min_idx[w]; }
+    // Reduce 8 warp minima via a single-warp shuffle (32 lanes) instead of a
+    // serial single-thread loop. Upper 24 lanes seed FLT_MAX so they never win.
+    if (sid < 32) {
+        float best     = (sid < 8) ? warp_min_cost[sid] : 3.4028234663852886e38f;
+        int   best_idx = (sid < 8) ? warp_min_idx[sid]  : 0;
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            float other_cost = __shfl_down_sync(0xFFFFFFFF, best,     offset, WARP_SIZE);
+            int   other_idx  = __shfl_down_sync(0xFFFFFFFF, best_idx, offset, WARP_SIZE);
+            if (other_cost < best) { best = other_cost; best_idx = other_idx; }
         }
-        shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
+        if (sid == 0) {
+            shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
+        }
     }
     __syncthreads();
 
@@ -1572,13 +1623,15 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     if (d_tcq_dump_max > 0 && grp < d_tcq_dump_max && sid < 128)
         d_tcq_dump_x_buf[grp * 128 + sid] = x[sid];
 
-    // Thread 0: backtrack (inherently sequential, reads byte-packed bt from global memory)
-    uint8_t * outputs = (uint8_t *)x;
+    // Thread 0: backtrack (inherently sequential, reads byte-packed bt from
+    // shared or global memory). Writes the winning-path output bytes into
+    // __shared__ s_outputs[] (type-clean; see declaration comment above).
+    uint8_t * outputs = s_outputs;
     if (sid == 0) {
         int state = shared_initial_state;
         for (int t = 127; t >= 0; t--) {
             outputs[t] = (uint8_t)(state >> 6); // output = top 2 bits (k=2)
-            int p = bt[t * 256 + state];
+            int p = bt[t * 64 + (state & 0x3F)];
             state = ((state & 0x3F) << 2) | p; // reconstruct predecessor
         }
         shared_initial_state = state;
@@ -1629,19 +1682,33 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
     corrected_norm *= iq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
 
-    // Thread 0: pack bitstream (serial — avoids byte-alignment hazards with OR-into-byte)
-    if (sid == 0) {
-        for (int j = 0; j < 33; j++) dst_blk->qs[j] = 0;
-        // Write initial state prefix (upper 6 bits = initial_state >> 2)
-        dst_blk->qs[0] = (uint8_t)((shared_initial_state >> 2) & 0x3F);
-        for (int t = 0; t < 128; t++) {
-            const int bit_pos = 6 + t * 2;
-            const int byte_idx = bit_pos / 8;
-            const int bit_off = bit_pos % 8;
-            const int out = outputs[t] & 0x3;
-            dst_blk->qs[byte_idx] |= (uint8_t)(out << bit_off);
-            // 2 bits at even bit_off ∈ {0,2,4,6}: 6+2=8 fits one byte, never crosses
+    // Parallel bitpack: qs stores 6 initial-state bits followed by 128 two-bit
+    // output symbols. Each byte is independent (the 2-bit symbols never cross
+    // byte boundaries after the 6-bit prefix), so 33 threads can each pack one
+    // byte without atomics. Cross-thread reads of outputs[sym_idx] are safe
+    // because outputs aliases the type-clean __shared__ uint8_t s_outputs[]
+    // (see declaration comment).
+    if (sid < 33) {
+        const int init_bits = (shared_initial_state >> 2) & 0x3F;
+        uint8_t packed = 0;
+        #pragma unroll
+        for (int bit = 0; bit < 8; bit++) {
+            const int pos = sid * 8 + bit;
+            int v = 0;
+            if (pos < 6) {
+                v = (init_bits >> pos) & 1;
+            } else {
+                const int sym_bit_pos = pos - 6;
+                const int sym_idx = sym_bit_pos / 2;
+                if (sym_idx < 128) {
+                    v = (outputs[sym_idx] >> (sym_bit_pos % 2)) & 1;
+                }
+            }
+            packed |= (uint8_t)(v << bit);
         }
+        dst_blk->qs[sid] = packed;
+    }
+    if (sid == 0) {
         dst_blk->norm = __float2half(corrected_norm);
     }
 }
@@ -1761,15 +1828,42 @@ static void set_rows_cuda_turboq2_tcq(
 
     const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ2_TCQ;
     if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
-        ensure_tcq_bt_buf(ne_total_groups * 128 * 256);
+        // One-shot probe: on CUDA, opt in to shared-memory backtrace if the device
+        // exposes enough opt-in shared memory per block (and the env knob allows).
+        // HIP/MUSA paths skip the probe and always use the global bt_buf branch.
+        static int  tcq2_use_shared_bt = 0;
+        static bool tcq2_bt_checked    = false;
+        constexpr int tcq2_bt_shared_bytes = 128 * 64;
+        if (!tcq2_bt_checked) {
+            tcq2_bt_checked = true;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+            const char * tcq_shared_bt_env = getenv("TURBO_TCQ_SHARED_BT");
+            if (!tcq_shared_bt_env || atoi(tcq_shared_bt_env) != 0) {
+                int max_shared_optin = 0;
+                CUDA_CHECK(cudaDeviceGetAttribute(&max_shared_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, ctx.device));
+                if (max_shared_optin >= tcq2_bt_shared_bytes) {
+                    CUDA_SET_SHARED_MEMORY_LIMIT(k_set_rows_turboq2_tcq<idx_t>, tcq2_bt_shared_bytes);
+                    tcq2_use_shared_bt = 1;
+                    fprintf(stderr, "TCQ2 encode: using shared-memory backtrace (%d bytes/block)\n", tcq2_bt_shared_bytes);
+                } else {
+                    fprintf(stderr, "TCQ2 encode: shared-memory backtrace unavailable, only %d bytes/block are available\n", max_shared_optin);
+                }
+            }
+#endif
+        }
+        if (!tcq2_use_shared_bt) {
+            ensure_tcq_bt_buf(ne_total_groups * 128 * 64);
+        }
         const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
         const uint3 ne01_fd = init_fastdiv_values((uint32_t) ne01);
         const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
         const uint3 ne11_fd = init_fastdiv_values((uint32_t) ne11);
         const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
-        k_set_rows_turboq2_tcq<idx_t><<<(int)ne_total_groups, 256, 0, stream>>>(
+        const int shared_bytes = tcq2_use_shared_bt ? tcq2_bt_shared_bytes : 0;
+        k_set_rows_turboq2_tcq<idx_t><<<(int)ne_total_groups, 256, shared_bytes, stream>>>(
             src0_d, src1_d, (block_turboq2_tcq *)dst->data,
-            ne_total_groups, tcq_bt_buf, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
+            ne_total_groups, tcq_bt_buf, tcq2_use_shared_bt,
+            ne00, ne01, ne02, ne10, ne11, ne12, ne13,
             s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
             iq_is_k,
             nb1, nb2, nb3,
