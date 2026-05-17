@@ -11,6 +11,14 @@
 // pre/post norm and a barrier-driven butterfly.
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 128;
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_TCQ)
+// TCQ3 encoder: 512 Viterbi states processed in parallel; 128-element input block per workgroup.
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+const uint BLOCK_SIZE = 512;
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ2_TCQ)
+// TCQ2 encoder: 256 Viterbi states processed in parallel; 128-element input block per workgroup.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+const uint BLOCK_SIZE = 256;
 #elif defined(SET_ROWS) && QUANT_K == 1
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 512;
@@ -677,6 +685,529 @@ void main() {
         for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t4[w];
         float rn = sqrt(total);
         data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t4 / rn) : gnrm_t4);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_TCQ)
+#include "tcq_codebook.glsl"
+// Forward WHT sign vectors — same content as turboq3_0 TS1/TS2 (CUDA d_turbo_wht_signs1/2).
+// Re-declared locally so this branch doesn't depend on the DATA_A_TURBOQ3_0 block.
+const float TCQ3_TS1[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TCQ3_TS2[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TCQ3_TINV = 0.08838834764831845;  // 1 / sqrt(128)
+// Norm correction: matches CUDA d_tcq_norm_alpha_v. The CUDA K-side uses a
+// calibrated d_tcq_norm_alpha; without InnerQ calibration on Vulkan we apply
+// the V default to both K and V (see commit 37a02f4abe).
+const float TCQ3_NORM_ALPHA = 1.04;
+
+shared float wht_tcq3[128];
+shared float cost_a[512];
+shared float cost_b[512];
+shared float pred_min_cost[64];
+// Backtrace storage (8 KB): logically bt[t*64 + sid] over t=0..127, sid=0..63.
+// Packed 4 bytes/uint with layout bt_packed[sid*32 + t/4], byte (t&3). Each
+// uint is owned by exactly one writer thread (sid<64), which RMWs it across
+// 4 timesteps — same-thread sequential writes, no cross-thread races.
+shared uint  bt_packed[2048];
+shared float sg_acc[16];
+shared float sg_min_cost[16];
+shared int   sg_min_idx[16];
+shared uint  outputs_arr[128];      // backtrack symbols, 0..7 per slot
+shared float gnrm_tcq3;
+shared float saved_norm_tcq3;
+shared int   final_state_tcq3;
+shared float final_norm_tcq3;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;        // 0..511 (state index)
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    // Step 1: load 128 inputs (only threads 0..127 carry data; rest stand by for Viterbi)
+    if (t < 128u) wht_tcq3[t] = data_s[sb + t];
+    barrier();
+
+    // Step 2: L2 norm via two-stage subgroup reduction
+    float v2 = (t < 128u) ? wht_tcq3[t] * wht_tcq3[t] : 0.0;
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0u) sg_acc[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0u; w < gl_NumSubgroups; w++) total += sg_acc[w];
+        gnrm_tcq3 = sqrt(total);
+        saved_norm_tcq3 = gnrm_tcq3;
+    }
+    barrier();
+
+    // Step 3: normalize
+    if (t < 128u) wht_tcq3[t] *= (gnrm_tcq3 > 1e-10) ? (1.0 / gnrm_tcq3) : 0.0;
+    barrier();
+
+    // Step 4: forward WHT — signs1 → 7-stage butterfly → 1/sqrt(128) × signs2
+    if (t < 128u) wht_tcq3[t] *= TCQ3_TS1[t];
+    barrier();
+    [[unroll]] for (uint h = 1u; h < 128u; h <<= 1u) {
+        if (t < 128u && (t % (2u * h)) < h) {
+            float a = wht_tcq3[t];
+            float b = wht_tcq3[t + h];
+            wht_tcq3[t]     = a + b;
+            wht_tcq3[t + h] = a - b;
+        }
+        barrier();
+    }
+    if (t < 128u) wht_tcq3[t] *= TCQ3_TINV * TCQ3_TS2[t];
+    barrier();
+
+    // Step 5: zero-init Viterbi cost buffers and backtrace storage
+    cost_a[t] = 0.0;
+    cost_b[t] = 0.0;
+    [[unroll]] for (uint i = 0u; i < 4u; i++) {
+        bt_packed[t * 4u + i] = 0u;
+    }
+    barrier();
+
+    // Step 6: Viterbi forward pass (128 steps, double-buffered cost)
+    //   trellis transition: state_t = (state_{t-1} >> 3) | (output_t << 6)
+    //   so the 8 predecessors of state s share the low 6 bits (s.low6 = prev>>3 & 0x3F),
+    //   meaning only 64 unique min-over-8 reductions are needed per step.
+    for (uint ts = 0u; ts < 128u; ts++) {
+        const uint  phase = ts & 1u;
+        const float xt    = wht_tcq3[ts];
+
+        // Threads 0..63 select best predecessor for low-6-bit group `t`
+        if (t < 64u) {
+            const uint base = t << 3u;
+            float best;
+            int   best_p = 0;
+            if (phase == 0u) {
+                best = cost_a[base];
+                [[unroll]] for (uint pp = 1u; pp < 8u; pp++) {
+                    float c = cost_a[base | pp];
+                    if (c < best) { best = c; best_p = int(pp); }
+                }
+            } else {
+                best = cost_b[base];
+                [[unroll]] for (uint pp = 1u; pp < 8u; pp++) {
+                    float c = cost_b[base | pp];
+                    if (c < best) { best = c; best_p = int(pp); }
+                }
+            }
+            pred_min_cost[t] = best;
+
+            // Pack best_p into bt_packed[t*32 + ts/4] at byte (ts & 3)
+            const uint slot  = t * 32u + (ts >> 2u);
+            const uint shift = (ts & 3u) * 8u;
+            const uint old   = bt_packed[slot];
+            bt_packed[slot]  = (old & ~(0xFFu << shift)) | (uint(best_p) << shift);
+        }
+        barrier();
+
+        // All 512 threads: cost_wr[sid] = pred_min_cost[sid & 0x3F] + (xt - cb[sid])^2
+        const float diff   = xt - TCQ3_CB[t];
+        const float dist2  = diff * diff;
+        const float new_cost = pred_min_cost[t & 0x3Fu] + dist2;
+        if (phase == 0u) {
+            cost_b[t] = new_cost;
+        } else {
+            cost_a[t] = new_cost;
+        }
+        barrier();
+    }
+    // After 128 steps: ts=127 had phase=1 → final cost lives in cost_a.
+
+    // Step 7: argmin over 512 final costs (cost_a)
+    {
+        float my_cost = cost_a[t];
+        int   my_idx  = int(t);
+        for (uint offset = gl_SubgroupSize >> 1u; offset > 0u; offset >>= 1u) {
+            float other_cost = subgroupShuffleXor(my_cost, offset);
+            int   other_idx  = subgroupShuffleXor(my_idx,  offset);
+            if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
+        }
+        if (gl_SubgroupInvocationID == 0u) {
+            sg_min_cost[gl_SubgroupID] = my_cost;
+            sg_min_idx[gl_SubgroupID]  = my_idx;
+        }
+    }
+    barrier();
+    if (t == 0u) {
+        float bc = sg_min_cost[0];
+        int   bi = sg_min_idx[0];
+        for (uint w = 1u; w < gl_NumSubgroups; w++) {
+            if (sg_min_cost[w] < bc) { bc = sg_min_cost[w]; bi = sg_min_idx[w]; }
+        }
+        final_state_tcq3 = bi;
+    }
+    barrier();
+
+    // Step 8: sequential backtrack (thread 0 only). After the walk, `state`
+    // holds the start state (state at "time -1") — what we encode as init_bits.
+    if (t == 0u) {
+        int state = final_state_tcq3;
+        for (int ts2 = 127; ts2 >= 0; ts2--) {
+            outputs_arr[ts2] = uint(state >> 6) & 0x7u;
+            const uint slot  = uint(state & 0x3F) * 32u + uint(ts2 >> 2);
+            const uint shift = uint(ts2 & 3) * 8u;
+            const int  pp    = int((bt_packed[slot] >> shift) & 0xFFu);
+            state = ((state & 0x3F) << 3) | pp;
+        }
+        final_state_tcq3 = state;  // start state
+    }
+    barrier();
+
+    // Step 9: parallel reconstruction norm. cur_state at time t in 0..127:
+    //   t=0:  (start>>3) | (out0<<6)
+    //   t=1:  (start>>6) | (out0<<3) | (out1<<6)
+    //   t>=2: out_{t-2} | (out_{t-1}<<3) | (out_t<<6)
+    // The trellis shifts out start_state's low 3 bits at t=0 and shifts out
+    // start_state entirely by t=2, so for t>=2 cur_state depends only on outputs.
+    float my_recon_sq = 0.0;
+    if (t < 128u) {
+        int cur_state;
+        if (t < 2u) {
+            cur_state = final_state_tcq3;
+            for (uint k = 0u; k <= t; k++) {
+                cur_state = (cur_state >> 3) | (int(outputs_arr[k] & 0x7u) << 6);
+            }
+        } else {
+            cur_state =  int(outputs_arr[t - 2u] & 0x7u)
+                      | (int(outputs_arr[t - 1u] & 0x7u) << 3)
+                      | (int(outputs_arr[t]      & 0x7u) << 6);
+        }
+        const float c = TCQ3_CB[cur_state];
+        my_recon_sq = c * c;
+    }
+    {
+        float r = subgroupAdd(my_recon_sq);
+        if (gl_SubgroupInvocationID == 0u) sg_acc[gl_SubgroupID] = r;
+    }
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0u; w < gl_NumSubgroups; w++) total += sg_acc[w];
+        const float recon_norm     = sqrt(total);
+        const float corrected      = (recon_norm > 1e-10) ? (saved_norm_tcq3 / recon_norm) : saved_norm_tcq3;
+        final_norm_tcq3 = corrected * TCQ3_NORM_ALPHA;
+    }
+    barrier();
+
+    // Step 10: bitpack qs[49] in parallel. Layout: 6 init bits at qs[0] LSB,
+    // followed by 128 × 3-bit symbols starting at bit 6 of qs[0].
+    if (t < 49u) {
+        const uint init_bits = (uint(final_state_tcq3) >> 3u) & 0x3Fu;
+        uint packed = 0u;
+        [[unroll]] for (uint bit = 0u; bit < 8u; bit++) {
+            const uint pos = t * 8u + bit;
+            uint v = 0u;
+            if (pos < 6u) {
+                v = (init_bits >> pos) & 1u;
+            } else {
+                const uint sym_bit_pos = pos - 6u;
+                const uint sym_idx     = sym_bit_pos / 3u;
+                if (sym_idx < 128u) {
+                    v = (outputs_arr[sym_idx] >> (sym_bit_pos % 3u)) & 1u;
+                }
+            }
+            packed |= (v << bit);
+        }
+        data_q[db].qs[t] = uint8_t(packed);
+    }
+
+    // Step 11: norm
+    if (t == 0u) {
+        data_q[db].norm = float16_t(final_norm_tcq3);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ2_TCQ)
+#include "tcq_codebook.glsl"
+// Forward WHT sign vectors — same content as turboq3_tcq TS1/TS2 (CUDA d_turbo_wht_signs1/2).
+// Re-declared locally so this branch doesn't depend on other DATA_A_* blocks.
+const float TCQ2_TS1[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TCQ2_TS2[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TCQ2_TINV = 0.08838834764831845;  // 1 / sqrt(128)
+// Norm correction: matches CUDA d_tcq_norm_alpha_v (shared by turboq2 and turboq3).
+const float TCQ2_NORM_ALPHA = 1.04;
+
+shared float wht_tcq2[128];
+shared float cost_a[256];
+shared float cost_b[256];
+shared float pred_min_cost[64];
+// Backtrace storage (8 KB): logically bt[t*64 + sid] over t=0..127, sid=0..63.
+// Packed 4 bytes/uint with layout bt_packed[sid*32 + t/4], byte (t&3). best_p in 0..3
+// (only 2 bits used per byte; bytewise layout kept identical to turboq3_tcq for clarity).
+shared uint  bt_packed[2048];
+shared float sg_acc[16];
+shared float sg_min_cost[16];
+shared int   sg_min_idx[16];
+shared uint  outputs_arr[128];      // backtrack symbols, 0..3 per slot
+shared float gnrm_tcq2;
+shared float saved_norm_tcq2;
+shared int   final_state_tcq2;
+shared float final_norm_tcq2;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;        // 0..255 (state index)
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    // Step 1: load 128 inputs (only threads 0..127 carry data; rest stand by for Viterbi)
+    if (t < 128u) wht_tcq2[t] = data_s[sb + t];
+    barrier();
+
+    // Step 2: L2 norm via two-stage subgroup reduction
+    float v2 = (t < 128u) ? wht_tcq2[t] * wht_tcq2[t] : 0.0;
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0u) sg_acc[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0u; w < gl_NumSubgroups; w++) total += sg_acc[w];
+        gnrm_tcq2 = sqrt(total);
+        saved_norm_tcq2 = gnrm_tcq2;
+    }
+    barrier();
+
+    // Step 3: normalize
+    if (t < 128u) wht_tcq2[t] *= (gnrm_tcq2 > 1e-10) ? (1.0 / gnrm_tcq2) : 0.0;
+    barrier();
+
+    // Step 4: forward WHT — signs1 → 7-stage butterfly → 1/sqrt(128) × signs2
+    if (t < 128u) wht_tcq2[t] *= TCQ2_TS1[t];
+    barrier();
+    [[unroll]] for (uint h = 1u; h < 128u; h <<= 1u) {
+        if (t < 128u && (t % (2u * h)) < h) {
+            float a = wht_tcq2[t];
+            float b = wht_tcq2[t + h];
+            wht_tcq2[t]     = a + b;
+            wht_tcq2[t + h] = a - b;
+        }
+        barrier();
+    }
+    if (t < 128u) wht_tcq2[t] *= TCQ2_TINV * TCQ2_TS2[t];
+    barrier();
+
+    // Step 5: zero-init Viterbi cost buffers and backtrace storage
+    cost_a[t] = 0.0;
+    cost_b[t] = 0.0;
+    [[unroll]] for (uint i = 0u; i < 8u; i++) {
+        bt_packed[t * 8u + i] = 0u;
+    }
+    barrier();
+
+    // Step 6: Viterbi forward pass (128 steps, double-buffered cost)
+    //   trellis transition: state_t = (state_{t-1} >> 2) | (output_t << 6)
+    //   so the 4 predecessors of state s share the low 6 bits (s.low6 = prev>>2 & 0x3F),
+    //   meaning only 64 unique min-over-4 reductions are needed per step.
+    for (uint ts = 0u; ts < 128u; ts++) {
+        const uint  phase = ts & 1u;
+        const float xt    = wht_tcq2[ts];
+
+        // Threads 0..63 select best predecessor for low-6-bit group `t`
+        if (t < 64u) {
+            const uint base = t << 2u;
+            float best;
+            int   best_p = 0;
+            if (phase == 0u) {
+                best = cost_a[base];
+                [[unroll]] for (uint pp = 1u; pp < 4u; pp++) {
+                    float c = cost_a[base | pp];
+                    if (c < best) { best = c; best_p = int(pp); }
+                }
+            } else {
+                best = cost_b[base];
+                [[unroll]] for (uint pp = 1u; pp < 4u; pp++) {
+                    float c = cost_b[base | pp];
+                    if (c < best) { best = c; best_p = int(pp); }
+                }
+            }
+            pred_min_cost[t] = best;
+
+            // Pack best_p into bt_packed[t*32 + ts/4] at byte (ts & 3)
+            const uint slot  = t * 32u + (ts >> 2u);
+            const uint shift = (ts & 3u) * 8u;
+            const uint old   = bt_packed[slot];
+            bt_packed[slot]  = (old & ~(0xFFu << shift)) | (uint(best_p) << shift);
+        }
+        barrier();
+
+        // All 256 threads: cost_wr[sid] = pred_min_cost[sid & 0x3F] + (xt - cb[sid])^2
+        const float diff   = xt - TCQ2_CB[t];
+        const float dist2  = diff * diff;
+        const float new_cost = pred_min_cost[t & 0x3Fu] + dist2;
+        if (phase == 0u) {
+            cost_b[t] = new_cost;
+        } else {
+            cost_a[t] = new_cost;
+        }
+        barrier();
+    }
+    // After 128 steps: ts=127 had phase=1 → final cost lives in cost_a.
+
+    // Step 7: argmin over 256 final costs (cost_a)
+    {
+        float my_cost = cost_a[t];
+        int   my_idx  = int(t);
+        for (uint offset = gl_SubgroupSize >> 1u; offset > 0u; offset >>= 1u) {
+            float other_cost = subgroupShuffleXor(my_cost, offset);
+            int   other_idx  = subgroupShuffleXor(my_idx,  offset);
+            if (other_cost < my_cost) { my_cost = other_cost; my_idx = other_idx; }
+        }
+        if (gl_SubgroupInvocationID == 0u) {
+            sg_min_cost[gl_SubgroupID] = my_cost;
+            sg_min_idx[gl_SubgroupID]  = my_idx;
+        }
+    }
+    barrier();
+    if (t == 0u) {
+        float bc = sg_min_cost[0];
+        int   bi = sg_min_idx[0];
+        for (uint w = 1u; w < gl_NumSubgroups; w++) {
+            if (sg_min_cost[w] < bc) { bc = sg_min_cost[w]; bi = sg_min_idx[w]; }
+        }
+        final_state_tcq2 = bi;
+    }
+    barrier();
+
+    // Step 8: sequential backtrack (thread 0 only). After the walk, `state`
+    // holds the start state (state at "time -1") — what we encode as init_bits.
+    if (t == 0u) {
+        int state = final_state_tcq2;
+        for (int ts2 = 127; ts2 >= 0; ts2--) {
+            outputs_arr[ts2] = uint(state >> 6) & 0x3u;
+            const uint slot  = uint(state & 0x3F) * 32u + uint(ts2 >> 2);
+            const uint shift = uint(ts2 & 3) * 8u;
+            const int  pp    = int((bt_packed[slot] >> shift) & 0xFFu);
+            state = ((state & 0x3F) << 2) | pp;
+        }
+        final_state_tcq2 = state;  // start state
+    }
+    barrier();
+
+    // Step 9: parallel reconstruction norm. cur_state at time t in 0..127:
+    //   t=0:  (start>>2) | (out0<<6)
+    //   t=1:  (start>>4) | (out0<<4) | (out1<<6)
+    //   t=2:  (start>>6) | (out0<<2) | (out1<<4) | (out2<<6)
+    //   t>=3: out_{t-3} | (out_{t-2}<<2) | (out_{t-1}<<4) | (out_t<<6)
+    // The trellis shifts out start_state entirely by t=3, so for t>=3 cur_state
+    // depends only on the 4 most-recent outputs.
+    float my_recon_sq = 0.0;
+    if (t < 128u) {
+        int cur_state;
+        if (t < 3u) {
+            cur_state = final_state_tcq2;
+            for (uint k = 0u; k <= t; k++) {
+                cur_state = (cur_state >> 2) | (int(outputs_arr[k] & 0x3u) << 6);
+            }
+        } else {
+            cur_state =  int(outputs_arr[t - 3u] & 0x3u)
+                      | (int(outputs_arr[t - 2u] & 0x3u) << 2)
+                      | (int(outputs_arr[t - 1u] & 0x3u) << 4)
+                      | (int(outputs_arr[t]      & 0x3u) << 6);
+        }
+        const float c = TCQ2_CB[cur_state];
+        my_recon_sq = c * c;
+    }
+    {
+        float r = subgroupAdd(my_recon_sq);
+        if (gl_SubgroupInvocationID == 0u) sg_acc[gl_SubgroupID] = r;
+    }
+    barrier();
+    if (t == 0u) {
+        float total = 0.0;
+        for (uint w = 0u; w < gl_NumSubgroups; w++) total += sg_acc[w];
+        const float recon_norm     = sqrt(total);
+        const float corrected      = (recon_norm > 1e-10) ? (saved_norm_tcq2 / recon_norm) : saved_norm_tcq2;
+        final_norm_tcq2 = corrected * TCQ2_NORM_ALPHA;
+    }
+    barrier();
+
+    // Step 10: bitpack qs[33] in parallel. Layout: 6 init bits at qs[0] LSB,
+    // followed by 128 × 2-bit symbols starting at bit 6 of qs[0].
+    if (t < 33u) {
+        const uint init_bits = (uint(final_state_tcq2) >> 2u) & 0x3Fu;
+        uint packed = 0u;
+        [[unroll]] for (uint bit = 0u; bit < 8u; bit++) {
+            const uint pos = t * 8u + bit;
+            uint v = 0u;
+            if (pos < 6u) {
+                v = (init_bits >> pos) & 1u;
+            } else {
+                const uint sym_bit_pos = pos - 6u;
+                const uint sym_idx     = sym_bit_pos / 2u;
+                if (sym_idx < 128u) {
+                    v = (outputs_arr[sym_idx] >> (sym_bit_pos % 2u)) & 1u;
+                }
+            }
+            packed |= (v << bit);
+        }
+        data_q[db].qs[t] = uint8_t(packed);
+    }
+
+    // Step 11: norm
+    if (t == 0u) {
+        data_q[db].norm = float16_t(final_norm_tcq2);
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_WHT4_0)
