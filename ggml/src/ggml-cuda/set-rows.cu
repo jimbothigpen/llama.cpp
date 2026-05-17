@@ -1108,6 +1108,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         const float * __restrict__ src0, const idx_t * __restrict__ src1,
         block_turboq3_tcq * __restrict__ dst, const int64_t ne_total_groups,
         uint8_t * __restrict__ bt_buf,
+        const int use_shared_bt,
         const int64_t ne00, const int64_t ne01, const int64_t ne02,
         const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
         const int64_t s01, const int64_t s02, const int64_t s03,
@@ -1139,12 +1140,19 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     // x[128]     : rotated+normalized input (also reused as outputs[] after Viterbi)
     // cost[512]  : path costs buffer A (also reused as reduction scratch)
     // cost_b[512]: path costs buffer B (double-buffering eliminates 2/3 of syncs)
-    // Backtrace: bt_buf in global memory, 128×512 bytes per block (byte-packed)
+    // Backtrace: one predecessor byte for each of the 64 low-state groups per
+    // step. The predecessor is independent of the output bits in sid[8:6], so
+    // storing 128×64 bytes is equivalent to the older 128×512 layout. The
+    // backtrace lives in dynamic shared memory when the device opts in, else
+    // in bt_buf in global memory (still 128×64 bytes per block, byte-packed).
+    extern __shared__ uint8_t bt_shared[];
     __shared__ float x[128];
     __shared__ float cost[512];
     __shared__ float cost_b[512];
     __shared__ int   warp_min_idx[16];
     __shared__ float warp_min_cost[16];
+    __shared__ float pred_min_cost[64];
+    __shared__ uint8_t pred_min_p[64];
     __shared__ int   shared_initial_state;
 
     // Parallel pre-Viterbi: load (threads 0-127 each grab one element)
@@ -1185,17 +1193,31 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     if (sid < 128) x[sid] *= inv_norm;
     __syncthreads();
 
-    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2
-    if (sid < 128) x[sid] *= TURBO_WHT_SIGNS1[sid];
-    __syncthreads();
-    for (int h = 1; h < 128; h *= 2) {
-        if (sid < 64) {
-            int j = (sid / h) * (2 * h) + (sid % h);
-            float a = x[j], b = x[j + h];
-            x[j] = a + b; x[j + h] = a - b;
+    // Parallel FWHT: signs1 → 7-stage butterfly → scale + signs2.
+    // The first five stages are contained within each 32-lane warp, so use
+    // warp shuffles and only synchronize for the two cross-warp stages.
+    if (sid < 128) {
+        float v = x[sid] * TURBO_WHT_SIGNS1[sid];
+        const int lane = sid & 31;
+        #pragma unroll
+        for (int h = 1; h < 32; h <<= 1) {
+            const float other = __shfl_xor_sync(0xFFFFFFFF, v, h, WARP_SIZE);
+            v = (lane & h) ? (other - v) : (v + other);
         }
-        __syncthreads();
+        x[sid] = v;
     }
+    __syncthreads();
+    if (sid < 64) {
+        const int j = ((sid >> 5) << 6) + (sid & 31);
+        float a = x[j], b = x[j + 32];
+        x[j] = a + b; x[j + 32] = a - b;
+    }
+    __syncthreads();
+    if (sid < 64) {
+        float a = x[sid], b = x[sid + 64];
+        x[sid] = a + b; x[sid + 64] = a - b;
+    }
+    __syncthreads();
     constexpr float inv_sqrt_128 = 0.08838834764831845f;
     if (sid < 128) x[sid] *= inv_sqrt_128 * TURBO_WHT_SIGNS2[sid];
     __syncthreads();
@@ -1210,8 +1232,8 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     float saved_norm = cost[0];
 
     // Initialize Viterbi: free initial state (all states equally viable)
-    // Double-buffered cost (1 sync/step, was 3); byte-packed bt in global memory.
-    uint8_t * bt = bt_buf + (int64_t)blockIdx.x * (128 * 512);
+    // Double-buffered cost (1 sync/step, was 3); byte-packed bt in shared or global memory.
+    uint8_t * bt = use_shared_bt ? bt_shared : bt_buf + (int64_t)blockIdx.x * (128 * 64);
     cost[sid] = 0.0f;
     __syncthreads();
 
@@ -1223,25 +1245,32 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
 
         float xt = x[t];
 
-        // For state sid: find best predecessor
-        // Right-shift trellis: ns = (prev >> 3) | (out << 6)
-        // Predecessors of sid: prev = ((sid & 0x3F) << 3) | p, for p = 0..7
-        int base_prev = (sid & 0x3F) << 3;
+        // Right-shift trellis: ns = (prev >> 3) | (out << 6). The best
+        // predecessor depends only on sid's low 6 bits, so compute those 64
+        // minima once instead of repeating the same 8-way scan for each out.
+        if (sid < 64) {
+            const int base_prev = sid << 3;
+            float best = cost_rd[base_prev];
+            int   best_p = 0;
+            #pragma unroll
+            for (int p = 1; p < 8; p++) {
+                float c = cost_rd[base_prev | p];
+                if (c < best) {
+                    best = c;
+                    best_p = p;
+                }
+            }
+            pred_min_cost[sid] = best;
+            pred_min_p[sid]    = (uint8_t) best_p;
+            bt[t * 64 + sid]   = (uint8_t) best_p;
+        }
+        __syncthreads();
+
+        const int pred_idx = sid & 0x3F;
         float dist = xt - d_turboq3_tcq_codebook[sid];
         dist = dist * dist;
 
-        float best = 1e30f;
-        int best_p = 0;
-        for (int p = 0; p < 8; p++) {
-            float c = cost_rd[base_prev | p];
-            if (c < best) {
-                best = c;
-                best_p = p;
-            }
-        }
-
-        cost_wr[sid] = best + dist;
-        bt[t * 512 + sid] = (uint8_t)best_p;
+        cost_wr[sid] = pred_min_cost[pred_idx] + dist;
         __syncthreads();
     }
     // After 128 steps (even count): final costs are in cost[] (step 127 is odd → cost_wr=cost)
@@ -1283,7 +1312,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         int state = shared_initial_state;
         for (int t = 127; t >= 0; t--) {
             outputs[t] = (uint8_t)(state >> 6); // output = top 3 bits (right-shift trellis)
-            int p = bt[t * 512 + state];
+            int p = bt[t * 64 + (state & 0x3F)];
             state = ((state & 0x3F) << 3) | p; // reconstruct predecessor
         }
         // After full backtrack, 'state' is the initial state chosen by Viterbi
@@ -1334,21 +1363,29 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     float corrected_norm = (recon_norm > 1e-10f) ? saved_norm / recon_norm : saved_norm;
     corrected_norm *= innerq_is_k ? d_tcq_norm_alpha : d_tcq_norm_alpha_v;
 
-    // Thread 0: pack bitstream (serial — avoids byte-alignment hazards with OR-into-byte)
-    if (sid == 0) {
-        for (int j = 0; j < 49; j++) dst_blk->qs[j] = 0;
-        // Write initial state prefix (upper 6 bits = initial_state >> 3)
-        dst_blk->qs[0] = (uint8_t)((shared_initial_state >> 3) & 0x3F);
-        for (int t = 0; t < 128; t++) {
-            const int bit_pos = 6 + t * 3;
-            const int byte_idx = bit_pos / 8;
-            const int bit_off = bit_pos % 8;
-            const int out = outputs[t] & 0x7;
-            dst_blk->qs[byte_idx] |= (uint8_t)(out << bit_off);
-            if (bit_off > 5) { // 3 bits cross byte boundary
-                dst_blk->qs[byte_idx + 1] |= (uint8_t)(out >> (8 - bit_off));
+    // Parallel bitpack: qs stores 6 initial-state bits followed by 128 3-bit
+    // output symbols. Each byte is independent, so avoid the old serial OR loop.
+    if (sid < 49) {
+        const int init_bits = (shared_initial_state >> 3) & 0x3F;
+        uint8_t packed = 0;
+        #pragma unroll
+        for (int bit = 0; bit < 8; bit++) {
+            const int pos = sid * 8 + bit;
+            int v = 0;
+            if (pos < 6) {
+                v = (init_bits >> pos) & 1;
+            } else {
+                const int sym_bit_pos = pos - 6;
+                const int sym_idx     = sym_bit_pos / 3;
+                if (sym_idx < 128) {
+                    v = (outputs[sym_idx] >> (sym_bit_pos % 3)) & 1;
+                }
             }
+            packed |= (uint8_t)(v << bit);
         }
+        dst_blk->qs[sid] = packed;
+    }
+    if (sid == 0) {
         dst_blk->norm = __float2half(corrected_norm);
     }
 }
@@ -1631,15 +1668,42 @@ static void set_rows_cuda_turboq3_tcq(
 
     const int64_t ne_total_groups = (ne00 * ne01 * ne02 * ne03) / QK_TURBOQ3_TCQ;
     if (ne_total_groups > 0 && ne00 > 0 && ne01 > 0 && ne02 > 0 && ne11 > 0 && ne12 > 0) {
-        ensure_tcq_bt_buf(ne_total_groups * 128 * 512);
+        // One-shot probe: on CUDA, opt in to shared-memory backtrace if the device
+        // exposes enough opt-in shared memory per block (and the env knob allows).
+        // HIP/MUSA paths skip the probe and always use the global bt_buf branch.
+        static int  tcq3_use_shared_bt = 0;
+        static bool tcq3_bt_checked    = false;
+        constexpr int tcq3_bt_shared_bytes = 128 * 64;
+        if (!tcq3_bt_checked) {
+            tcq3_bt_checked = true;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+            const char * tcq_shared_bt_env = getenv("TURBO_TCQ_SHARED_BT");
+            if (!tcq_shared_bt_env || atoi(tcq_shared_bt_env) != 0) {
+                int max_shared_optin = 0;
+                CUDA_CHECK(cudaDeviceGetAttribute(&max_shared_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, ctx.device));
+                if (max_shared_optin >= tcq3_bt_shared_bytes) {
+                    CUDA_SET_SHARED_MEMORY_LIMIT(k_set_rows_turboq3_tcq<idx_t>, tcq3_bt_shared_bytes);
+                    tcq3_use_shared_bt = 1;
+                    fprintf(stderr, "TCQ encode: using shared-memory backtrace (%d bytes/block)\n", tcq3_bt_shared_bytes);
+                } else {
+                    fprintf(stderr, "TCQ encode: shared-memory backtrace unavailable, only %d bytes/block are available\n", max_shared_optin);
+                }
+            }
+#endif
+        }
+        if (!tcq3_use_shared_bt) {
+            ensure_tcq_bt_buf(ne_total_groups * 128 * 64);
+        }
         const uint3 ne00_fd = init_fastdiv_values((uint32_t) ne00);
         const uint3 ne01_fd = init_fastdiv_values((uint32_t) ne01);
         const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
         const uint3 ne11_fd = init_fastdiv_values((uint32_t) ne11);
         const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
-        k_set_rows_turboq3_tcq<idx_t><<<(int)ne_total_groups, 512, 0, stream>>>(
+        const int shared_bytes = tcq3_use_shared_bt ? tcq3_bt_shared_bytes : 0;
+        k_set_rows_turboq3_tcq<idx_t><<<(int)ne_total_groups, 512, shared_bytes, stream>>>(
             src0_d, src1_d, (block_turboq3_tcq *)dst->data,
-            ne_total_groups, tcq_bt_buf, ne00, ne01, ne02, ne10, ne11, ne12, ne13,
+            ne_total_groups, tcq_bt_buf, tcq3_use_shared_bt,
+            ne00, ne01, ne02, ne10, ne11, ne12, ne13,
             s01_f, s02_f, s03_f, s10_i, s11_i, s12_i,
             innerq_is_k,
             nb1, nb2, nb3,
