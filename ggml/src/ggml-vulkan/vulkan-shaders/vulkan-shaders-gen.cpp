@@ -70,6 +70,9 @@ const std::vector<std::string> type_names = {
     "bf16",
     "wht4_0",
     "wht3_0",
+    "turboq2_0",
+    "turboq3_0",
+    "turboq4_0",
 };
 
 enum MatMulIdType {
@@ -568,6 +571,11 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         // WHT4_0 / WHT3_0 use a specialized mul_mat_vec shader for small N and
         // the dequant+f16 matmul fallback for large N. No dedicated mul_mm needed.
         if (tname == "wht4_0" || tname == "wht3_0") {
+            continue;
+        }
+        // TURBOQ{2,3,4}_0 are KV-cache-only types (PolarQuant). They are wired
+        // through the flash-attention dequant path; matmul is unused.
+        if (tname == "turboq2_0" || tname == "turboq3_0" || tname == "turboq4_0") {
             continue;
         }
 
