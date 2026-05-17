@@ -4696,7 +4696,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_IQ4_NL], "set_rows_iq4_nl" #itype, set_rows_iq4_nl ## itype ## _len, set_rows_iq4_nl ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ2_0], "set_rows_turboq2_0" #itype, set_rows_turboq2_0 ## itype ## _len, set_rows_turboq2_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_0], "set_rows_turboq3_0" #itype, set_rows_turboq3_0 ## itype ## _len, set_rows_turboq3_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
-        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ4_0], "set_rows_turboq4_0" #itype, set_rows_turboq4_0 ## itype ## _len, set_rows_turboq4_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ4_0], "set_rows_turboq4_0" #itype, set_rows_turboq4_0 ## itype ## _len, set_rows_turboq4_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ2_TCQ], "set_rows_turboq2_tcq" #itype, set_rows_turboq2_tcq ## itype ## _len, set_rows_turboq2_tcq ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_TCQ], "set_rows_turboq3_tcq" #itype, set_rows_turboq3_tcq ## itype ## _len, set_rows_turboq3_tcq ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
 
     SET_ROWS(_i32)
     SET_ROWS(_i64)
@@ -10558,9 +10560,11 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             uint32_t ne = ggml_nelements(src0);
             if (dst->type == GGML_TYPE_TURBOQ2_0 ||
                 dst->type == GGML_TYPE_TURBOQ3_0 ||
-                dst->type == GGML_TYPE_TURBOQ4_0) {
-                // turbo SET_ROWS uses 128 threads per block (WHT needs full
-                // workgroup-wide reductions); one workgroup per block.
+                dst->type == GGML_TYPE_TURBOQ4_0 ||
+                dst->type == GGML_TYPE_TURBOQ2_TCQ ||
+                dst->type == GGML_TYPE_TURBOQ3_TCQ) {
+                // turbo/TCQ SET_ROWS: one workgroup per 128-element block
+                // (WHT + Viterbi encoder need full workgroup-wide reductions).
                 ne = CEIL_DIV(ne, ggml_blck_size(dst->type));
             } else if (dst->type == GGML_TYPE_WHT4_0 || dst->type == GGML_TYPE_WHT3_0) {
                 ne = ne / 32;
@@ -16253,6 +16257,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ2_0:
                     case GGML_TYPE_TURBOQ3_0:
                     case GGML_TYPE_TURBOQ4_0:
+                    case GGML_TYPE_TURBOQ2_TCQ:
+                    case GGML_TYPE_TURBOQ3_TCQ:
                         // WHT4_0/WHT3_0 SET_ROWS pipelines not implemented on Vulkan
                         // (WHT forward needed but no copy_to_quant variant exists);
                         // returning false routes the op to CPU and silent-skips in tests.
