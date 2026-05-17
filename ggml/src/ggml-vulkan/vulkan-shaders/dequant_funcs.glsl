@@ -777,3 +777,90 @@ vec2 get_dm(uint ib, uint a_offset) {
     return vec2(1, 0);
 }
 #endif
+
+#if defined(DATA_A_TURBOQ2_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TURBOQ2_0: 4-level PolarQuant centroids, 128 elements per block.
+    const float centroids[4] = float[4](
+        -0.133462, -0.039994, 0.039994, 0.133462
+    );
+
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const uint idx0 = (uint(data_a[a_offset + ib].qs[j0 / 4]) >> ((j0 % 4) * 2)) & 0x3;
+    const uint idx1 = (uint(data_a[a_offset + ib].qs[j1 / 4]) >> ((j1 % 4) * 2)) & 0x3;
+
+    const float norm = float(data_a[a_offset + ib].norm);
+    return vec2(centroids[idx0] * norm, centroids[idx1] * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1, 0);
+}
+#endif
+
+#if defined(DATA_A_TURBOQ3_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TURBOQ3_0: 8-level PolarQuant centroids, 128 elements per block.
+    const float centroids[8] = float[8](
+        -0.190685, -0.117832, -0.065717, -0.021460,
+         0.021460,  0.065717,  0.117832,  0.190685
+    );
+
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const uint low2_0 = (uint(data_a[a_offset + ib].qs[j0 / 4]) >> ((j0 % 4) * 2)) & 0x3;
+    const uint hi1_0  = (uint(data_a[a_offset + ib].signs[j0 / 8]) >> (j0 % 8)) & 0x1;
+    const uint idx0   = low2_0 | (hi1_0 << 2);
+
+    const uint low2_1 = (uint(data_a[a_offset + ib].qs[j1 / 4]) >> ((j1 % 4) * 2)) & 0x3;
+    const uint hi1_1  = (uint(data_a[a_offset + ib].signs[j1 / 8]) >> (j1 % 8)) & 0x1;
+    const uint idx1   = low2_1 | (hi1_1 << 2);
+
+    const float norm = float(data_a[a_offset + ib].norm);
+    return vec2(centroids[idx0] * norm, centroids[idx1] * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1, 0);
+}
+#endif
+
+#if defined(DATA_A_TURBOQ4_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TURBOQ4_0: 16-level PolarQuant centroids, 128 elements per block.
+    const float centroids[16] = float[16](
+        -0.173926, -0.117195, -0.089527, -0.068756,
+        -0.051262, -0.035597, -0.020989, -0.006938,
+         0.006938,  0.020989,  0.035597,  0.051262,
+         0.068756,  0.089527,  0.117195,  0.173926
+    );
+
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const uint idx0 = (uint(data_a[a_offset + ib].qs[j0 / 2]) >> ((j0 % 2) * 4)) & 0xF;
+    const uint idx1 = (uint(data_a[a_offset + ib].qs[j1 / 2]) >> ((j1 % 2) * 4)) & 0xF;
+
+    const float norm = float(data_a[a_offset + ib].norm);
+    return vec2(centroids[idx0] * norm, centroids[idx1] * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1, 0);
+}
+#endif
