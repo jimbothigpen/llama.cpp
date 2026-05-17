@@ -690,3 +690,51 @@ vec2 get_dm(uint ib, uint a_offset) {
     return vec2(1, 0);
 }
 #endif
+
+#if defined(DATA_A_WHT3_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // WHT3_0: 8-level Lloyd-Max centroids for N(0,1)
+    const float centroids[8] = float[8](
+        -1.996684, -1.291398, -0.740341, -0.247508,
+         0.230106,  0.725222,  1.277503,  1.988943
+    );
+
+    // iqs is the element index (0..31) of the first element of the pair.
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    // Each element's 3-bit index lives in one of 4 groups of 3 bytes:
+    //   group g = j / 8, position i = j % 8, shift = 3*i, w24 = qs[3g..3g+2]
+    const uint g0 = j0 >> 3;
+    const uint i0 = j0 & 7;
+    const uint w0 = uint(data_a[a_offset + ib].qs[g0*3 + 0])
+                  | (uint(data_a[a_offset + ib].qs[g0*3 + 1]) << 8)
+                  | (uint(data_a[a_offset + ib].qs[g0*3 + 2]) << 16);
+    const uint idx0 = (w0 >> (3u * i0)) & 7u;
+
+    const uint g1 = j1 >> 3;
+    const uint i1 = j1 & 7;
+    const uint w1 = uint(data_a[a_offset + ib].qs[g1*3 + 0])
+                  | (uint(data_a[a_offset + ib].qs[g1*3 + 1]) << 8)
+                  | (uint(data_a[a_offset + ib].qs[g1*3 + 2]) << 16);
+    const uint idx1 = (w1 >> (3u * i1)) & 7u;
+
+    // Scale by d0 (elements 0-15) or d1 (elements 16-31)
+    const float d0 = float(data_a[a_offset + ib].d0);
+    const float d1 = float(data_a[a_offset + ib].d1);
+    const float s0 = (j0 < 16) ? d0 : d1;
+    const float s1 = (j1 < 16) ? d0 : d1;
+
+    // Returns centroid * scale WITHOUT inverse RHT
+    // (matches WHT4_0 stub; caller must handle pre-rotation for correctness)
+    return vec2(centroids[idx0] * s0, centroids[idx1] * s1);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1, 0);
+}
+#endif
