@@ -709,8 +709,17 @@ private:
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+        auto params_tgt = params_base;
+        if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                      COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
+            string_parse_kv_override("llama.nomtp_trunk_only=bool:true", params_tgt.kv_overrides);
+            if (params_tgt.kv_overrides.empty() || params_tgt.kv_overrides.back().key[0] != 0) {
+                params_tgt.kv_overrides.emplace_back();
+                params_tgt.kv_overrides.back().key[0] = 0;
+            }
+        }
 
-        llama_init = common_init_from_params(params_base);
+        llama_init = common_init_from_params(params_tgt);
 
         model_tgt = llama_init->model();
         ctx_tgt   = llama_init->context();

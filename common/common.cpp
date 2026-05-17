@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -1463,6 +1464,40 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
+
+    if (params.speculative.types.size() == 1 && params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NONE) {
+        LOG_INF("%s: speculative=none, enabling plain-trunk mode for MTP-capable models\n", __func__);
+        std::unordered_map<std::string, llama_model_kv_override> kv_map;
+        for (const auto & ov : params.kv_overrides) {
+            if (ov.key[0] == 0) {
+                break;
+            }
+            kv_map[ov.key] = ov;
+        }
+
+        llama_model_kv_override ov = {};
+        auto it = kv_map.find("llama.nomtp_trunk_only");
+        if (it != kv_map.end()) {
+            ov = it->second;
+        }
+        std::snprintf(ov.key, sizeof(ov.key), "%s", "llama.nomtp_trunk_only");
+        ov.tag = LLAMA_KV_OVERRIDE_TYPE_BOOL;
+        ov.val_bool = true;
+        kv_map["llama.nomtp_trunk_only"] = ov;
+
+        params.kv_overrides.clear();
+        params.kv_overrides.reserve(kv_map.size() + 1);
+        for (const auto & [_, kv] : kv_map) {
+            params.kv_overrides.push_back(kv);
+        }
+        params.kv_overrides.push_back({});
+        params.kv_overrides.back().key[0] = 0;
+    }
+
+    if (!params.kv_overrides.empty() && params.kv_overrides.back().key[0] != 0) {
+        params.kv_overrides.emplace_back();
+        params.kv_overrides.back().key[0] = 0;
+    }
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

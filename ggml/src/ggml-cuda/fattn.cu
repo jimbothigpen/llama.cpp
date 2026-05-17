@@ -419,6 +419,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool prefer_vec_q8_tq3 = K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_TQ3_0;
+
+    if (can_use_vector_kernel && prefer_vec_q8_tq3) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
 
 #ifdef GGML_USE_HIP
     // HIP/ROCm: TILE/MMA/WMMA paths can allocate large f16 dequant temp buffers for quantized KV.

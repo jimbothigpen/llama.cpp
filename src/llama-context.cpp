@@ -1825,8 +1825,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //}
 
         auto * t_logits        = res->get_logits();
-        auto * t_embd          = cparams.embeddings          ? res->get_embd()        : nullptr;
-        auto * t_h_pre_norm    = cparams.embeddings_pre_norm ? res->get_h_pre_norm()  : nullptr;
+        auto * t_embd          = cparams.embeddings ? res->get_embd() : nullptr;
+        auto * t_h_pre_norm    = (cparams.embeddings_pre_norm || mtp.ctx_mtp != nullptr)
+                               ? res->get_h_pre_norm()
+                               : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
