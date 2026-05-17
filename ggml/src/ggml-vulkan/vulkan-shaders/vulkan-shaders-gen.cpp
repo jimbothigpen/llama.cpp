@@ -69,6 +69,7 @@ const std::vector<std::string> type_names = {
     "nvfp4",
     "bf16",
     "wht4_0",
+    "wht3_0",
 };
 
 enum MatMulIdType {
@@ -564,9 +565,9 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         if (tname == "bf16") {
             continue;
         }
-        // WHT4_0 uses a specialized mul_mat_vec shader for small N and
+        // WHT4_0 / WHT3_0 use a specialized mul_mat_vec shader for small N and
         // the dequant+f16 matmul fallback for large N. No dedicated mul_mm needed.
-        if (tname == "wht4_0") {
+        if (tname == "wht4_0" || tname == "wht3_0") {
             continue;
         }
 
@@ -673,7 +674,7 @@ void process_shaders() {
     for (const auto& tname : type_names) {
         // mul mat vec
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
-        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || tname == "wht4_0") ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
+        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || tname == "wht4_0" || tname == "wht3_0") ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
 
         string_to_spv("mul_mat_vec_" + tname + "_f32_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float"}, {"B_TYPEV2", "vec2"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}));
         string_to_spv("mul_mat_vec_" + tname + "_f16_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float16_t"}, {"B_TYPEV2", "f16vec2"}, {"B_TYPEV4", "f16vec4"}, {"D_TYPE", "float"}}));
@@ -756,8 +757,9 @@ void process_shaders() {
         string_to_spv("cpy_f32_" + t, "copy_to_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         string_to_spv("cpy_" + t + "_f32", "copy_from_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }
-    // wht4_0 copy-from-quant only; copy-to-quant requires WHT forward (handled in SET_ROWS path)
+    // wht4_0 / wht3_0 copy-from-quant only; copy-to-quant requires WHT forward (handled in SET_ROWS path)
     string_to_spv("cpy_wht4_0_f32", "copy_from_quant.comp", {{"DATA_A_WHT4_0", "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    string_to_spv("cpy_wht3_0_f32", "copy_from_quant.comp", {{"DATA_A_WHT3_0", "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
     for (std::string t : {"f32", "f16", "bf16", "q1_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl", "turboq2_0", "turboq3_0", "turboq4_0"}) {
         string_to_spv("set_rows_" + t + "_i32", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(t), "1"}, {"B_TYPE", "uint"}, {"B_SIZE", "32"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});

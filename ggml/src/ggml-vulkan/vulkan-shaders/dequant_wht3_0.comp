@@ -1,0 +1,69 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+// WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max).
+// 32 elements per block, dual half-block scales (d0/d1). Modeled on
+// dequant_wht4_0.comp; only the codebook size and index unpacking differ.
+// 256 threads per workgroup, each thread fully dequants one WHT3_0 block.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_wht3_0 data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    // Lloyd-Max centroids for 3-bit normal quantization (8 levels)
+    const float centroids[8] = float[8](
+        -1.996684, -1.291398, -0.740341, -0.247508,
+         0.230106,  0.725222,  1.277503,  1.988943
+    );
+
+    // WHT sign pattern (shared by WHT3 and WHT4)
+    const float signs[32] = float[32](
+        +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+        -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+    );
+
+    const float INV_SQRT32 = 0.17677669529663688;
+
+    const uint ib = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (ib >= p.nel / 32) return;
+
+    const float d0 = float(data_a[ib].d0);
+    const float d1 = float(data_a[ib].d1);
+
+    // Unpack 32 × 3-bit indices. Each group of 3 bytes encodes 8 indices
+    // packed densely as a 24-bit word: idx[i] = (w24 >> (3*i)) & 7.
+    float buf[32];
+    for (uint g = 0; g < 4; g++) {
+        const uint w24 = uint(data_a[ib].qs[g*3 + 0])
+                       | (uint(data_a[ib].qs[g*3 + 1]) << 8)
+                       | (uint(data_a[ib].qs[g*3 + 2]) << 16);
+        for (uint i = 0; i < 8; i++) {
+            const uint idx = (w24 >> (3 * i)) & 7;
+            const uint j = g * 8 + i;
+            const float d = (j < 16) ? d0 : d1;
+            buf[j] = centroids[idx] * d;
+        }
+    }
+
+    // Inverse WHT butterfly (5 stages for 32 elements)
+    for (uint step = 1u; step < 32u; step <<= 1u) {
+        for (uint i = 0u; i < 32u; i += step * 2u) {
+            for (uint j = i; j < i + step; j++) {
+                const float a = buf[j];
+                const float b = buf[j + step];
+                buf[j]        = a + b;
+                buf[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize and apply sign pattern
+    const uint out_base = ib * 32u;
+    for (uint j = 0; j < 32; j++) {
+        data_b[out_base + j] = D_TYPE(buf[j] * INV_SQRT32 * signs[j]);
+    }
+}

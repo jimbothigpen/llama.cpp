@@ -1,0 +1,115 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+#include "mul_mat_vec_base.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// Lloyd-Max centroids for WHT3_0 (3-bit, 8 levels) — N(0, 1) optimal
+const float TQ3_CENTROIDS[8] = float[8](
+    -1.996684, -1.291398, -0.740341, -0.247508,
+     0.230106,  0.725222,  1.277503,  1.988943
+);
+
+// WHT sign pattern (shared by WHT3 and WHT4)
+const float TQ3_SIGNS[32] = float[32](
+    +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+    -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+);
+
+const float TQ3_INV_SQRT32 = 0.17677669529663688;
+
+// Mirrors mul_mat_vec_wht4_0.comp: pre-rotate activation block via forward
+// WHT in shared memory, then dot-product against raw centroid*scale weights.
+shared float tq3_smem[8 * 32];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid = gl_LocalInvocationID.x;
+
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < NUM_ROWS; ++n) {
+            temp[j][n] = FLOAT_TYPE(0);
+        }
+    }
+
+    const uint num_blocks_per_row = p.ncols / 32u;
+
+    // Per-thread index extraction parameters.
+    // Each block has 32 indices packed in 12 qs bytes = 4 groups of 3 bytes.
+    // tid in [0, 32): identifies the 1 element this thread owns.
+    // Group g = tid / 8, position i = tid % 8.
+    const uint g_tid    = tid >> 3;            // 0..3
+    const uint i_in_grp = tid & 7;             // 0..7
+    const uint shift_3b = 3u * i_in_grp;       // 0,3,6,...,21
+    const float sign_tid = TQ3_SIGNS[tid];
+
+    for (uint blk = 0; blk < num_blocks_per_row; blk++) {
+        // Stage 1: load activation, sign-flip, write to shmem
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const uint b_base = c * p.batch_stride_b + b_offset + blk * 32u;
+            tq3_smem[c * 32u + tid] = float(data_b[b_base + tid]) * sign_tid;
+        }
+        barrier();
+
+        // Stage 2: forward WHT butterfly in shared memory (5 stages)
+        [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u) {
+            if ((tid & step) == 0u) {
+                const uint partner = tid + step;
+                [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+                    const uint base = c * 32u;
+                    const float a = tq3_smem[base + tid];
+                    const float b = tq3_smem[base + partner];
+                    tq3_smem[base + tid]     = a + b;
+                    tq3_smem[base + partner] = a - b;
+                }
+            }
+            barrier();
+        }
+
+        // Stage 3: dequant per-row weights for this block. Each thread reads
+        // a 24-bit word from its group of 3 qs bytes and extracts its index.
+        float w_vals[NUM_ROWS];
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib = (first_row + n) * num_blocks_per_row + blk;
+            const uint w24 =  uint(data_a[a_offset + ib].qs[g_tid*3 + 0])
+                           | (uint(data_a[a_offset + ib].qs[g_tid*3 + 1]) << 8)
+                           | (uint(data_a[a_offset + ib].qs[g_tid*3 + 2]) << 16);
+            const uint idx = (w24 >> shift_3b) & 7u;
+            const float d  = (tid < 16u)
+                ? float(data_a[a_offset + ib].d0)
+                : float(data_a[a_offset + ib].d1);
+            w_vals[n] = TQ3_CENTROIDS[idx] * d * TQ3_INV_SQRT32;
+        }
+
+        // Stage 4: accumulate dot products
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const float b_rotated = tq3_smem[c * 32u + tid];
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                temp[c][n] += FLOAT_TYPE(w_vals[n] * b_rotated);
+            }
+        }
+        barrier();
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}
