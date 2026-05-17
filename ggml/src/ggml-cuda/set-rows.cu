@@ -1147,7 +1147,9 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     __shared__ int   warp_min_idx[16];
     __shared__ float warp_min_cost[16];
     __shared__ float pred_min_cost[64];
-    __shared__ uint8_t pred_min_p[64];
+    // phase 3a #21: see buun 12a648efc cuda: streamline tcq final state selection
+    // (removed __shared__ uint8_t pred_min_p[64] — dead-store; bt[t*64+sid] already
+    // holds the same value used by backtrack)
     __shared__ int   shared_initial_state;
     // Dedicated shared buffer for the Viterbi-backtrack output bytes. Previously
     // aliased onto x[] via (uint8_t *)x, but writing uint8_t into a float-typed
@@ -1264,7 +1266,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
                 }
             }
             pred_min_cost[sid] = best;
-            pred_min_p[sid]    = (uint8_t) best_p;
+            // phase 3a #21: see buun 12a648efc — dead-store removal (pred_min_p was never read)
             bt[t * 64 + sid]   = (uint8_t) best_p;
         }
         __syncthreads();
@@ -1294,13 +1296,21 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         }
     }
     __syncthreads();
-    if (sid == 0) {
-        float best     = warp_min_cost[0];
-        int   best_idx = warp_min_idx[0];
-        for (int w = 1; w < 16; w++) {
-            if (warp_min_cost[w] < best) { best = warp_min_cost[w]; best_idx = warp_min_idx[w]; }
+    // phase 3a #21: see buun 12a648efc cuda: streamline tcq final state selection
+    // Reduce 16 warp minima via a single-warp shuffle (32 lanes) instead of a
+    // serial single-thread loop. Upper 16 lanes seed FLT_MAX so they never win.
+    if (sid < 32) {
+        float best     = (sid < 16) ? warp_min_cost[sid] : 3.4028234663852886e38f;
+        int   best_idx = (sid < 16) ? warp_min_idx[sid]  : 0;
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            float other_cost = __shfl_down_sync(0xFFFFFFFF, best,     offset, WARP_SIZE);
+            int   other_idx  = __shfl_down_sync(0xFFFFFFFF, best_idx, offset, WARP_SIZE);
+            if (other_cost < best) { best = other_cost; best_idx = other_idx; }
         }
-        shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
+        if (sid == 0) {
+            shared_initial_state = best_idx; // temporarily: best final state (becomes initial after backtrack)
+        }
     }
     __syncthreads();
 
