@@ -3528,18 +3528,23 @@ static void ggml_vec_dot_wht3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float tmp[4096];
-    GGML_ASSERT(n <= 4096);
+    // Dim n can exceed 4096 (e.g. Qwen3.5-9B ffn_down = 12288); heap-alloc to match
+    // frankenturbo2 + TheTom canonical impls per yggdrasil-frankenturbo2-lift-policy.
+    float * tmp = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT3_0)->to_float(vx, tmp, n);
 
     // Dequantize q8_0 and dot
-    float tmp2[4096];
+    float * tmp2 = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp2 != NULL);
     ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float(vy, tmp2, n);
 
     float sum = 0.0f;
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
+    free(tmp);
+    free(tmp2);
     *s = sum;
 }
 
@@ -3551,17 +3556,20 @@ static void ggml_vec_dot_wht4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float tmp[4096];
-    GGML_ASSERT(n <= 4096);
+    float * tmp = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT4_0)->to_float(vx, tmp, n);
 
-    float tmp2[4096];
+    float * tmp2 = (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp2 != NULL);
     ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float(vy, tmp2, n);
 
     float sum = 0.0f;
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
+    free(tmp);
+    free(tmp2);
     *s = sum;
 }
 
