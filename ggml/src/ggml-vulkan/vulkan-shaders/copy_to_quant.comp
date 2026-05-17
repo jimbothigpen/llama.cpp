@@ -321,6 +321,7 @@ void quantize(uint dst_idx, uint src_idx)
 #endif
 
 #if defined(SET_ROWS) && defined(DATA_A_TURBOQ2_0)
+#include "turboq_centroids.glsl"
 // TurboQuant 2-bit SET_ROWS: forward Walsh-Hadamard + 4-centroid PolarQuant (no QJL).
 // Block size = 128 elements; one workgroup per block; 128 threads, 1 element each.
 const float TS1_T2[128] = float[128](
@@ -344,9 +345,6 @@ const float TS2_T2[128] = float[128](
     -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
 );
 const float TINV_T2 = 0.08838834764831845;  // 1 / sqrt(128)
-const float TC2[4] = float[4](
-    -0.133462, -0.039994, 0.039994, 0.133462
-);
 const float TM2[3] = float[3](
     -0.086728, 0.0, 0.086728
 );
@@ -422,7 +420,7 @@ void main() {
     }
 
     // Reconstruction-norm correction so dequant(reconstruct) matches original L2.
-    float rc = TC2[idx] * TC2[idx];
+    float rc = TURBOQ2_CENTROIDS[idx] * TURBOQ2_CENTROIDS[idx];
     rc = subgroupAdd(rc);
     if (sg_lane == 0u) sg_acc_t2[gl_SubgroupID] = rc;
     barrier();
@@ -434,6 +432,7 @@ void main() {
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_0)
+#include "turboq_centroids.glsl"
 // TurboQuant 3-bit SET_ROWS: forward Walsh-Hadamard + 8-centroid PolarQuant.
 // Block size = 128 elements; one workgroup per block; 128 threads, 1 element each.
 const float TS1_T3[128] = float[128](
@@ -457,10 +456,6 @@ const float TS2_T3[128] = float[128](
     -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
 );
 const float TINV_T3 = 0.08838834764831845;  // 1 / sqrt(128)
-const float TC3[8] = float[8](
-    -0.190685, -0.117832, -0.065717, -0.021460,
-     0.021460,  0.065717,  0.117832,  0.190685
-);
 const float TM3[7] = float[7](
     -0.154259, -0.091775, -0.043589,
      0.0,
@@ -553,7 +548,7 @@ void main() {
     }
 
     // Reconstruction-norm correction so dequant(reconstruct) matches original L2.
-    float rc = TC3[idx] * TC3[idx];
+    float rc = TURBOQ3_CENTROIDS[idx] * TURBOQ3_CENTROIDS[idx];
     rc = subgroupAdd(rc);
     if (sg_lane == 0u) sg_acc_t3[gl_SubgroupID] = rc;
     barrier();
@@ -565,6 +560,7 @@ void main() {
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_TURBOQ4_0)
+#include "turboq_centroids.glsl"
 // TurboQuant 4-bit PolarQuant SET_ROWS (default mode per ggml-common.h:
 // TURBOQ4_USE_4BIT=1). Same WHT pipeline as TURBOQ3, but with 16 centroids
 // and nibble-packed indices (no signs byte).
@@ -589,13 +585,6 @@ const float TS2_T4[128] = float[128](
     -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
 );
 const float TINV_T4 = 0.08838834764831845;  // 1 / sqrt(128)
-// Lloyd-Max centroids for N(0, 1/128), 16 levels.
-const float TC4[16] = float[16](
-    -0.173926, -0.117195, -0.089527, -0.068756,
-    -0.051262, -0.035597, -0.020989, -0.006938,
-     0.006938,  0.020989,  0.035597,  0.051262,
-     0.068756,  0.089527,  0.117195,  0.173926
-);
 // 15 midpoints between adjacent centroids.
 const float TM4[15] = float[15](
     -0.145561, -0.103361, -0.079142, -0.060009,
@@ -679,7 +668,7 @@ void main() {
     }
 
     // Reconstruction-norm correction.
-    float rc = TC4[idx] * TC4[idx];
+    float rc = TURBOQ4_CENTROIDS[idx] * TURBOQ4_CENTROIDS[idx];
     rc = subgroupAdd(rc);
     if (sg_lane == 0u) sg_acc_t4[gl_SubgroupID] = rc;
     barrier();
