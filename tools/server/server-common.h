@@ -26,6 +26,7 @@ using json = nlohmann::ordered_json;
 #define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_ERR(fmt, ...) LOG_ERR("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_TRC(fmt, ...) SRV_DBG(fmt, __VA_ARGS__) // ygg-local stub: 67b2b7f2f (logs:reduce) not yet ported; SRV_TRC downgrades to SRV_DBG. Revert when 67b2b7f2f ships.
 
 using raw_buffer = std::vector<uint8_t>;
 
