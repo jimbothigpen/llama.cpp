@@ -73,6 +73,8 @@ const std::vector<std::string> type_names = {
     "turboq2_0",
     "turboq3_0",
     "turboq4_0",
+    "turboq2_tcq",
+    "turboq3_tcq",
 };
 
 enum MatMulIdType {
@@ -575,7 +577,9 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         }
         // TURBOQ{2,3,4}_0 are KV-cache-only types (PolarQuant). They are wired
         // through the flash-attention dequant path; matmul is unused.
-        if (tname == "turboq2_0" || tname == "turboq3_0" || tname == "turboq4_0") {
+        // TURBOQ{2,3}_TCQ are likewise KV-cache-only (Trellis-Coded Quantization).
+        if (tname == "turboq2_0" || tname == "turboq3_0" || tname == "turboq4_0" ||
+            tname == "turboq2_tcq" || tname == "turboq3_tcq") {
             continue;
         }
 

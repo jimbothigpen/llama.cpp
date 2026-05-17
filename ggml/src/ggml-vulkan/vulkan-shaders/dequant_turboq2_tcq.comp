@@ -1,0 +1,31 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+#define NEEDS_TCQ2_CB
+#include "tcq_codebook.glsl"
+
+// QK_TURBOQ2_TCQ = 128, one workgroup per block, 128 invocations, 1 element per thread.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_turboq2_tcq data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    const uint ib = gl_WorkGroupID.x;
+    const uint t  = gl_LocalInvocationID.x;  // element index 0..127
+
+    if (ib >= p.nel / 128) return;
+
+    const float norm = float(data_a[ib].norm);
+
+    // 8-bit state extracted via 16-bit sliding window over qs[].
+    const uint bit_pos  = t * 2;
+    const uint byte_idx = bit_pos >> 3;
+    const uint bit_off  = bit_pos & 7;
+    const uint raw      = uint(data_a[ib].qs[byte_idx])
+                        | (uint(data_a[ib].qs[byte_idx + 1]) << 8);
+    const uint state    = (raw >> bit_off) & 0xFFu;
+
+    data_b[ib * 128 + t] = D_TYPE(TCQ2_CB[state] * norm);
+}
