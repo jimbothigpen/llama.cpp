@@ -3117,9 +3117,12 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     // TURBOQ2_0/TURBOQ3_0 K/V uses a struct binding (block_turboq{2,3}_0) wired
     // into the flash_attn_dequant.glsl aliased-SSBO-view abstraction, which is
     // only included by the FA_SCALAR shader. cm1/cm2 turbo support will land
-    // with the WHT/MLA work in a later phase.
+    // with the WHT/MLA work in a later phase. TURBOQ{2,3}_TCQ follow the same
+    // pattern with block_turboq{2,3}_tcq struct bindings.
     if (k_type == GGML_TYPE_TURBOQ2_0 || v_type == GGML_TYPE_TURBOQ2_0 ||
-        k_type == GGML_TYPE_TURBOQ3_0 || v_type == GGML_TYPE_TURBOQ3_0) {
+        k_type == GGML_TYPE_TURBOQ3_0 || v_type == GGML_TYPE_TURBOQ3_0 ||
+        k_type == GGML_TYPE_TURBOQ2_TCQ || v_type == GGML_TYPE_TURBOQ2_TCQ ||
+        k_type == GGML_TYPE_TURBOQ3_TCQ || v_type == GGML_TYPE_TURBOQ3_TCQ) {
         path = FA_SCALAR;
     }
 
@@ -4563,6 +4566,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_TURBOQ2_0], "get_rows_turboq2_0", get_rows_turboq2_0_len, get_rows_turboq2_0_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_TURBOQ3_0], "get_rows_turboq3_0", get_rows_turboq3_0_len, get_rows_turboq3_0_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_TURBOQ4_0], "get_rows_turboq4_0", get_rows_turboq4_0_len, get_rows_turboq4_0_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_TURBOQ2_TCQ], "get_rows_turboq2_tcq", get_rows_turboq2_tcq_len, get_rows_turboq2_tcq_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_TURBOQ3_TCQ], "get_rows_turboq3_tcq", get_rows_turboq3_tcq_len, get_rows_turboq3_tcq_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_I32],     "get_rows_i32",     get_rows_i32_len,     get_rows_i32_data,     "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_F32 ], "get_rows_f32_f32",  get_rows_f32_f32_len,  get_rows_f32_f32_data,  "main", 3, sizeof(vk_op_binary_push_constants), { 512, 1, 1}, {}, 1);
@@ -4593,6 +4598,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ2_0], "get_rows_turboq2_0_f32", get_rows_turboq2_0_f32_len, get_rows_turboq2_0_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ3_0], "get_rows_turboq3_0_f32", get_rows_turboq3_0_f32_len, get_rows_turboq3_0_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ4_0], "get_rows_turboq4_0_f32", get_rows_turboq4_0_f32_len, get_rows_turboq4_0_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ2_TCQ], "get_rows_turboq2_tcq_f32", get_rows_turboq2_tcq_f32_len, get_rows_turboq2_tcq_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ3_TCQ], "get_rows_turboq3_tcq_f32", get_rows_turboq3_tcq_f32_len, get_rows_turboq3_tcq_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
@@ -16041,6 +16048,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_TURBOQ2_0:
                     case GGML_TYPE_TURBOQ3_0:
+                    case GGML_TYPE_TURBOQ2_TCQ:
+                    case GGML_TYPE_TURBOQ3_TCQ:
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
@@ -16088,6 +16097,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ2_0:
                     case GGML_TYPE_TURBOQ3_0:
                     case GGML_TYPE_TURBOQ4_0:
+                    case GGML_TYPE_TURBOQ2_TCQ:
+                    case GGML_TYPE_TURBOQ3_TCQ:
                     case GGML_TYPE_I32:
                         return true;
                     default:

@@ -30,11 +30,16 @@ layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[];
 
 // turboq2_0 / turboq3_0 use struct bindings (block_turboq{2,3}_0) rather than
 // packed16 views because their 34/50-byte blocks don't fit a uniform 16/32-bit
-// interleave.
+// interleave. Same applies to turboq{2,3}_tcq (36/52-byte blocks).
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ2_0 { block_turboq2_0 data[]; } k_packed_turboq2_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_0 { block_turboq2_0 data[]; } v_packed_turboq2_0;
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } k_packed_turboq3_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } v_packed_turboq3_0;
+
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } k_packed_turboq2_tcq;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } v_packed_turboq2_tcq;
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } k_packed_turboq3_tcq;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } v_packed_turboq3_tcq;
 
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
@@ -109,6 +114,10 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
 
 #include "turboq_centroids.glsl"
 
+#define NEEDS_TCQ2_CB
+#define NEEDS_TCQ3_CB
+#include "tcq_codebook.glsl"
+
 #define FA_DEQUANT4_TURBOQ2_0(BUF) {                                                              \
     const uint qb0 = uint(BUF.data[a_offset + ib].qs[(iqs    ) / 4]);                             \
     const uint l0 = (qb0 >> (((iqs    ) % 4) * 2u)) & 0x3u;                                       \
@@ -139,6 +148,39 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     return FLOAT_TYPE(BUF.data[a_offset + ib].norm) * c;                                          \
 }
 
+// TCQ: 16-bit sliding-window bit extraction over qs[]. The trailing pad byte
+// in block_turboq{2,3}_tcq makes `qs[byte_idx + 1]` safe on the last symbol.
+// V-side decode-time alpha is hardcoded 1.0f for L2 (no-op); a tunable
+// TCQ{2,3}_FA_V_ALPHA can be split into K/V macro variants in a later session
+// if calibration shows benefit.
+#define TCQ2_TCQ_STATE(BUF, J) (                                                                  \
+    ((uint(BUF.data[a_offset + ib].qs[((J) * 2u) >> 3u])                                          \
+    | (uint(BUF.data[a_offset + ib].qs[(((J) * 2u) >> 3u) + 1]) << 8))                            \
+    >> (((J) * 2u) & 7u)) & 0xFFu)
+
+#define TCQ3_TCQ_STATE(BUF, J) (                                                                  \
+    ((uint(BUF.data[a_offset + ib].qs[((J) * 3u) >> 3u])                                          \
+    | (uint(BUF.data[a_offset + ib].qs[(((J) * 3u) >> 3u) + 1]) << 8))                            \
+    >> (((J) * 3u) & 7u)) & 0x1FFu)
+
+#define FA_DEQUANT4_TURBOQ2_TCQ(BUF) {                                                            \
+    const float nm = float(BUF.data[a_offset + ib].norm);                                         \
+    FLOAT_TYPEV4 c = FLOAT_TYPEV4(TCQ2_CB[TCQ2_TCQ_STATE(BUF, iqs    )],                          \
+                                  TCQ2_CB[TCQ2_TCQ_STATE(BUF, iqs + 1)],                          \
+                                  TCQ2_CB[TCQ2_TCQ_STATE(BUF, iqs + 2)],                          \
+                                  TCQ2_CB[TCQ2_TCQ_STATE(BUF, iqs + 3)]);                         \
+    return FLOAT_TYPE(nm) * c;                                                                    \
+}
+
+#define FA_DEQUANT4_TURBOQ3_TCQ(BUF) {                                                            \
+    const float nm = float(BUF.data[a_offset + ib].norm);                                         \
+    FLOAT_TYPEV4 c = FLOAT_TYPEV4(TCQ3_CB[TCQ3_TCQ_STATE(BUF, iqs    )],                          \
+                                  TCQ3_CB[TCQ3_TCQ_STATE(BUF, iqs + 1)],                          \
+                                  TCQ3_CB[TCQ3_TCQ_STATE(BUF, iqs + 2)],                          \
+                                  TCQ3_CB[TCQ3_TCQ_STATE(BUF, iqs + 3)]);                         \
+    return FLOAT_TYPE(nm) * c;                                                                    \
+}
+
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
         switch (FaTypeK) {
@@ -150,6 +192,8 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (k_packed_q8_0)
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(k_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(k_packed_turboq3_0)
+            case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(k_packed_turboq2_tcq)
+            case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(k_packed_turboq3_tcq)
         }
     } else {
         switch (FaTypeV) {
@@ -161,6 +205,8 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (v_packed_q8_0)
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(v_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(v_packed_turboq3_0)
+            case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(v_packed_turboq2_tcq)
+            case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(v_packed_turboq3_tcq)
         }
     }
     return FLOAT_TYPEV4(0);
