@@ -1149,6 +1149,14 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     __shared__ float pred_min_cost[64];
     __shared__ uint8_t pred_min_p[64];
     __shared__ int   shared_initial_state;
+    // Dedicated shared buffer for the Viterbi-backtrack output bytes. Previously
+    // aliased onto x[] via (uint8_t *)x, but writing uint8_t into a float-typed
+    // shared array is a strict-aliasing violation: under HIP/ROCm the compiler
+    // can hoist cross-thread reads of outputs[] above the __syncthreads() that
+    // follows the sid==0 backtrack write, so sids 1..48 in the parallel bitpack
+    // observed stale (non-winning) symbol bytes — root cause of the Phase 3a #20
+    // +12.7% PPL regression (session-65-resume-cell-c-ppl bisect, 2026-05-17).
+    __shared__ uint8_t s_outputs[128];
 
     // Parallel pre-Viterbi: load (threads 0-127 each grab one element)
     if (sid < 128) x[sid] = grp_src[sid];
@@ -1301,8 +1309,10 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         d_tcq_dump_x_buf[group * 128 + sid] = x[sid];
 
     // Thread 0: backtrack (inherently sequential — each step depends on the next)
-    // Reads byte-packed bt from global memory (no nibble unpack).
-    uint8_t * outputs = (uint8_t *)x; // x[] no longer needed after forward pass
+    // Reads byte-packed bt from global memory (no nibble unpack). Writes the
+    // winning-path output bytes into __shared__ s_outputs[] (type-clean; see
+    // declaration comment above).
+    uint8_t * outputs = s_outputs;
     if (sid == 0) {
         int state = shared_initial_state;
         for (int t = 127; t >= 0; t--) {
