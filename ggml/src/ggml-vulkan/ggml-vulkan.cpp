@@ -1951,7 +1951,9 @@ struct ggml_backend_vk_context {
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
+    size_t prealloc_size_k_tcq_dequant, prealloc_size_v_tcq_dequant;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
+    vk_buffer prealloc_k_tcq_dequant, prealloc_v_tcq_dequant;
     vk::Fence fence, almost_ready_fence;
     bool submit_pending {};
     bool almost_ready_fence_pending {};
@@ -4728,6 +4730,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_NVFP4],   "dequant_nvfp4",   dequant_nvfp4_len,   dequant_nvfp4_data,   "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_WHT4_0],  "dequant_wht4_0",  dequant_wht4_0_len,  dequant_wht4_0_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 32, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_WHT3_0],  "dequant_wht3_0",  dequant_wht3_0_len,  dequant_wht3_0_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 32, 1, 1}, {}, 1);
+    // αA: standalone dequant pipelines for TCQ types (used by the V-dequant FA pre-pass in L6)
+    ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_TURBOQ2_TCQ], "dequant_turboq2_tcq", dequant_turboq2_tcq_len, dequant_turboq2_tcq_data, "main", 2, 5 * sizeof(uint32_t), {128, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_TURBOQ3_TCQ], "dequant_turboq3_tcq", dequant_turboq3_tcq_len, dequant_turboq3_tcq_data, "main", 2, 5 * sizeof(uint32_t), {128, 1, 1}, {}, 1);
 
     // get_rows
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_F32 ], "get_rows_f32",  get_rows_f32_len,  get_rows_f32_data,  "main", 3, sizeof(vk_op_binary_push_constants), { 512, 1, 1}, {}, 1);
@@ -6625,6 +6630,8 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_split_k = 0;
     // Fixed size of 1KB, for deterministic behavior
     ctx->prealloc_size_add_rms_partials = 1024;
+    ctx->prealloc_size_k_tcq_dequant = 0;
+    ctx->prealloc_size_v_tcq_dequant = 0;
 
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
@@ -9682,9 +9689,16 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32;
 
+    // αA: detect TCQ K/V to trigger pre-dequant passes (avoids RADV PHOENIX gfx1103 GPU fault
+    // at FaTypeK/V∈{66,67} × N≥512 × KV>2048). Pre-dequant each TCQ tensor to F16 before FA.
+    const bool k_is_tcq = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
+    const bool v_is_tcq = (v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ);
+    const ggml_type effective_k_type = k_is_tcq ? GGML_TYPE_F16 : k->type;
+    const ggml_type effective_v_type = v_is_tcq ? GGML_TYPE_F16 : v->type;
+
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
-    vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
+    vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, effective_k_type, effective_v_type, f32acc);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
     if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
@@ -9697,11 +9711,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         workgroups_y /= gqa_ratio;
     }
 
-    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k->type, v->type, f32acc);
+    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, effective_k_type, effective_v_type, f32acc);
 
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
-    uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
-    uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
+    // αA: for pre-dequanted TCQ K, K is permuted like V: stride = n_kv_head * HSK F16 elements per KV slot
+    uint32_t k_stride = k_is_tcq ? (uint32_t)(nek2 * nek0)
+                                 : (uint32_t)(nbk1 / ggml_type_size(k->type));
+    // αA: for pre-dequanted TCQ V, stride = n_head_kv * HSV F16 elements per KV slot
+    uint32_t v_stride = v_is_tcq ? (uint32_t)(nev2 * nev0)
+                                 : (uint32_t)(nbv1 / ggml_type_size(v->type));
 
     // For F32, the shader treats it as a block of size 4 (for vec4 loads)
     if (k->type == GGML_TYPE_F32) {
@@ -9736,7 +9754,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
     bool use_mask_opt = mask && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16;
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
-                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, k->type, v->type);
+                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, effective_k_type, effective_v_type);
 
     vk_pipeline pipeline = nullptr;
 
@@ -9860,6 +9878,70 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_subbuffer q_buf = ggml_vk_tensor_subbuffer(ctx, q);
     vk_subbuffer k_buf = ggml_vk_tensor_subbuffer(ctx, k);
     vk_subbuffer v_buf = ggml_vk_tensor_subbuffer(ctx, v);
+
+    // αA: K head/seq strides for pre-dequanted F16 output.
+    // K is stored permuted like V: memory layout [kv, head, d_block].
+    // Dequant reads flat blocks [kv, head, d_block] → F16 output [kv, head, dim]:
+    //   element[dim, kv, head] at F16 offset = kv*(nek2*nek0) + head*nek0 + dim
+    // Mirrors V strides exactly (nek↔nev).
+    uint32_t nbk2_fa = k_is_tcq ? (uint32_t)(nek0 * sizeof(ggml_fp16_t))
+                                : (uint32_t)nbk2;  // head stride in bytes
+    uint32_t nbk3_fa = k_is_tcq ? (uint32_t)(nek1 * nek2 * nek0 * sizeof(ggml_fp16_t))
+                                : (uint32_t)nbk3;  // seq stride in bytes
+
+    // αA: V head/seq strides for pre-dequanted F16 output.
+    // Dequant reads V flat blocks [kv, head, d_block] → F16 output [kv, head, dim]:
+    //   element[dim, kv, head] at F16 offset = kv*n_head_kv*HSV + head*HSV + dim
+    uint32_t nbv2_fa = v_is_tcq ? (uint32_t)(nev0 * sizeof(ggml_fp16_t))
+                                : (uint32_t)nbv2;  // head stride in bytes
+    uint32_t nbv3_fa = v_is_tcq ? (uint32_t)(nev1 * nev2 * nev0 * sizeof(ggml_fp16_t))
+                                : (uint32_t)nbv3;  // seq stride in bytes
+
+    if (k_is_tcq) {
+        vk_pipeline dequant_pipeline = ctx->device->pipeline_dequant[k->type];
+        ggml_pipeline_request_descriptor_sets(ctx, dequant_pipeline, 1);
+
+        // Grow the K-dequant buffer if needed (sized for all K elements as F16)
+        const size_t k_dequant_size = (size_t)ggml_nelements(k) * sizeof(ggml_fp16_t);
+        if (ctx->prealloc_size_k_tcq_dequant < k_dequant_size) {
+            ctx->prealloc_size_k_tcq_dequant = k_dequant_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+
+        // Issue dequant compute pass: TCQ K → contiguous F16
+        vk_subbuffer k_dequant_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_k_tcq_dequant, 0);
+        const std::vector<uint32_t> k_dequant_pc = { 0u, 0u, 0u, 0u, (uint32_t)ggml_nelements(k) };
+        ggml_vk_dispatch_pipeline(ctx, subctx, dequant_pipeline,
+                                  { k_buf, k_dequant_buf }, k_dequant_pc,
+                                  { (uint32_t)ggml_nelements(k), 1, 1 });
+        ggml_vk_sync_buffers(ctx, subctx);
+
+        // FA dispatch reads from the dequanted F16 buffer
+        k_buf = k_dequant_buf;
+    }
+
+    if (v_is_tcq) {
+        vk_pipeline dequant_pipeline = ctx->device->pipeline_dequant[v->type];
+        ggml_pipeline_request_descriptor_sets(ctx, dequant_pipeline, 1);
+
+        // Grow the V-dequant buffer if needed (sized for all V elements as F16)
+        const size_t v_dequant_size = (size_t)ggml_nelements(v) * sizeof(ggml_fp16_t);
+        if (ctx->prealloc_size_v_tcq_dequant < v_dequant_size) {
+            ctx->prealloc_size_v_tcq_dequant = v_dequant_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+
+        // Issue dequant compute pass: TCQ V → contiguous F16
+        vk_subbuffer v_dequant_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_v_tcq_dequant, 0);
+        const std::vector<uint32_t> v_dequant_pc = { 0u, 0u, 0u, 0u, (uint32_t)ggml_nelements(v) };
+        ggml_vk_dispatch_pipeline(ctx, subctx, dequant_pipeline,
+                                  { v_buf, v_dequant_buf }, v_dequant_pc,
+                                  { (uint32_t)ggml_nelements(v), 1, 1 });
+        ggml_vk_sync_buffers(ctx, subctx);
+
+        // FA dispatch reads from the dequanted F16 buffer
+        v_buf = v_dequant_buf;
+    }
     vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
     vk_subbuffer mask_buf = mask ? ggml_vk_tensor_subbuffer(ctx, mask) : q_buf;
     vk_subbuffer sinks_buf = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
@@ -9894,8 +9976,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                               (uint32_t)nev2, (uint32_t)nev3,
                                               nem1, nem2, nem3,
                                               q_stride, (uint32_t)nbq2, (uint32_t)nbq3,
-                                              k_stride, (uint32_t)nbk2, (uint32_t)nbk3,
-                                              v_stride, (uint32_t)nbv2, (uint32_t)nbv3,
+                                              k_stride, nbk2_fa, nbk3_fa,
+                                              v_stride, nbv2_fa, nbv3_fa,
                                               scale, max_bias, logit_softcap,
                                               mask_n_head_log2, m0, m1,
                                               gqa_ratio, split_kv, split_k };
@@ -13742,6 +13824,20 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
             ggml_vk_destroy_buffer(ctx->prealloc_add_rms_partials);
         }
         ctx->prealloc_add_rms_partials = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_add_rms_partials);
+    }
+    if (ctx->prealloc_k_tcq_dequant == nullptr || (ctx->prealloc_size_k_tcq_dequant > 0 && ctx->prealloc_k_tcq_dequant->size < ctx->prealloc_size_k_tcq_dequant)) {
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(k_tcq_dequant_size: " << ctx->prealloc_size_k_tcq_dequant << ")");
+        if (ctx->prealloc_k_tcq_dequant != nullptr) {
+            ggml_vk_destroy_buffer(ctx->prealloc_k_tcq_dequant);
+        }
+        ctx->prealloc_k_tcq_dequant = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_k_tcq_dequant);
+    }
+    if (ctx->prealloc_v_tcq_dequant == nullptr || (ctx->prealloc_size_v_tcq_dequant > 0 && ctx->prealloc_v_tcq_dequant->size < ctx->prealloc_size_v_tcq_dequant)) {
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(v_tcq_dequant_size: " << ctx->prealloc_size_v_tcq_dequant << ")");
+        if (ctx->prealloc_v_tcq_dequant != nullptr) {
+            ggml_vk_destroy_buffer(ctx->prealloc_v_tcq_dequant);
+        }
+        ctx->prealloc_v_tcq_dequant = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_v_tcq_dequant);
     }
 }
 
