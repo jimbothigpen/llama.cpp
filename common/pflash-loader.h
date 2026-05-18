@@ -52,7 +52,8 @@ struct pflash_model {
     int    mmap_fd   = -1;
 };
 
-// Load a Qwen3-0.6B GGUF onto the specified CUDA device.
+// Load a Qwen3/Qwen3.5 scorer GGUF. For hybrid SSM+attention models (qwen35),
+// only full-attention layers are loaded as scoring layers.
 // Returns 0 on success, -1 on error.
 int pflash_model_load(pflash_model & model, const std::string & gguf_path, int gpu_device = 0);
 
