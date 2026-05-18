@@ -486,6 +486,31 @@ The single-author velocity of mainline + ik_llama combined is too high to
 choose either side as base and expect the other's improvements to arrive
 cheaply. Yggdrasil's answer is to accept both as ongoing inputs.
 
+## Attribution
+
+yggdrasil is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) project (MIT) and incorporates work from several sibling forks. The yggdrasil-context conventions document the project's lift discipline. Sibling forks credited:
+
+### Direct lifts (substantial code or design imported)
+
+- **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
+- **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
+- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, in-flight)
+- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4, in-flight); EAGLE3, PHANTOM-X, TurboMind allocator
+- **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a, reference + monitoring, currently paused)
+- **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending)
+- **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, pending post-Phase-8)
+- **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** — IK quants, BitNet, MLA, fused MoE (Phase 5, subsystem-by-subsystem pending); ongoing MTP improvements
+- **[Zyphra/transformers](https://github.com/Zyphra/transformers)** (zaya1 branch) — ZAYA1-8B model architecture (Phase 0, in-tree port)
+
+### Inspiration / planned lifts
+
+- **[Luce-Org/llama.cpp-dflash-ggml](https://github.com/Luce-Org/llama.cpp-dflash-ggml)** — FP64 RoPE theta precision fix + GGML_OP_FLASH_ATTN_SPARSE op (lift pending, user-approved 2026-05-18 PM)
+- **[z-lab/dflash](https://github.com/z-lab/dflash)** — DFlash drafter training recipe reference
+
+Per project policy, yggdrasil does NOT propose AI-generated contributions to mainline llama.cpp or any sibling forks. All yggdrasil ports and experiments remain in this repository.
+
+---
+
 ## Contributing
 
 This is currently a personal project. See [CONTRIBUTING.md](CONTRIBUTING.md)
