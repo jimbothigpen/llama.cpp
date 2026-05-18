@@ -58,19 +58,58 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		return idx >= 0 ? gguf_get_val_f32(gctx, idx) : def;
 	};
 
-	model.n_embd     = (int)get_u32("qwen3.embedding_length", 1024);
-	model.n_heads    = (int)get_u32("qwen3.attention.head_count", 16);
-	model.n_kv_heads = (int)get_u32("qwen3.attention.head_count_kv", 8);
-	model.n_layers   = (int)get_u32("qwen3.block_count", 28);
-	model.n_ff       = (int)get_u32("qwen3.feed_forward_length", 3072);
-	model.n_vocab    = (int)get_u32("qwen3.vocab_size", 151936);
-	// key_length is the per-head QK dimension; may differ from n_embd/n_heads
-	model.d_head     = (int)get_u32("qwen3.attention.key_length", model.n_embd / model.n_heads);
-	model.rope_freq_base = get_f32("qwen3.rope.freq_base", 1000000.0f);
-	model.rope_type  = 2; // NEOX
+	// Detect architecture: qwen3 (pure-attention) vs qwen35 (hybrid SSM+attention)
+	int arch_key_idx = gguf_find_key(gctx, "general.architecture");
+	const char * arch_str = arch_key_idx >= 0 ? gguf_get_val_str(gctx, arch_key_idx) : "qwen3";
+	bool is_qwen35 = (strncmp(arch_str, "qwen35", 6) == 0);
+	const char * pfx = is_qwen35 ? "qwen35" : "qwen3";
 
-	fprintf(stderr, "pflash: Qwen3-0.6B loaded — %d layers, %d embd, %d heads (%d kv), %d ff, %d vocab\n",
-		model.n_layers, model.n_embd, model.n_heads, model.n_kv_heads, model.n_ff, model.n_vocab);
+	// Helper: build "<arch>.<suffix>" key on the stack
+	char pk_buf[128];
+	auto pk = [&](const char * suffix) -> const char * {
+		snprintf(pk_buf, sizeof(pk_buf), "%s.%s", pfx, suffix);
+		return pk_buf;
+	};
+
+	model.n_embd     = (int)get_u32(pk("embedding_length"),       1024);
+	model.n_heads    = (int)get_u32(pk("attention.head_count"),    16);
+	model.n_kv_heads = (int)get_u32(pk("attention.head_count_kv"), 8);
+	model.n_ff       = (int)get_u32(pk("feed_forward_length"),     3072);
+	// key_length is the per-head QK dimension; may differ from n_embd/n_heads
+	model.d_head          = (int)get_u32(pk("attention.key_length"), model.n_embd / model.n_heads);
+	model.rope_freq_base  = get_f32(pk("rope.freq_base"), 1000000.0f);
+	model.rope_type       = 2; // NEOX
+
+	// vocab_size: prefer arch key; qwen35 GGUFs omit it — fall back to tokenizer array count
+	{
+		char vkey[128];
+		snprintf(vkey, sizeof(vkey), "%s.vocab_size", pfx);
+		int vidx = gguf_find_key(gctx, vkey);
+		if (vidx >= 0) {
+			model.n_vocab = (int)gguf_get_val_u32(gctx, vidx);
+		} else {
+			int tidx = gguf_find_key(gctx, "tokenizer.ggml.tokens");
+			model.n_vocab = (tidx >= 0) ? (int)gguf_get_arr_n(gctx, tidx) : 151936;
+		}
+	}
+
+	// full_attention_interval > 0: hybrid SSM+attention model; only every N-th layer
+	// (0-indexed: layers where (i+1) % interval == 0) has separate Q/K/V attention weights.
+	int full_attn_interval = is_qwen35 ? (int)get_u32("qwen35.full_attention_interval", 0) : 0;
+	auto is_full_attn = [&](int i) -> bool {
+		return full_attn_interval <= 0 || (i + 1) % full_attn_interval == 0;
+	};
+
+	// Count total physical layers, then count scoring (full-attention) layers
+	int n_total_layers = (int)get_u32(pk("block_count"), 28);
+	int n_scoring_layers = 0;
+	for (int i = 0; i < n_total_layers; i++) {
+		if (is_full_attn(i)) n_scoring_layers++;
+	}
+	model.n_layers = n_scoring_layers;
+
+	fprintf(stderr, "pflash: %s scorer — %d scoring layers (/%d total), %d embd, %d heads (%d kv), d=%d, vocab=%d\n",
+		arch_str, model.n_layers, n_total_layers, model.n_embd, model.n_heads, model.n_kv_heads, model.d_head, model.n_vocab);
 
 	// S3: use CPU backend so weights land in CPU RAM and are accessible
 	// to the CPU scorer compute graph. S4 will switch to GPU.
@@ -112,10 +151,16 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		model.output = model.tok_embd; // tied embeddings
 	}
 
+	// qwen35 uses post_attention_norm for the FFN layer-norm; qwen3 uses ffn_norm
+	const char * ffn_norm_fmt = is_qwen35 ? "blk.%d.post_attention_norm.weight"
+	                                       : "blk.%d.ffn_norm.weight";
+
 	model.layers.resize(model.n_layers);
 	char buf[256];
-	for (int i = 0; i < model.n_layers; i++) {
-		auto & l = model.layers[i];
+	int fa_idx = 0;
+	for (int i = 0; i < n_total_layers; i++) {
+		if (!is_full_attn(i)) continue; // skip SSM-only layers in hybrid architectures
+		auto & l = model.layers[fa_idx++];
 		auto tn = [&](const char * fmt) -> ggml_tensor * {
 			snprintf(buf, sizeof(buf), fmt, i);
 			return get_tensor(model.ctx_ggml, buf);
@@ -127,7 +172,7 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		l.wo        = tn("blk.%d.attn_output.weight");
 		l.q_norm    = tn("blk.%d.attn_q_norm.weight");
 		l.k_norm    = tn("blk.%d.attn_k_norm.weight");
-		l.ffn_norm  = tn("blk.%d.ffn_norm.weight");
+		l.ffn_norm  = tn(ffn_norm_fmt);
 		l.ffn_gate  = tn("blk.%d.ffn_gate.weight");
 		l.ffn_up    = tn("blk.%d.ffn_up.weight");
 		l.ffn_down  = tn("blk.%d.ffn_down.weight");
