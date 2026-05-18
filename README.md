@@ -263,10 +263,25 @@ for the unchanged mainline build instructions.
 | Backend | Primary targets | Status |
 |---|---|---|
 | **ROCm** | gfx1150 (mandatory); gfx1102 / gfx1103 (regression-smoke target via single-target `-DAMDGPU_TARGETS=gfx1102` build + `HSA_OVERRIDE_GFX_VERSION=11.0.2` at runtime) | first-class on gfx1150; smoke-only on gfx1102/1103 |
-| **Vulkan** | RDNA3 / RDNA3.5 | first-class — high priority |
+| **Vulkan** | RDNA3 / RDNA3.5 (and broader — driver-portable) | first-class — high priority |
 | CUDA, Metal, etc. | inherited from mainline | best-effort, not gated |
 
-gfx1102/1103 ROCm is now used as a regression-smoke target (catches HIP-shim
+**Why these specific targets:** the project has access to exactly two physical
+hosts — a gfx1150 Strix Halo APU and a gfx1103 RDNA3 mobile dGPU (built
+single-target as gfx1102 + run with `HSA_OVERRIDE_GFX_VERSION=11.0.2`). Without
+hardware we can't measure perf, can't catch regressions, can't sign off on
+correctness — so we don't commit to supporting AMD targets we can't test.
+**gfx1030, gfx900, gfx94X, gfx12XX, and other AMD GPUs are explicitly out of
+scope** for active development; sibling-fork features targeting those GPUs are
+SKIP-class by default. If a contributor stages hardware for one of these
+targets and offers maintenance, that can be revisited.
+
+Vulkan support is first-class because it's the cross-vendor path that lets
+yggdrasil-novel work (TurboQuant KV, TCQ KV, sidecars, etc.) reach users
+on hardware we don't own; the Vulkan port effort is a yggdrasil-owned burden
+for each in-tree feature regardless of which fork it came from.
+
+gfx1102/1103 ROCm is used as a regression-smoke target (catches HIP-shim
 breakage early; cross-host PPL parity is validated against ai00 gfx1150).
 Production-inference calibration on those hosts still defers to Vulkan due
 to AMD upstream Tensile/hipBLAS GEMM gaps. See
