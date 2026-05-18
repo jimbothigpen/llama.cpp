@@ -244,20 +244,16 @@ llama_kv_cache::llama_kv_cache(
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        ggml_backend_dev_t offload_dev = nullptr;
 
         if (offload) {
-            auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
+            offload_dev = model.dev_layer(il);
+            buft = ggml_backend_dev_buffer_type(offload_dev);
 
-            dev_name = ggml_backend_dev_name(dev);
+            dev_name = ggml_backend_dev_name(offload_dev);
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
-
-        ggml_context * ctx = ctx_for_buft(buft);
-        if (!ctx) {
-            throw std::runtime_error("failed to create ggml context for kv cache");
-        }
 
         // TurboQuant requires head_dim (n_embd_head_k) divisible by 128.
         // For models with non-128-aligned heads (e.g. DeepSeek2 MLA with head_dim=192/576),
@@ -323,8 +319,40 @@ llama_kv_cache::llama_kv_cache(
             }
         }
 
+        // If the target GPU backend does not support SET_ROWS for the chosen KV type,
+        // fall back to CPU buffer so the pre-allocated tensor is CPU-resident and the
+        // CPU backend can run SET_ROWS. Applies generically to any type not registered
+        // in the backend's SET_ROWS dispatch (e.g. TURBOQ*_INNERQ on Vulkan, RQ types).
+        if (offload_dev) {
+            struct ggml_tensor dummy_src0 = {};
+            dummy_src0.type  = GGML_TYPE_F32;
+            dummy_src0.ne[0] = n_embd_k_gqa;
+            struct ggml_tensor dummy_src1 = {};
+            dummy_src1.type  = GGML_TYPE_I32;
+            struct ggml_tensor dummy_op = {};
+            dummy_op.op      = GGML_OP_SET_ROWS;
+            dummy_op.src[0]  = &dummy_src0;
+            dummy_op.src[1]  = &dummy_src1;
+
+            dummy_op.type = layer_type_k;
+            const bool k_ok = ggml_backend_dev_supports_op(offload_dev, &dummy_op);
+            dummy_op.type = layer_type_v;
+            const bool v_ok = ggml_backend_dev_supports_op(offload_dev, &dummy_op);
+
+            if (!k_ok || !v_ok) {
+                LLAMA_LOG_DEBUG("%s: layer %3d: KV type (%s/%s) has no GPU SET_ROWS — CPU buffer\n",
+                        __func__, il, ggml_type_name(layer_type_k), ggml_type_name(layer_type_v));
+                buft = ggml_backend_cpu_buffer_type();
+            }
+        }
+
         if (!innerq_buft && (ggml_type_is_turboq_innerq(layer_type_k) || ggml_type_is_turboq_innerq(layer_type_v))) {
             innerq_buft = buft;
+        }
+
+        ggml_context * ctx = ctx_for_buft(buft);
+        if (!ctx) {
+            throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
         const bool has_k = true;
