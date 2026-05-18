@@ -30,11 +30,10 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 > Yggdrasil: the Norse world-tree where many branches converge at the trunk.
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, and 3 COMPLETE — **v327 (`4a50e66df`)** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **v355 (`4260989e8`)** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
 types) are merged to `/opt`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
-(PFlash prompt compression) has a working placeholder implementation on a feature
-branch. See [What's available now](#whats-available-now) and
+(PFlash prompt compression) shipped with HIP-optimized scorer. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What yggdrasil is and isn't
@@ -96,7 +95,7 @@ cross-backend PPL matches within tolerance. See
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
-| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **in-flight — placeholder scorer mode on `feature/pflash-1a` (20× TTFT speedup); real scorer (1b) pending** |
+| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
 
@@ -106,7 +105,7 @@ Vulkan implementations for novel features, so yggdrasil bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **v327 (`4a50e66df`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
+As of **v355 (`4260989e8`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
 
 ---
 
@@ -357,7 +356,7 @@ Active feature branches with work in progress; not yet on `/opt`.
 | Workstream | Branch | Status |
 |---|---|---|
 | RotorQuant KV V-cache (planar3/4, iso3/iso4) | `feature/rotorquant-port-with-kv-alloc-fix` | planar4 PPL gate PASS; planar3 LIKELY PASS; iso3/iso4 blocked on FA decoder (Phase 4a-1 gap) |
-| PFlash prompt compression — placeholder scorer | `feature/pflash-1a` | CLI + server wiring done; 20× TTFT speedup measured; real scorer (1b) pending quality validation |
+| PFlash prompt compression — real scorer (1b) | pending | Quality validation and real scorer implementation pending |
 | InnerQ RDC separable compilation | `feature/innerq-rdc-enable` | PPL gate PASS (12 chunks, within 1σ of anchor); ship pending |
 | Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
 | MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
@@ -458,7 +457,7 @@ conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `4a50e66df` v327; /opt installed at v327).
+- Trunk: `main` (HEAD `4260989e8` v355; /opt installed at v355).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
