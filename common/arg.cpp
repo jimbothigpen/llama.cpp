@@ -3805,6 +3805,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--pflash-scorer"}, "PATH",
+        string_format("path to PFlash scorer model GGUF (e.g., Qwen3-0.6B-BF16.gguf). Enables speculative prefill for long prompts."),
+        [](common_params & params, const std::string & value) {
+            params.speculative.pflash_scorer_path = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--pflash-keep-ratio"}, "F",
+        string_format("PFlash: fraction of prompt chunks to keep (default: %.3f)", 0.05f),
+        [](common_params & params, const std::string & value) {
+            params.speculative.pflash_keep_ratio = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--pflash-alpha"}, "F",
+        string_format("PFlash: FlashPrefill block selection threshold (default: %.2f)", 0.12f),
+        [](common_params & params, const std::string & value) {
+            params.speculative.pflash_alpha = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--pflash-min-tokens"}, "N",
+        string_format("PFlash: minimum prompt length to trigger speculative prefill (default: %d)", 8192),
+        [](common_params & params, int value) {
+            params.speculative.pflash_min_tokens = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     //
     // removed params
     //
