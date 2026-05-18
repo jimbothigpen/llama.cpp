@@ -40,7 +40,16 @@ static __device__ void rope_yarn(
     }
 }
 
-template <bool forward, bool has_ff, typename T, typename D>
+// FP64 RoPE theta with mod-2pi reduction. Only valid when rope_yarn will not
+// scale the angle (freq_scale==1, ext_factor==0, freq_factors==null).
+// Lifted from Luce-Org commit 4a4dab41fa; fixes precision wall for high freq_base (e.g. Qwen3.5 1e7).
+static __device__ float rope_theta_fp64(int32_t pos, float theta_scale, int exp_int) {
+    if (exp_int == 0) return (float)pos;
+    const double theta = (double)pos * ::pow((double)theta_scale, (double)exp_int);
+    return (float)::fmod(theta, 2.0 * M_PI);
+}
+
+template <bool forward, bool has_ff, bool fp64_theta, typename T, typename D>
 static __global__ void rope_norm(const T *            x,
                                  D *                  dst,
                                  const int            ne00,
@@ -97,7 +106,9 @@ static __global__ void rope_norm(const T *            x,
         return;
     }
 
-    const float theta_base = pos[i2]*powf(theta_scale, i0/2.0f);
+    const float theta_base = fp64_theta
+        ? rope_theta_fp64(pos[i2], theta_scale, i0/2)
+        : pos[i2]*powf(theta_scale, i0/2.0f);
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
 
@@ -112,7 +123,7 @@ static __global__ void rope_norm(const T *            x,
     store_coaelsced(x0 * cos_theta - x1 * sin_theta, x0 * sin_theta + x1 * cos_theta);
 }
 
-template <bool forward, bool has_ff, typename T, typename D>
+template <bool forward, bool has_ff, bool fp64_theta, typename T, typename D>
 static __global__ void rope_neox(const T *            x,
                                  D *                  dst,
                                  const int            ne00,
@@ -163,7 +174,9 @@ static __global__ void rope_neox(const T *            x,
         return;
     }
 
-    const float theta_base = pos[i2]*powf(theta_scale, i0/2.0f);
+    const float theta_base = fp64_theta
+        ? rope_theta_fp64(pos[i2], theta_scale, i0/2)
+        : pos[i2]*powf(theta_scale, i0/2.0f);
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
 
@@ -179,7 +192,7 @@ static __global__ void rope_neox(const T *            x,
     dst[idst + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
 }
 
-template <bool forward, bool has_ff, typename T>
+template <bool forward, bool has_ff, bool fp64_theta, typename T>
 static __global__ void rope_multi(const T *            x,
                                   T *                  dst,
                                   const int            ne00,
@@ -230,23 +243,39 @@ static __global__ void rope_multi(const T *            x,
     float theta_base = 0.0;
     if (is_imrope) {
         if (sector % 3 == 1 && sector < 3 * sections.v[1]) {         // h
-            theta_base = pos[i2 + ne02 * 1] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 1], theta_scale, i0/2)
+                : pos[i2 + ne02 * 1] * powf(theta_scale, i0 / 2.0f);
         } else if (sector % 3 == 2 && sector < 3 * sections.v[2]) {  // w
-            theta_base = pos[i2 + ne02 * 2] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 2], theta_scale, i0/2)
+                : pos[i2 + ne02 * 2] * powf(theta_scale, i0 / 2.0f);
         } else if (sector % 3 == 0 && sector < 3 * sections.v[0]) {  // t
-            theta_base = pos[i2] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2], theta_scale, i0/2)
+                : pos[i2] * powf(theta_scale, i0 / 2.0f);
         } else {
-            theta_base = pos[i2 + ne02 * 3] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 3], theta_scale, i0/2)
+                : pos[i2 + ne02 * 3] * powf(theta_scale, i0 / 2.0f);
         }
     } else {
         if (sector < sections.v[0]) {
-            theta_base = pos[i2] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2], theta_scale, i0/2)
+                : pos[i2] * powf(theta_scale, i0 / 2.0f);
         } else if (sector >= sections.v[0] && sector < sec_w) {
-            theta_base = pos[i2 + ne02 * 1] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 1], theta_scale, i0/2)
+                : pos[i2 + ne02 * 1] * powf(theta_scale, i0 / 2.0f);
         } else if (sector >= sec_w && sector < sec_w + sections.v[2]) {
-            theta_base = pos[i2 + ne02 * 2] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 2], theta_scale, i0/2)
+                : pos[i2 + ne02 * 2] * powf(theta_scale, i0 / 2.0f);
         } else if (sector >= sec_w + sections.v[2]) {
-            theta_base = pos[i2 + ne02 * 3] * powf(theta_scale, i0 / 2.0f);
+            theta_base = fp64_theta
+                ? rope_theta_fp64(pos[i2 + ne02 * 3], theta_scale, i0/2)
+                : pos[i2 + ne02 * 3] * powf(theta_scale, i0 / 2.0f);
         }
     }
 
@@ -264,7 +293,7 @@ static __global__ void rope_multi(const T *            x,
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
 }
 
-template <bool forward, bool has_ff, typename T>
+template <bool forward, bool has_ff, bool fp64_theta, typename T>
 static __global__ void rope_vision(const T *            x,
                                    T *                  dst,
                                    const int            ne00,
@@ -307,10 +336,14 @@ static __global__ void rope_vision(const T *            x,
     float theta_base = 0.0;
     if (sector < sections.v[0]) {
         const int p = sector;
-        theta_base  = pos[i2] * powf(theta_scale, p);
+        theta_base = fp64_theta
+            ? rope_theta_fp64(pos[i2], theta_scale, p)
+            : pos[i2] * powf(theta_scale, p);
     } else if (sector >= sections.v[0] && sector < sec_w) {
         const int p = sector - sections.v[0];
-        theta_base  = pos[i2 + ne02] * powf(theta_scale, p);
+        theta_base = fp64_theta
+            ? rope_theta_fp64(pos[i2 + ne02], theta_scale, p)
+            : pos[i2 + ne02] * powf(theta_scale, p);
     }
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
@@ -357,13 +390,18 @@ static void rope_norm_cuda(const T *            x,
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
+    const bool  use_fp64    = (freq_scale == 1.0f && ext_factor == 0.0f && freq_factors == nullptr);
 
-    if (freq_factors == nullptr) {
-        rope_norm<forward, false><<<block_nums, block_dims, 0, stream>>>(
+    if (use_fp64) {
+        rope_norm<forward, false, true><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, row_indices, set_rows_stride);
+            attn_factor, corr_dims, theta_scale, nullptr, row_indices, set_rows_stride);
+    } else if (freq_factors == nullptr) {
+        rope_norm<forward, false, false><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, nullptr, row_indices, set_rows_stride);
     } else {
-        rope_norm<forward, true><<<block_nums, block_dims, 0, stream>>>(
+        rope_norm<forward, true, false><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors, row_indices, set_rows_stride);
     }
@@ -399,13 +437,18 @@ static void rope_neox_cuda(const T *            x,
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
+    const bool  use_fp64    = (freq_scale == 1.0f && ext_factor == 0.0f && freq_factors == nullptr);
 
-    if (freq_factors == nullptr) {
-        rope_neox<forward, false><<<block_nums, block_dims, 0, stream>>>(
+    if (use_fp64) {
+        rope_neox<forward, false, true><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, row_indices, set_rows_stride);
+            attn_factor, corr_dims, theta_scale, nullptr, row_indices, set_rows_stride);
+    } else if (freq_factors == nullptr) {
+        rope_neox<forward, false, false><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, nullptr, row_indices, set_rows_stride);
     } else {
-        rope_neox<forward, true><<<block_nums, block_dims, 0, stream>>>(
+        rope_neox<forward, true, false><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors, row_indices, set_rows_stride);
     }
@@ -441,13 +484,18 @@ static void rope_multi_cuda(const T *            x,
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
+    const bool  use_fp64    = (freq_scale == 1.0f && ext_factor == 0.0f && freq_factors == nullptr);
 
-    if (freq_factors == nullptr) {
-        rope_multi<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
+    if (use_fp64) {
+        rope_multi<forward, false, true, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
+            attn_factor, corr_dims, theta_scale, nullptr, sections, is_imrope);
+    } else if (freq_factors == nullptr) {
+        rope_multi<forward, false, false, T><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, nullptr, sections, is_imrope);
     } else {
-        rope_multi<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
+        rope_multi<forward, true, false, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
     }
@@ -484,13 +532,18 @@ static void rope_vision_cuda(const T *            x,
     // where x ~= ceil(head_dim / CUDA_ROPE_BLOCK_SIZE);
 
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
+    const bool  use_fp64    = (freq_scale == 1.0f && ext_factor == 0.0f && freq_factors == nullptr);
 
-    if (freq_factors == nullptr) {
-        rope_vision<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
+    if (use_fp64) {
+        rope_vision<forward, false, true, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections);
+            attn_factor, corr_dims, theta_scale, nullptr, sections);
+    } else if (freq_factors == nullptr) {
+        rope_vision<forward, false, false, T><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, nullptr, sections);
     } else {
-        rope_vision<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
+        rope_vision<forward, true, false, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors, sections);
     }
