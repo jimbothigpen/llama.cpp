@@ -436,7 +436,10 @@ extern "C" {
         // slots 63–65 reserved for yggdrasil future TurboQuant variants — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_TURBOQ2_TCQ = 66, // TurboQuant 2-bit KV cache: TCQ (k=2, L=8, 256 states) — source: buun TURBO2_TCQ
         GGML_TYPE_TURBOQ3_TCQ = 67, // TurboQuant 3-bit KV cache: TCQ (k=3, L=9, 512 states, Viterbi) — source: buun TURBO3_TCQ
-        // slots 68–79 reserved for yggdrasil future TCQ/RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_TURBOQ2_INNERQ = 68, // 2-bit + InnerQ K-cache equalization; block_turboq2_0 (34 bytes, QK=128)
+        GGML_TYPE_TURBOQ3_INNERQ = 69, // 3-bit + InnerQ K-cache equalization; block_turboq3_0 (50 bytes, QK=128)
+        GGML_TYPE_TURBOQ4_INNERQ = 70, // 4-bit + InnerQ K-cache equalization; block_turboq4_0 (68 bytes); encoder aliases to TURBOQ4_0 (PPL regression at 4-bit)
+        // slots 71–79 reserved for yggdrasil future TCQ/InnerQ/RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
         GGML_TYPE_COUNT   = 82,

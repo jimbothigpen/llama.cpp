@@ -72,16 +72,25 @@ Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2
 Symbol prefix: `turboq_` (kernels), `TURBOQ_` (constants). The `Q` suffix
 disambiguates from the `TURBO*_0` collisions in contributing forks.
 
-### 66–71: TCQ KV family (source: buun `master`)
+### 66–71: TCQ + InnerQ KV family (source: buun `master` / frankenturbo2)
 
-| Slot | Yggdrasil name | Buun name (renamed) | Description |
-|---|---|---|---|
-| 66 | `GGML_TYPE_TURBOQ2_TCQ` | `TURBO2_TCQ` (46) | TCQ k=2, L=8, 256 states |
-| 67 | `GGML_TYPE_TURBOQ3_TCQ` | `TURBO3_TCQ` (45) | TCQ k=3, Viterbi-decoded |
-| 68–71 | reserved | | future TCQ variants |
+| Slot | Yggdrasil name | Source name (renamed) | Description | Block size | Vulkan |
+|---|---|---|---|---|---|
+| 66 | `GGML_TYPE_TURBOQ2_TCQ` | `TURBO2_TCQ` (buun 46) | TCQ k=2, L=8, 256 states | 36 bytes | CPU fallback |
+| 67 | `GGML_TYPE_TURBOQ3_TCQ` | `TURBO3_TCQ` (buun 45) | TCQ k=3, Viterbi-decoded | 52 bytes | CPU fallback |
+| 68 | `GGML_TYPE_TURBOQ2_INNERQ` | `TURBO2_INNERQ` (ft2 67) | 2-bit + InnerQ per-channel equalization; block_turboq2_0 | 34 bytes | CPU fallback (no .comp shaders in ft2) |
+| 69 | `GGML_TYPE_TURBOQ3_INNERQ` | `TURBO3_INNERQ` (ft2 68) | 3-bit + InnerQ per-channel equalization; block_turboq3_0 | 50 bytes | CPU fallback |
+| 70 | `GGML_TYPE_TURBOQ4_INNERQ` | `TURBO4_INNERQ` (ft2 69) | 4-bit alias: encoder routes to TURBOQ4_0 (codebook-sensitivity regression confirmed in ft2 ccfe39d675, PPL 9.08 vs 7.47) | 68 bytes | CPU fallback |
+| 71 | reserved | | future TCQ/InnerQ variants | | |
 
-Symbol prefix: `turboq_tcq_`. TCQ extends the TurboQuant family
-conceptually but uses Viterbi-coded trellises instead of scalar codebooks.
+Note: TURBOQ4_INNERQ is registered but its encoder is aliased to TURBOQ4_0 by design.
+
+Note: InnerQ is K-cache runtime quantization only (not weight quantization); calibration state is per-session, no GGUF persistence.
+
+Symbol prefix: `turboq_tcq_` (TCQ), `turboq_innerq_` (InnerQ). TCQ extends the TurboQuant family
+conceptually but uses Viterbi-coded trellises instead of scalar codebooks. InnerQ applies
+per-channel K-cache equalization before WHT rotation; wire format identical to the corresponding
+TURBOQ_0 block structs.
 
 ### 72–79: RotorQuant KV family (source: carlosfundora `1-bit-turbo`)
 
