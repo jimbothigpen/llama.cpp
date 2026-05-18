@@ -350,6 +350,7 @@ llama_kv_cache::llama_kv_cache(
             innerq_buft = buft;
         }
 
+
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
             throw std::runtime_error("failed to create ggml context for kv cache");
