@@ -55,7 +55,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         offload,
         rs_size,
         n_seq_max,
-        n_rs_seq,
+        0, // n_rs_seq: hybrid models don't use MTP draft rollback
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recurrent(il); }
             : filter_recr
