@@ -137,6 +137,22 @@ public:
     const uint32_t n_pos_per_embd = 1;
 };
 
+// MTP chain positions: pos[last]+1, pos[last]+2, ..., pos[last]+n_chain
+// Used for M-RoPE in chain steps within the MTP context graph (E3b)
+class llm_graph_input_pos_mtp_chain : public llm_graph_input_i {
+public:
+    llm_graph_input_pos_mtp_chain(int n_chain, int n_tokens) : n_chain(n_chain), n_tokens(n_tokens) {}
+    virtual ~llm_graph_input_pos_mtp_chain() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    // I32 [n_chain * n_tokens * 4] — M-RoPE: 4 sections per position, step k → last_pos + k + 1
+    ggml_tensor * chain_pos = nullptr;
+
+    const int n_chain;
+    const int n_tokens;
+};
+
 // temperature tuning, used by llama4
 class llm_graph_input_attn_temp : public llm_graph_input_i {
 public:
@@ -704,6 +720,10 @@ public:
     // MTP driver-layer (upstream-style): graph INPUT tensor the MTP-tail graph builder creates;
     // the decode loop fills it via llama_context::prepare_mtp_graph_inputs before graph_compute.
     ggml_tensor * t_mtp_states  = nullptr;
+
+    // E3b chain predictions — logit tensors for chain steps 0..MTP_CHAIN_MAX-1 within graph_mtp
+    static constexpr int MTP_CHAIN_MAX = 3;
+    ggml_tensor * t_logits_mtp_chain[MTP_CHAIN_MAX] = {};
 
     std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
     std::map<llama_seq_id, ggml_tensor*> t_candidates;

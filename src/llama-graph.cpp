@@ -133,6 +133,22 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_pos_mtp_chain::set_input(const llama_ubatch * ubatch) {
+    if (ubatch->pos && chain_pos) {
+        // Chain runs on the last token. Step k uses M-RoPE position last_pos + k + 1.
+        const int n_pos_per_embd = 4;
+        const int last_tok = (int)ubatch->n_tokens - 1;
+        int32_t last_pos = ubatch->pos[last_tok * n_pos_per_embd];
+        std::vector<int32_t> pos_data(n_chain * n_pos_per_embd);
+        for (int k = 0; k < n_chain; ++k) {
+            for (int s = 0; s < n_pos_per_embd; ++s) {
+                pos_data[k * n_pos_per_embd + s] = last_pos + k + 1;
+            }
+        }
+        ggml_backend_tensor_set(chain_pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+    }
+}
+
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
