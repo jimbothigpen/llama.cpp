@@ -130,11 +130,16 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		}
 	}
 
-	// S3: use CPU backend so weights land in CPU RAM and are accessible
-	// to the CPU scorer compute graph. S4 will switch to GPU.
-	ggml_backend_t backend = ggml_backend_cpu_init();
+	// Phase 3: use ROCm GPU backend to store scorer weights in VRAM;
+	// fall back to CPU if no GPU device is registered (e.g. Vulkan-only build).
+	ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+	ggml_backend_t backend = dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
 	if (!backend) {
-		fprintf(stderr, "pflash: cannot init CPU backend for scorer\n");
+		fprintf(stderr, "pflash: no GPU device; falling back to CPU backend for scorer weights\n");
+		backend = ggml_backend_cpu_init();
+	}
+	if (!backend) {
+		fprintf(stderr, "pflash: cannot init backend for scorer\n");
 		gguf_free(gctx);
 		pflash_model_free(model);
 		return -1;
