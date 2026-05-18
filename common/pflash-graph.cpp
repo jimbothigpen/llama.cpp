@@ -120,7 +120,7 @@ pflash_scorer_result pflash_score(
     ggml_set_input(inp_tokens);
 
     // Initial embedding lookup: h = tok_embd[inp_tokens], cast to F32
-    // tok_embd is typically F16 in F16 GGUF; rms_norm and add require F32.
+    // tok_embd is always F32 (dequantized at load time if GGUF was quantized).
     ggml_tensor * h = ggml_cast(ctx,
         ggml_get_rows(ctx, model.tok_embd, inp_tokens),
         GGML_TYPE_F32);
