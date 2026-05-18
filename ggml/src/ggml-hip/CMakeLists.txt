@@ -123,6 +123,12 @@ ggml_add_backend_library(ggml-hip
                          ${GGML_SOURCES_ROCM}
                         )
 
+# Relocatable device code: required for cross-TU extern __device__ resolution.
+if (NOT CXX_IS_HIPCC)
+    target_compile_options(ggml-hip PRIVATE $<$<COMPILE_LANGUAGE:HIP>:-fgpu-rdc>)
+    target_link_options(ggml-hip PRIVATE -fgpu-rdc)
+endif()
+
 # TODO: do not use CUDA definitions for HIP
 if (NOT GGML_BACKEND_DL)
     target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
