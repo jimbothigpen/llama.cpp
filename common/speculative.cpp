@@ -994,6 +994,16 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             return;
         }
 
+        // E3b Phase 2-Extend-D: chain logits are for the last token in the initial batch
+        // (graph_mtp last_off = n_tokens-1); find which seq_id that corresponds to
+        const int32_t chain_depth   = llama_get_mtp_chain_depth(ctx_dft);
+        const int32_t n_vocab_chain = (chain_depth > 0)
+            ? llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft))) : 0;
+        llama_seq_id chain_seq_id = -1;
+        for (llama_seq_id s = 0; s < (llama_seq_id) n_seq; ++s) {
+            if (drafting[s]) chain_seq_id = s;
+        }
+
         int i = 0;
 
         while (n_drafting > 0) {
@@ -1028,6 +1038,27 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
                 auto & result = *dp.result;
 
                 result.push_back(id);
+
+                // E3b Phase 2-Extend-D: append chain predictions after base token.
+                // Chain logits are from the initial decode's in-graph chain steps (no extra
+                // llama_decode needed).  Applies only on the first AR iteration (i==0) and
+                // only for the last drafting seq (chain last_off = n_tokens-1 in initial batch).
+                if (i == 0 && seq_id == chain_seq_id && chain_depth > 0) {
+                    for (int32_t k = 0; k < chain_depth; ++k) {
+                        if (params.n_max <= (int) result.size()) break;
+                        const float * cl = llama_get_mtp_chain_logits_ith(ctx_dft, k, 0);
+                        if (!cl) break;
+                        const auto cit = std::max_element(cl, cl + n_vocab_chain);
+                        const float cmax = *cit;
+                        double csum = 0.0;
+                        for (int32_t v = 0; v < n_vocab_chain; ++v) csum += expf(cl[v] - cmax);
+                        if ((float)(1.0 / csum) < params.p_min) break;
+                        result.push_back((llama_token)(cit - cl));
+                    }
+                    drafting[seq_id] = false;
+                    --n_drafting;
+                    continue;
+                }
 
                 if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
