@@ -313,3 +313,5 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+llama_build_and_test(test-recurrent-state-rollback.cpp LABEL "model")
