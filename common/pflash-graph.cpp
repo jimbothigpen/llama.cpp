@@ -79,7 +79,6 @@ pflash_scorer_result pflash_score(
     const int n_heads   = model.n_heads;
     const int n_kv      = model.n_kv_heads;
     const int d_head    = model.d_head;
-    const int n_ff      = model.n_ff;
     const int gqa_ratio = n_heads / n_kv;
     const float scale_attn = 1.0f / sqrtf((float)d_head);
 
@@ -94,9 +93,8 @@ pflash_scorer_result pflash_score(
 
     // ── Re-init GPU backend (loader freed it; same device so buf_gpu remains valid)
     const std::string dev_str = std::to_string(gpu_device);
-    ggml_backend_dev_t bdev = ggml_backend_dev_by_name("CUDA");
-    if (!bdev) bdev = ggml_backend_dev_by_name("ROCm");
-    if (!bdev) bdev = ggml_backend_dev_by_name("Vulkan");
+    ggml_backend_dev_t bdev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    if (!bdev)        bdev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
     ggml_backend_t backend = bdev
         ? ggml_backend_dev_init(bdev, dev_str.c_str())
         : ggml_backend_cpu_init();
