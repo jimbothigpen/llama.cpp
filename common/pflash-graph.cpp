@@ -91,11 +91,16 @@ pflash_scorer_result pflash_score(
         "pflash: real scorer — %d tokens, %d layers, n_heads=%d n_kv=%d d=%d\n",
         S, n_layers, n_heads, n_kv, d_head);
 
-    // S3: CPU scorer only; weights are in CPU RAM (loaded by CPU backend).
-    // S4 will replace this with HIP compute.
-    ggml_backend_t backend = ggml_backend_cpu_init();
+    // Phase 3: use GPU backend for scorer compute; weights are in GPU VRAM.
+    // Fall back to CPU if no GPU device registered (e.g. Vulkan-only build).
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    ggml_backend_t backend = dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
     if (!backend) {
-        fprintf(stderr, "pflash: scorer cannot init CPU backend\n");
+        fprintf(stderr, "pflash: no GPU device; falling back to CPU scorer\n");
+        backend = ggml_backend_cpu_init();
+    }
+    if (!backend) {
+        fprintf(stderr, "pflash: scorer cannot init backend\n");
         return result;
     }
     (void)gpu_device;
@@ -103,7 +108,7 @@ pflash_scorer_result pflash_score(
     // ── Build compute context ──────────────────────────────────────────────
     // Estimate tensor count: ~30 per layer + embedding + input = ~270 total.
     struct ggml_init_params ctx_params = {
-        /* .mem_size   = */ 4 * 1024 * 1024, // 4 MB: tensor overhead × ~500 nodes + graph
+        /* .mem_size   = */ 16 * 1024 * 1024, // 16 MB: GPU tensor overhead headroom
         /* .mem_buffer = */ nullptr,
         /* .no_alloc   = */ true,
     };
