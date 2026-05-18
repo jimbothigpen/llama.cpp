@@ -730,4 +730,136 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     res->t_logits = cur;
     ggml_build_forward_expand(gf, cur);
+
+    // === E3b chain prediction loop (Phase 2-Extend-B): depth-2 chain after base MTP step ===
+    // REDO-FROM-SCRATCH for MoE graph_mtp: buun SD-091 bf22e115e has no MoE chain.
+    // Pattern mirrors qwen35.cpp chain loop; FFN uses build_moe_ffn + gated shared expert.
+    // K/V accumulation is purely in-graph; no persistent KV cache writes for chain steps.
+    {
+        const int n_chain = 2;
+        const int64_t last_off = (int64_t)(n_tokens - 1);
+
+        auto inp_chain = std::make_unique<llm_graph_input_pos_mtp_chain>(n_chain, 1);
+        inp_chain->chain_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_chain * 4);
+        ggml_set_input(inp_chain->chain_pos);
+        ggml_tensor * chain_pos_all = inp_chain->chain_pos;
+        res->add_input(std::move(inp_chain));
+
+        ggml_tensor * chain_hidden = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, res->t_h_pre_norm, n_embd, 1,
+                res->t_h_pre_norm->nb[1],
+                last_off * ggml_element_size(res->t_h_pre_norm) * n_embd));
+
+        ggml_tensor * K_accum = ggml_cont(ctx0,
+            ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, 1,
+                Kcur->nb[1], Kcur->nb[2], last_off * Kcur->nb[2]));
+        ggml_tensor * V_accum = ggml_cont(ctx0,
+            ggml_view_3d(ctx0, Vcur, n_embd_head, n_head_kv, 1,
+                Vcur->nb[1], Vcur->nb[2], last_off * Vcur->nb[2]));
+
+        ggml_tensor * chain_logits = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, res->t_logits, res->t_logits->ne[0], 1,
+                res->t_logits->nb[1],
+                last_off * ggml_element_size(res->t_logits) * res->t_logits->ne[0]));
+
+        for (int ck = 0; ck < n_chain; ++ck) {
+            ggml_tensor * ck_greedy = ggml_argmax(ctx0, chain_logits);
+            ggml_tensor * ck_emb    = ggml_get_rows(ctx0, tok_embd_w, ck_greedy);
+            ggml_tensor * ck_enorm  = build_norm(ck_emb,       layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
+            ggml_tensor * ck_hnorm  = build_norm(chain_hidden, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+            ggml_tensor * ck_proj   = build_lora_mm(layer.nextn.eh_proj,
+                ggml_concat(ctx0, ck_enorm, ck_hnorm, 0));
+
+            ggml_tensor * ck_cur = build_norm(ck_proj, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+
+            ggml_tensor * ck_Qfull = build_lora_mm(layer.wq, ck_cur, layer.wq_s);
+            ggml_tensor * ck_Q = ggml_view_3d(ctx0, ck_Qfull, n_embd_head, n_head, 1,
+                ggml_element_size(ck_Qfull) * n_embd_head * 2,
+                ggml_element_size(ck_Qfull) * n_embd_head * 2 * n_head, 0);
+            ck_Q = build_norm(ck_Q, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
+
+            ggml_tensor * ck_gate = ggml_view_3d(ctx0, ck_Qfull, n_embd_head, n_head, 1,
+                ggml_element_size(ck_Qfull) * n_embd_head * 2,
+                ggml_element_size(ck_Qfull) * n_embd_head * 2 * n_head,
+                ggml_element_size(ck_Qfull) * n_embd_head);
+            ck_gate = ggml_cont_2d(ctx0, ck_gate, n_embd_head * n_head, 1);
+
+            ggml_tensor * ck_K = build_lora_mm(layer.wk, ck_cur, layer.wk_s);
+            ck_K = ggml_reshape_3d(ctx0, ck_K, n_embd_head, n_head_kv, 1);
+            ck_K = build_norm(ck_K, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+
+            ggml_tensor * ck_V = build_lora_mm(layer.wv, ck_cur, layer.wv_s);
+            ck_V = ggml_reshape_3d(ctx0, ck_V, n_embd_head, n_head_kv, 1);
+
+            ggml_tensor * ck_pos = ggml_view_1d(ctx0, chain_pos_all, 4,
+                ck * 4 * ggml_element_size(chain_pos_all));
+
+            ck_Q = ggml_rope_multi(ctx0, ck_Q, ck_pos, nullptr,
+                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            ck_K = ggml_rope_multi(ctx0, ck_K, ck_pos, nullptr,
+                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+
+            ggml_tensor * ck_K_cont = ggml_cont(ctx0, ck_K);
+            ggml_tensor * ck_V_cont = ggml_cont(ctx0, ck_V);
+
+            ggml_tensor * ck_K_full = ggml_concat(ctx0, K_accum, ck_K_cont, 2);
+            ggml_tensor * ck_V_full = ggml_concat(ctx0, V_accum, ck_V_cont, 2);
+
+            ck_cur = build_attn_mha(ck_Q, ck_K_full, ck_V_full,
+                    nullptr, nullptr, nullptr, nullptr, kq_scale, il);
+
+            ck_cur = ggml_mul(ctx0, ck_cur, ggml_sigmoid(ctx0, ck_gate));
+            ck_cur = build_lora_mm(layer.wo, ck_cur, layer.wo_s);
+            ck_cur = ggml_add(ctx0, ck_cur, ck_proj);
+
+            // MoE FFN (matches base step pattern in this constructor)
+            ggml_tensor * ck_ffn_res = ck_cur;
+            ck_cur = build_norm(ck_cur, layer.attn_post_norm, nullptr, LLM_NORM_RMS, il);
+
+            ggml_tensor * ck_moe_out =
+                build_moe_ffn(ck_cur,
+                    layer.ffn_gate_inp,
+                    layer.ffn_up_exps,
+                    layer.ffn_gate_exps,
+                    layer.ffn_down_exps,
+                    nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true,
+                    hparams.expert_weights_scale,
+                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                    nullptr, layer.ffn_gate_up_exps,
+                    layer.ffn_up_exps_s,
+                    layer.ffn_gate_exps_s,
+                    layer.ffn_down_exps_s);
+
+            if (layer.ffn_up_shexp != nullptr) {
+                ggml_tensor * ck_ffn_shexp =
+                    build_ffn(ck_cur,
+                        layer.ffn_up_shexp,   nullptr, layer.ffn_up_shexp_s,
+                        layer.ffn_gate_shexp, nullptr, layer.ffn_gate_shexp_s,
+                        layer.ffn_down_shexp, nullptr, layer.ffn_down_shexp_s,
+                        nullptr,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                ggml_tensor * ck_shared_gate = build_lora_mm(layer.ffn_gate_inp_shexp, ck_cur);
+                ck_shared_gate = ggml_sigmoid(ctx0, ck_shared_gate);
+                ck_ffn_shexp = ggml_mul(ctx0, ck_ffn_shexp, ck_shared_gate);
+                ck_cur = ggml_add(ctx0, ck_moe_out, ck_ffn_shexp);
+            } else {
+                ck_cur = ck_moe_out;
+            }
+
+            ck_cur = ggml_add(ctx0, ck_cur, ck_ffn_res);
+
+            K_accum = ck_K_full;
+            V_accum = ck_V_full;
+            chain_hidden = ck_cur;
+
+            chain_logits = build_lora_mm(head_w,
+                build_norm(ck_cur, head_norm_w, nullptr, LLM_NORM_RMS, -1));
+            res->t_logits_mtp_chain[ck] = chain_logits;
+            ggml_build_forward_expand(gf, chain_logits);
+        }
+    }
 }
