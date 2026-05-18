@@ -89,16 +89,9 @@ struct llama_context {
     float * get_embeddings_pre_norm_ith(int32_t i);
     float * get_embeddings_pre_norm_raw_ith(int32_t i);
 
-    // MTP driver-layer (upstream-style).
+    // gemma4-assistant internal: set which MTP op this context performs on the next decode.
     void set_mtp_op_type(llama_mtp_op_type op);
     void set_draft_input_hidden_state(const float * hidden_state);
-
-    // copy the appropriate hidden-state source into res->t_mtp_states before graph_compute.
-    // - WARMUP / UPDATE_ACCEPTED: source is the just-computed embd buffer
-    // - DRAFT_GEN: source is draft_input_hidden_state (set by the speculative decoder)
-    // token_cursor: offset (in tokens) into draft_input_hidden_state for ubatches 2+
-    // of a multi-ubatch WARMUP / UPDATE_ACCEPTED decode; 0 for the single-ubatch / DRAFT_GEN cases.
-    bool prepare_mtp_graph_inputs(llm_graph_result * res, int64_t token_cursor = 0);
 
     // gemma4-assistant external-MTP: attach a target (backbone) context whose
     // hidden state and KV cache this assistant context reads from when building
@@ -154,14 +147,11 @@ struct llama_context {
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
-    // mtp_token_cursor: cumulative ubatch-token offset into draft_input_hidden_state
-    // for a multi-ubatch MTP WARMUP / UPDATE_ACCEPTED decode (0 for the NONE / DRAFT_GEN paths)
     llm_graph_result * process_ubatch(
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret,
-                           int64_t   mtp_token_cursor = 0);
+                       ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
@@ -383,11 +373,8 @@ private:
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
-    // MTP driver-layer (upstream-style): hidden state from the main model, set via
-    // llama_set_draft_input_hidden_state, consumed on an MTP_OP_DRAFT_GEN decode.
+    // used by set_draft_input_hidden_state / gemma4-assistant DRAFT_GEN
     const float * draft_input_hidden_state = nullptr;
-    // MTP driver-layer: graph input tensor slot, populated by the decode loop (A5c).
-    struct ggml_tensor * inp_mtp_states = nullptr;
 
     // gemma4-assistant external-MTP: target (backbone) context borrowed for
     // foreign-KV attention, and the seq_id its KV cells were written under.
@@ -402,10 +389,6 @@ private:
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
-    // Separate slot for MTP-pass (WARMUP / UPDATE_ACCEPTED / DRAFT_GEN). NONE-pass caches in
-    // gf_res_prev; selection in process_ubatch is by cparams.mtp_op_type so a chain of
-    // NONE -> MTP -> NONE preserves both cached graphs across the MTP interlude.
-    llm_graph_result_ptr gf_res_prev_mtp;
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
