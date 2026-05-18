@@ -1021,6 +1021,12 @@ extern "C" {
     // own n_embd.
     LLAMA_API int32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
+    // E3b: chain logits from the MTP context after each decode.
+    // chain_depth is in [0, llama_get_mtp_chain_depth(ctx)); i is a flat index into the logit row.
+    // Returns nullptr if chain_depth is out of range or no chain decode has completed.
+    LLAMA_API float * llama_get_mtp_chain_logits_ith(struct llama_context * ctx, int32_t chain_depth, int32_t i);
+    LLAMA_API int32_t llama_get_mtp_chain_depth     (struct llama_context * ctx);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
