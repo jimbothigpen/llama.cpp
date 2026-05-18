@@ -11,6 +11,46 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 Phase 2 (MTP spec-decode spine) in design.
 
+### Fixed — Multi-backend /opt RPATH; ai01 Vulkan binary was loading ROCm libggml (2026-05-18, v327)
+
+Root cause of the v326 ai01 Vulkan SIGSEGV was a broken `RUNPATH` in installed
+binaries (`/../lib`, resolving to `/lib`). Without a valid `$ORIGIN`-relative
+RPATH, the dynamic linker fell back to ldconfig and resolved the ROCm
+`libggml.so.0` (listed first in `llama-yggdrasil.conf`) instead of the Vulkan
+cell's own `libggml.so.0`. The Vulkan binary was silently running as a ROCm
+binary without `HSA_OVERRIDE_GFX_VERSION=11.0.2`, causing SIGSEGV on GFX1103
+hardware. The BF16 cpy SPIR-V is structurally valid (`spirv-val` passes) and
+was never loaded on RADV PHOENIX — the crash was a misdiagnosis.
+Fix: `CMAKE_INSTALL_RPATH=$ORIGIN/../lib` in `CMakeLists.txt`; each /opt cell
+now resolves its own `libggml.so.0` via RPATH before ldconfig.
+
+### Added — Vulkan BF16 copy pipelines (2026-05-18, `9ffaa0967` on `main`, v326)
+
+Cherry-picked from mainline PR #22677. Adds `pipeline_cpy_bf16_f32` and
+`pipeline_contig_cpy_bf16_f32` to `vk_device_struct`, registered in
+`ggml_vk_load_shaders`. Enables BF16→F32 copies on the Vulkan path.
+
+### Fixed — Pre-norm embedding mask initialization (2026-05-18, `daf0ffa70` on `main`, v325)
+
+Cherry-picked from mainline PR #23256. Adds
+`cparams.embeddings_pre_norm_masked = false` to `llama_new_context_with_model`
+to ensure the flag is zero-initialized regardless of caller defaults.
+
+### Added — Vulkan BF16 FA dispatch via inline dequant (2026-05-18, `a36a69c69` on `main`, v324)
+
+Pattern B: `uvec2` inline dequantization in the FA shader. Adds BF16 KV
+types to the Vulkan FA allowlist and the 4-byte inline dequantize path.
+Uses COOPMAT1 when available on the target GPU. 4-cell smoke PASS (GFX1150
+ROCm + Vulkan; GFX1102/1103 ROCm + Vulkan).
+
+### Fixed — KV cache CPU fallback for types lacking GPU SET_ROWS (2026-05-18, `5d3164d67` on `main`, v323)
+
+Types where `supports_op(GGML_OP_SET_ROWS)` returns false now allocate their
+KV buffers on the CPU backend, preventing silent data corruption. Previously
+these types fell through to GPU allocation with no SET_ROWS implementation.
+Affects: RotorQuant (planar3/4, iso3/4), TURBOQ_{2,3,4}_TCQ prior to their
+respective SET_ROWS shader lifts.
+
 ### Added — Novel model architecture: Zyphra ZAYA1-8B (2026-05-15, `64a481bb6 → cc8455581` on `main`)
 
 In-tree port of the Zyphra ZAYA1-8B hybrid MoE — first novel-arch model
