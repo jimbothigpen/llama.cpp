@@ -29,7 +29,7 @@ static void load_tcq_norm_alpha() {
         } else {
             alpha_k = a;
             k_set = true;
-            cudaMemcpyToSymbol(d_tcq_norm_alpha, &alpha_k, sizeof(float));
+            (void) cudaMemcpyToSymbol(d_tcq_norm_alpha, &alpha_k, sizeof(float));
         }
     }
     if (sv) {
@@ -39,14 +39,14 @@ static void load_tcq_norm_alpha() {
         if (end == sv || errno != 0 || a <= 0.0f || a >= 10.0f) {
             fprintf(stderr, "TCQ: invalid TURBO_TCQ_ALPHA_V='%s'\n", sv);
         } else {
-            cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &a, sizeof(float));
+            (void) cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &a, sizeof(float));
             fprintf(stderr, "TCQ: norm alpha K=%.3f V=%.3f\n", alpha_k, a);
             return;
         }
     }
     // TURBO_TCQ_ALPHA set without TURBO_TCQ_ALPHA_V: V matches K (backwards-compat).
     if (k_set) {
-        cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &alpha_k, sizeof(float));
+        (void) cudaMemcpyToSymbol(d_tcq_norm_alpha_v, &alpha_k, sizeof(float));
         fprintf(stderr, "TCQ: norm alpha K=V=%.3f\n", alpha_k);
     }
 }
@@ -66,8 +66,8 @@ static const char * tcq_dump_path  = nullptr;
 
 static void tcq_error_dump_flush() {
     if (tcq_dump_n == 0) return;
-    cudaMemcpy(tcq_dump_x_host,   tcq_dump_x_dev,   tcq_dump_n * 128 * sizeof(float),   cudaMemcpyDeviceToHost);
-    cudaMemcpy(tcq_dump_out_host, tcq_dump_out_dev, tcq_dump_n * 128 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    (void) cudaMemcpy(tcq_dump_x_host,   tcq_dump_x_dev,   tcq_dump_n * 128 * sizeof(float),   cudaMemcpyDeviceToHost);
+    (void) cudaMemcpy(tcq_dump_out_host, tcq_dump_out_dev, tcq_dump_n * 128 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
     const char * path = tcq_dump_path ? tcq_dump_path : "tcq_errors.bin";
     FILE * f = fopen(path, "wb");
     if (f) {
@@ -80,8 +80,8 @@ static void tcq_error_dump_flush() {
     } else {
         fprintf(stderr, "TCQ: failed to open dump path '%s' for write\n", path);
     }
-    cudaFree(tcq_dump_x_dev);
-    cudaFree(tcq_dump_out_dev);
+    (void) cudaFree(tcq_dump_x_dev);
+    (void) cudaFree(tcq_dump_out_dev);
     free(tcq_dump_x_host);
     free(tcq_dump_out_host);
 }
@@ -98,11 +98,11 @@ static void init_tcq_error_dump() {
     tcq_dump_path     = getenv("TURBO_TCQ_DUMP_PATH"); // nullptr → fallback in flush
     tcq_dump_x_host   = (float   *)malloc(n * 128 * sizeof(float));
     tcq_dump_out_host = (uint8_t *)malloc(n * 128 * sizeof(uint8_t));
-    cudaMalloc(&tcq_dump_x_dev,   n * 128 * sizeof(float));
-    cudaMalloc(&tcq_dump_out_dev, n * 128 * sizeof(uint8_t));
-    cudaMemcpyToSymbol(d_tcq_dump_x_buf,   &tcq_dump_x_dev,   sizeof(float   *));
-    cudaMemcpyToSymbol(d_tcq_dump_out_buf, &tcq_dump_out_dev, sizeof(uint8_t *));
-    cudaMemcpyToSymbol(d_tcq_dump_max,     &n,                sizeof(int));
+    (void) cudaMalloc(&tcq_dump_x_dev,   n * 128 * sizeof(float));
+    (void) cudaMalloc(&tcq_dump_out_dev, n * 128 * sizeof(uint8_t));
+    (void) cudaMemcpyToSymbol(d_tcq_dump_x_buf,   &tcq_dump_x_dev,   sizeof(float   *));
+    (void) cudaMemcpyToSymbol(d_tcq_dump_out_buf, &tcq_dump_out_dev, sizeof(uint8_t *));
+    (void) cudaMemcpyToSymbol(d_tcq_dump_max,     &n,                sizeof(int));
     atexit(tcq_error_dump_flush);
     fprintf(stderr, "TCQ: will dump errors for first %d groups to %s\n",
             n, tcq_dump_path ? tcq_dump_path : "tcq_errors.bin (cwd)");
@@ -1097,8 +1097,8 @@ static int64_t   tcq_bt_buf_bytes = 0;
 
 static void ensure_tcq_bt_buf(int64_t bytes_needed) {
     if (bytes_needed <= tcq_bt_buf_bytes) return;
-    if (tcq_bt_buf) cudaFree(tcq_bt_buf);
-    cudaMalloc(&tcq_bt_buf, bytes_needed);
+    if (tcq_bt_buf) (void) cudaFree(tcq_bt_buf);
+    (void) cudaMalloc(&tcq_bt_buf, bytes_needed);
     tcq_bt_buf_bytes = bytes_needed;
 }
 
