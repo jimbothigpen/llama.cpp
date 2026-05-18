@@ -52,6 +52,20 @@ static bool ggml_type_is_turboq_tcq(enum ggml_type t) {
     return t == GGML_TYPE_TURBOQ3_TCQ || t == GGML_TYPE_TURBOQ2_TCQ;
 }
 
+static bool ggml_type_is_turboq_innerq(enum ggml_type t) {
+    return t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ;
+}
+
+#define INNERQ_MAX_CHANNELS 128  // must match turbo-innerq.cuh INNERQ_MAX_CHANNELS
+
+#ifdef GGML_USE_CUDA
+// Cross-TU InnerQ symbols from turbo-innerq.cu (CUDA backend).
+// Cannot include turbo-innerq.cuh directly from a plain C++ file.
+extern bool  turbo_innerq_needs_tensor_update(void);
+extern void  turbo_innerq_mark_tensor_updated(void);
+extern float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS];
+#endif
+
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
@@ -150,7 +164,7 @@ llama_kv_cache::llama_kv_cache(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer_kv*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer_kv*ggml_tensor_overhead() + ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -199,6 +213,7 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     bool la_log_emitted = false;  // log TURBO_LAYER_ADAPTIVE banner once per kv_cache construction (fit probe + real run each get their own banner)
+    ggml_backend_buffer_type_t innerq_buft = nullptr;  // buft of first INNERQ layer, for scale_inv tensor placement
     for (uint32_t il = 0; il < hparams.n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -247,8 +262,8 @@ llama_kv_cache::llama_kv_cache(
         // TurboQuant requires head_dim (n_embd_head_k) divisible by 128.
         // For models with non-128-aligned heads (e.g. DeepSeek2 MLA with head_dim=192/576),
         // fall back to q8_0 with a clear message instead of asserting later.
-        const bool is_turbo_type = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ ||
-                                    type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ);
+        const bool is_turbo_type = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ || ggml_type_is_turboq_innerq(type_k) ||
+                                    type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ || ggml_type_is_turboq_innerq(type_v));
         const uint32_t n_embd_head_k_layer = hparams.n_embd_head_k(il);
         if (is_turbo_type && n_embd_head_k_layer % 128 != 0) {
             if (il == 0) {
@@ -280,8 +295,8 @@ llama_kv_cache::llama_kv_cache(
         {
             const char * env = getenv("TURBO_LAYER_ADAPTIVE");
             const int adaptive_mode = env ? atoi(env) : 0;
-            const bool is_turbo = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ);
-            const bool v_is_turbo = (type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ);
+            const bool is_turbo = (type_k == GGML_TYPE_TURBOQ2_0 || type_k == GGML_TYPE_TURBOQ3_0 || type_k == GGML_TYPE_TURBOQ4_0 || type_k == GGML_TYPE_TURBOQ2_TCQ || type_k == GGML_TYPE_TURBOQ3_TCQ || ggml_type_is_turboq_innerq(type_k));
+            const bool v_is_turbo = (type_v == GGML_TYPE_TURBOQ2_0 || type_v == GGML_TYPE_TURBOQ3_0 || type_v == GGML_TYPE_TURBOQ4_0 || type_v == GGML_TYPE_TURBOQ2_TCQ || type_v == GGML_TYPE_TURBOQ3_TCQ || ggml_type_is_turboq_innerq(type_v));
             const uint32_t n_layer = hparams.n_layer;
             if (!la_log_emitted && adaptive_mode > 0) {
                 LLAMA_LOG_INFO("%s: layer-adaptive mode %d enabled (TURBO_LAYER_ADAPTIVE)\n", __func__, adaptive_mode);
@@ -308,6 +323,10 @@ llama_kv_cache::llama_kv_cache(
             }
         }
 
+        if (!innerq_buft && (ggml_type_is_turboq_innerq(layer_type_k) || ggml_type_is_turboq_innerq(layer_type_v))) {
+            innerq_buft = buft;
+        }
+
         const bool has_k = true;
         const bool has_v = !is_mla;
 
@@ -328,6 +347,13 @@ llama_kv_cache::llama_kv_cache(
         map_layer_ids[il] = layers.size();
 
         layers.push_back({ il, k, v, k_stream, v_stream, });
+    }
+
+    // Create per-channel InnerQ scale_inv tensor if any INNERQ KV type is in use.
+    if (innerq_buft) {
+        ggml_context * ctx = ctx_for_buft(innerq_buft);
+        turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, INNERQ_MAX_CHANNELS);
+        ggml_format_name(turbo_innerq_scale_inv, "innerq_scale_inv");
     }
 
     if (reuse) {
@@ -374,6 +400,14 @@ llama_kv_cache::llama_kv_cache(
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
+
+    // Initialize InnerQ scale_inv to identity (1.0f) — calibration starts uncorrected.
+#ifdef GGML_USE_CUDA
+    if (turbo_innerq_scale_inv && !model.hparams.no_alloc) {
+        std::vector<float> ones(INNERQ_MAX_CHANNELS, 1.0f);
+        ggml_backend_tensor_set(turbo_innerq_scale_inv, ones.data(), 0, sizeof(float) * INNERQ_MAX_CHANNELS);
+    }
+#endif
 
     {
         const size_t memory_size_k = size_k_bytes();
@@ -917,6 +951,14 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
         }
     }
 
+#ifdef GGML_USE_CUDA
+    if (turbo_innerq_scale_inv && turbo_innerq_needs_tensor_update()) {
+        ggml_backend_tensor_set(turbo_innerq_scale_inv, g_innerq_scale_inv_host, 0, sizeof(float) * INNERQ_MAX_CHANNELS);
+        turbo_innerq_mark_tensor_updated();
+        updated = true;
+    }
+#endif
+
     return updated;
 }
 
@@ -1362,6 +1404,10 @@ uint32_t llama_kv_cache::get_n_used() const {
 
 bool llama_kv_cache::get_v_trans() const {
     return v_trans;
+}
+
+ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
+    return turbo_innerq_scale_inv;
 }
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
@@ -2723,6 +2769,10 @@ ggml_type llama_kv_cache_context::type_k() const {
 
 ggml_type llama_kv_cache_context::type_v() const {
     return kv->type_v();
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
+    return kv->get_turbo_innerq_scale_inv();
 }
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {

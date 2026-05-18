@@ -5,6 +5,12 @@
 #include "fattn-vec.cuh"
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
+#include "turbo-innerq.cuh"
+
+// InnerQ per-channel scale_inv (identity until calibration finalizes).
+// Accessed cross-TU via extern __device__ in turbo-innerq-buun-stubs.cu when
+// GGML_INNERQ_FA_DEVICE_SCALES is defined (requires -fgpu-rdc, Phase X-4).
+static __device__ float d_innerq_channel_scale_inv_fattn[INNERQ_MAX_CHANNELS];
 
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -379,6 +385,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,         GGML_TYPE_TURBOQ2_TCQ)
 
+    // TURBOQ_INNERQ KV cache types (wire format == 0-tier; InnerQ scale applied at graph level, Phase X-4)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_INNERQ, GGML_TYPE_TURBOQ2_INNERQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_TURBOQ3_INNERQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_INNERQ, GGML_TYPE_TURBOQ4_INNERQ)
+
     GGML_ABORT("fatal error");
 }
 
@@ -481,6 +492,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         auto is_kv_compat = [](ggml_type t) {
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
                 || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
+                || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16;
         };
         if (!is_kv_compat(K->type) || !is_kv_compat(V->type)) {
@@ -508,6 +520,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_TURBOQ4_0:
         case GGML_TYPE_TURBOQ2_TCQ:
         case GGML_TYPE_TURBOQ3_TCQ:
+        case GGML_TYPE_TURBOQ2_INNERQ:
+        case GGML_TYPE_TURBOQ3_INNERQ:
+        case GGML_TYPE_TURBOQ4_INNERQ:
             // turbo VEC kernels instantiated for D in {64, 128, 256}.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
@@ -527,7 +542,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // for turbo KV falls through to NONE (per buun 0d52fe00e bug #4).
     auto is_turbo_type = [](ggml_type t) {
         return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
-            || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ;
+            || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
+            || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ;
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
         if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
