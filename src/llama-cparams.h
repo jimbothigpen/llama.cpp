@@ -42,10 +42,11 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
-    bool mtp = false;
 
-    enum llama_context_type ctx_type;
-    enum llama_mtp_op_type mtp_op_type = MTP_OP_NONE;
+    enum llama_context_type ctx_type    = LLAMA_CONTEXT_TYPE_DEFAULT;
+    // derived from ctx_type; kept for src/models/qwen35*.cpp until Phase B lands
+    bool mtp = false;
+    enum llama_mtp_op_type  mtp_op_type = MTP_OP_NONE;
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;

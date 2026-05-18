@@ -394,8 +394,7 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-        bool mtp;                           // activate MTP if supported by the model
-        enum llama_mtp_op_type mtp_op_type; // which MTP op to run on the next decode (none/warmup/update_accepted/draft_gen)
+        enum llama_context_type ctx_type; // set the context type (e.g. MTP)
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -1004,9 +1003,6 @@ extern "C" {
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
-
-    // Set which, if any, MTP operation the context will perform on the next decode.
-    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     // Provide the draft input hidden state for an MTP_OP_DRAFT_GEN pass.
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
