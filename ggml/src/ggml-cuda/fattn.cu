@@ -263,13 +263,19 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE(128, type_K, type_V)       \
     FATTN_VEC_CASE(256, type_K, type_V)       \
 
+#define FATTN_VEC_CASES_ALL_D_512(type_K, type_V) \
+    FATTN_VEC_CASE( 64, type_K, type_V)           \
+    FATTN_VEC_CASE(128, type_K, type_V)           \
+    FATTN_VEC_CASE(256, type_K, type_V)           \
+    FATTN_VEC_CASE(512, type_K, type_V)           \
+
 static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_tensor * Q = dst->src[0];
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
 
 #ifdef GGML_CUDA_FA_ALL_QUANTS
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_F16)
@@ -314,7 +320,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q8_0)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_BF16)
@@ -325,47 +331,47 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
 #else
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     // TurboQuant2 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ2_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ2_0)
     // Mixed turboq2/q8_0
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ2_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ2_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ2_0)
     // Mixed f16/turboq2
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_TURBOQ2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,       GGML_TYPE_TURBOQ2_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ2_0, GGML_TYPE_F16)
 
     // TurboQuant3 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ3_0)
     // Mixed turboq3/q8_0
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ3_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ3_0)
     // Mixed f16/turboq3
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,       GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ3_0, GGML_TYPE_F16)
     // Mixed turboq2/turboq3
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_0)
 
     // TurboQuant4 KV cache types
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ4_0)
     // Mixed turboq4/q8_0
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ4_0)
     // Mixed f16/turboq4
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,       GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,       GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_F16)
     // Mixed turboq3/turboq4
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ3_0)
     // Mixed turboq2/turboq4
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ2_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ2_0)
 
     // TURBOQ3_TCQ KV cache types
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ3_TCQ)
@@ -470,9 +476,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             if (V->ne[0] != K->ne[0]) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            if (!gqa_opt_applies) {
-                return BEST_FATTN_KERNEL_NONE;
-            }
             break;
         case 576:
             if (V->ne[0] != 512) {
@@ -523,7 +526,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_TURBOQ2_INNERQ:
         case GGML_TYPE_TURBOQ3_INNERQ:
         case GGML_TYPE_TURBOQ4_INNERQ:
-            // turbo VEC kernels instantiated for D in {64, 128, 256}.
+            // TURBOQ{2,3,4}_0 VEC kernels instantiated for D in {64, 128, 256, 512};
+            // TCQ and INNERQ top at D=256.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -546,7 +550,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ;
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
-        if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
+        const bool tcq_kv = K->type == GGML_TYPE_TURBOQ2_TCQ || K->type == GGML_TYPE_TURBOQ3_TCQ ||
+                            V->type == GGML_TYPE_TURBOQ2_TCQ || V->type == GGML_TYPE_TURBOQ3_TCQ;
+        const bool innerq_kv = K->type == GGML_TYPE_TURBOQ2_INNERQ || K->type == GGML_TYPE_TURBOQ3_INNERQ || K->type == GGML_TYPE_TURBOQ4_INNERQ ||
+                               V->type == GGML_TYPE_TURBOQ2_INNERQ || V->type == GGML_TYPE_TURBOQ3_INNERQ || V->type == GGML_TYPE_TURBOQ4_INNERQ;
+        const int d_limit = (tcq_kv || innerq_kv) ? 256 : 512;
+        if (Q->ne[0] <= d_limit && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
             return BEST_FATTN_KERNEL_VEC;
         }
         return BEST_FATTN_KERNEL_NONE;
