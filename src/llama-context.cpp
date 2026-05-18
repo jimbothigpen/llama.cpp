@@ -192,6 +192,7 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
     cparams.ctx_type   = params.ctx_type;
+    cparams.n_rs_seq   = params.n_rs_seq;
 
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.hparams.nextn_predict_layers == 0 &&
         model.arch != LLM_ARCH_GEMMA4_ASSISTANT) {

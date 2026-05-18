@@ -196,7 +196,6 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     } else {
         // seq_id is negative, then the range should include everything or nothing
         if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
-            //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: `seq_id` is negative, so returning false\n");
             return false;
         }
     }
@@ -217,14 +216,10 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
                 cells[i].pos = -1;
                 cells[i].src = -1;
-                // Zero the recurrent state of the freed cell. The in-graph
-                // rs_zero mechanism in build_rs is meant to clear reused cells,
-                // but when a fresh sequence reuses this exact cell it does not
-                // reliably take effect before the state is read — the cell
-                // would otherwise carry stale SSM/conv state from the previous
-                // sequence (manifested as progressively degenerate output on
-                // a server's 2nd+ request). Zero it here so any reuse starts
-                // from a clean recurrent state.
+                // 55b386603: zero the recurrent state of the freed cell to prevent
+                // stale SSM/conv state from leaking into the next server request.
+                // Mainline's n_rs_seq snapshot rollback doesn't subsume this —
+                // that handles MTP draft rejection; this handles session boundary cleanup.
                 for (size_t il = 0; il < s_l.size(); ++il) {
                     if (r_l[il]) {
                         const size_t nb = r_l[il]->nb[1];
@@ -757,8 +752,8 @@ size_t llama_memory_recurrent::size_s_bytes() const {
 void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
-    std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
-    std::vector<std::pair<uint32_t, uint32_t>> cell_ranges_data; // logical source row ranges
+    std::vector<std::pair<uint32_t, uint32_t>> cell_ranges;      // ranges, from inclusive, to exclusive
+    std::vector<std::pair<uint32_t, uint32_t>> cell_ranges_data; // logical source row ranges (adjusted for rs_idx snapshot plane)
     uint32_t cell_count = 0;
 
     // Count the number of cells with the specified seq_id
@@ -1275,8 +1270,7 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
         const llama_seq_id seq = *mem->cells[cell_idx].seq_id.begin();
         if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
             idx = mem->rs_idx[seq];
-            // reset rollback idx
-            mem->rs_idx[seq] = 0;
+            mem->rs_idx[seq] = 0; // reset rollback idx after consuming
         }
     }
     return (int32_t)(idx * mem->size) + src0;
