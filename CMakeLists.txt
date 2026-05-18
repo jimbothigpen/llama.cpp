@@ -61,6 +61,13 @@ endif()
 
 option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
 
+# Each /opt install cell must load its own libggml.so / libggml-*.so, not a sibling cell's.
+# Without $ORIGIN/../lib, the linker falls back to ldconfig which may resolve a different cell first.
+if (UNIX AND BUILD_SHARED_LIBS AND NOT EMSCRIPTEN)
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif()
+
 if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
