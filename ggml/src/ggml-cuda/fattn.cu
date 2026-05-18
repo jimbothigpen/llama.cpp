@@ -573,7 +573,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // RQ (RotorQuant) V types are VEC-only; extend D cap to 512 for Gemma-4 full-attention layers.
+    const bool v_is_rq_type =
+        V->type == GGML_TYPE_RQ_PLANAR3_0 || V->type == GGML_TYPE_RQ_PLANAR4_0
+     || V->type == GGML_TYPE_RQ_ISO3_0    || V->type == GGML_TYPE_RQ_ISO4_0;
+    const int max_d_for_vec = v_is_rq_type ? 512 : 256;
+    const bool can_use_vector_kernel = Q->ne[0] <= max_d_for_vec && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
 #ifdef GGML_USE_HIP
     // HIP/ROCm: TILE/MMA/WMMA FA paths allocate unbounded f16 temp buffers for
@@ -583,6 +588,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC;
     }
 #endif // GGML_USE_HIP
+
+    // RQ V types only have VEC kernel instances; TILE/MMA paths lack RQ dequant.
+    // Return NONE when VEC is unavailable so the scheduler falls cleanly to CPU FA.
+    if (v_is_rq_type && !can_use_vector_kernel) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
