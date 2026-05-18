@@ -103,6 +103,11 @@ struct llama_context {
     void         set_mtp_target_seq_id(llama_seq_id seq_id);
     llama_seq_id get_mtp_target_seq_id() const;
 
+    // E3b chain logits: returns pointer into mtp_chain_logits[chain_depth] at flat index i.
+    // Only valid after an MTP context decode; returns nullptr if chain_depth >= mtp_chain_depth.
+    float * get_mtp_chain_logits_ith(int32_t chain_depth, int32_t i);
+    int32_t get_mtp_chain_depth() const;
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -380,6 +385,10 @@ private:
     // foreign-KV attention, and the seq_id its KV cells were written under.
     llama_context * mtp_target_ctx    = nullptr;
     llama_seq_id    mtp_target_seq_id = -1;
+
+    // E3b: chain logit CPU buffers + depth; populated after each MTP context decode
+    std::vector<float> mtp_chain_logits[llm_graph_result::MTP_CHAIN_MAX];
+    int32_t            mtp_chain_depth = 0;
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 

@@ -1741,6 +1741,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const int64_t n_vocab = vocab.n_tokens();
     const int64_t n_embd  = hparams.n_embd_inp();
 
+    mtp_chain_depth = 0;
+
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
@@ -1941,6 +1943,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 if (!sidecars->empty()) {
                     sidecars_post_compute_pending = true;
                 }
+            }
+        }
+
+        // extract MTP chain logits (E3b Phase 2-Extend-C: only in MTP context graph_mtp decodes)
+        if (cparams.mtp && res->t_logits_mtp_chain[0] != nullptr && n_outputs > 0) {
+            mtp_chain_depth = 0;
+            for (int k = 0; k < llm_graph_result::MTP_CHAIN_MAX; ++k) {
+                ggml_tensor * t_chain = res->t_logits_mtp_chain[k];
+                if (!t_chain) { break; }
+                ggml_backend_t backend_chain = ggml_backend_sched_get_tensor_backend(sched.get(), t_chain);
+                if (!backend_chain) { break; }
+                const int64_t chain_n_tok = t_chain->ne[1];
+                mtp_chain_logits[k].resize(n_vocab * chain_n_tok);
+                ggml_backend_tensor_get_async(backend_chain, t_chain,
+                    mtp_chain_logits[k].data(), 0, n_vocab * chain_n_tok * sizeof(float));
+                mtp_chain_depth = k + 1;
             }
         }
 
@@ -3789,6 +3807,33 @@ uint32_t llama_get_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
+}
+
+float * llama_context::get_mtp_chain_logits_ith(int32_t chain_depth, int32_t i) {
+    if (chain_depth < 0 || chain_depth >= mtp_chain_depth) {
+        return nullptr;
+    }
+    const auto & buf = mtp_chain_logits[chain_depth];
+    if (i < 0 || (int64_t)i >= (int64_t)buf.size()) {
+        return nullptr;
+    }
+    return const_cast<float *>(buf.data()) + i;
+}
+
+int32_t llama_context::get_mtp_chain_depth() const {
+    return mtp_chain_depth;
+}
+
+float * llama_get_mtp_chain_logits_ith(llama_context * ctx, int32_t chain_depth, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_mtp_chain_logits_ith(chain_depth, i);
+}
+
+int32_t llama_get_mtp_chain_depth(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_mtp_chain_depth();
 }
 
 uint32_t llama_get_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
