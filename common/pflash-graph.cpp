@@ -197,8 +197,16 @@ pflash_scorer_result pflash_score(
         return result;
     }
 
-    // Fill token ID input
-    ggml_backend_tensor_set(inp_tokens, token_ids.data(), 0, S * sizeof(int32_t));
+    // Fill token ID input — clamp any out-of-range IDs to [0, n_vocab-1].
+    // The main model may have a larger vocabulary than the scorer (e.g. Qwen3.5-9B
+    // has 248320 tokens vs Qwen3-0.6B's 151936). Out-of-range IDs map to token 0;
+    // they produce noisy scores but don't crash. S4 will require tokenizer alignment.
+    const int32_t n_vocab_max = (int32_t)(model.n_vocab - 1);
+    std::vector<int32_t> clamped_ids(token_ids.size());
+    for (int i = 0; i < S; i++) {
+        clamped_ids[i] = std::max(0, std::min(token_ids[i], n_vocab_max));
+    }
+    ggml_backend_tensor_set(inp_tokens, clamped_ids.data(), 0, S * sizeof(int32_t));
 
     enum ggml_status status = ggml_backend_graph_compute(backend, gf);
     if (status != GGML_STATUS_SUCCESS) {
