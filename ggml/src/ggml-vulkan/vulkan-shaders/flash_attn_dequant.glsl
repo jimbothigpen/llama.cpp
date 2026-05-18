@@ -43,6 +43,11 @@ layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq da
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } k_packed_turboq3_tcq;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } v_packed_turboq3_tcq;
 
+// BF16 is read as uvec2 blocks (4 brain-float16 values packed as 2 uint32s).
+// No struct needed: each uvec2 holds [bf16[0]|bf16[1]] in .x and [bf16[2]|bf16[3]] in .y.
+layout (binding = 1) readonly buffer K_PACKED_BF16 { uvec2 data[]; } k_packed_bf16;
+layout (binding = 2) readonly buffer V_PACKED_BF16 { uvec2 data[]; } v_packed_bf16;
+
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
 layout (binding = 1) readonly buffer K_PACKED_Q4_1_P32 { block_q4_1_packed32 data[]; } k_packed_q4_1_p32;
@@ -202,6 +207,9 @@ const float T4C[16] = float[16](
                         T4C[(qb1)      & 0xFu], T4C[(qb1 >> 4) & 0xFu]);                          \
 }
 
+// bf16_to_fp32 is defined in types.glsl; takes BF16 value in lower 16 bits of uint32.
+#define FA_DEQUANT4_BF16(BUF) {     uvec2 blk = BUF.data[a_offset + ib];     return FLOAT_TYPEV4(bf16_to_fp32(blk.x & 0xFFFFu), bf16_to_fp32(blk.x >> 16),                         bf16_to_fp32(blk.y & 0xFFFFu), bf16_to_fp32(blk.y >> 16)); }
+
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
         switch (FaTypeK) {
@@ -216,6 +224,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(k_packed_turboq3_tcq)
+            case FA_TYPE_BF16:        FA_DEQUANT4_BF16         (k_packed_bf16)
         }
     } else {
         switch (FaTypeV) {
@@ -230,6 +239,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(v_packed_turboq3_tcq)
+            case FA_TYPE_BF16:        FA_DEQUANT4_BF16         (v_packed_bf16)
         }
     }
     return FLOAT_TYPEV4(0);
