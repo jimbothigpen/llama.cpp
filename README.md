@@ -288,6 +288,11 @@ on Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path,
 not the output distribution, so there is no PPL gate — correctness is
 verified by output coherence plus accept rate.
 
+**CLI binaries:** Speculative MTP decoding requires an MTP-aware binary.
+- `llama-server --spec-type mtp` (shown above) triggers MTP speculative.
+- `llama-speculative-simple --mtp` (simple-speculative loop) also works for internal MTP.
+- **`llama-cli --mtp` alone does NOT trigger speculative decoding** — the `--mtp` flag on `llama-cli` loads the MTP model but uses standard autoregressive generation. For ~2× speedup via draft acceptance, use `llama-speculative-simple --mtp` or `llama-server --spec-type mtp`.
+
 **Divergence note:** Gemma 4 external-assistant MTP (`_external` context type,
 666 LoC) has no mainline equivalent and is kept as a deliberate yggdrasil
 divergence per `conventions/port-fidelity-to-mainline-llamacpp.md §D1`.
