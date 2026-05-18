@@ -30,15 +30,12 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 > Yggdrasil: the Norse world-tree where many branches converge at the trunk.
 
-**Status:** Phases 0, 0.5, 0.7, **and 1 COMPLETE** (as of milestone
-[`phase-1-turboquant-kv-foundation`](../../releases/tag/milestone%2Fphase-1-turboquant-kv-foundation)).
-Tree currently delivers the TurboQuant KV cache foundation (2-/3-/4-bit
-PolarQuant KV types + WHT-rotated weight quants) on ROCm + Vulkan, plus
-the sidecar plugin engine from Phase 0.7. **Phase 2 (MTP spec-decode spine)
-is merged to `main`** — the upstream-style MTP driver layer, internal
-qwen35/qwen35moe NextN-tail MTP, and the foreign-KV Gemma 4 external-assistant
-MTP — with a milestone tag still pending. See
-[What's available now](#whats-available-now) for usage.
+**Status:** Phases 0, 0.5, 0.7, 1, 2, and 3 COMPLETE — **v326 (`9ffaa0967`)** on
+`main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
+types) are merged to `/opt`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
+(PFlash prompt compression) has a working placeholder implementation on a feature
+branch. See [What's available now](#whats-available-now) and
+[In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What yggdrasil is and isn't
 
@@ -46,27 +43,34 @@ MTP — with a milestone tag still pending. See
 upstream on a regular cadence, layering vetted work from five contributing
 forks plus selective backports from ik_llama.
 
-**Isn't:** a patch-set distribution, a temporary branch, or a competitor to
-mainline. Yggdrasil exists to consolidate features that mainline doesn't
-yet absorb but that the community has already implemented in disparate
-forks.
+**Isn't:** a patch-set distribution, a temporary branch, a competitor to
+mainline, or a candidate for upstream contribution. Yggdrasil exists to
+consolidate features that mainline doesn't yet absorb but that the community
+has already implemented in disparate forks. Per project policy, no AI-generated
+code is proposed for upstream submission.
+
+The standing constraint is **mainline fidelity**: diverge only when measurably
+better, document every deliberate divergence, and sync regularly. Most
+yggdrasil commits are either mainline cherry-picks or mechanical ports from
+sibling forks rebased onto mainline's architecture.
 
 ## Contributing forks
 
 | Fork | Role in yggdrasil | Activity |
 |---|---|---|
 | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | **Base** — yggdrasil rebases against mainline regularly | upstream-of-everything |
-| [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | TurboQuant KV cache (`TURBOQ{2,3,4}_0`), WHT weight quants, alpha-scaling, asymmetric K/V, Metal TurboFlash, Vulkan SET_ROWS | active |
-| [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), DFlash drafter, PFlash prompt compression | active |
-| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | PrismML 1-bit (`Q1_0_G128`), RotorQuant KV (`RQ_*`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
-| [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) | RaBitQ TQ3 weight quants (`RBQ3_*`), ik_llama MTP ported to mainline | recent |
+| [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | TurboQuant KV cache (`TURBOQ{2,3,4}_0`), WHT weight quants, alpha-scaling, asymmetric K/V, InnerQ calibrated KV (`TURBOQ{2,3,4}_INNERQ`) | active |
+| [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), PFlash prompt compression | active (DFlash paused — see beellama) |
+| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | RotorQuant KV V-cache (`RQ_*`), PrismML 1-bit (`Q1_0_G128`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
+| [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) | RaBitQ TQ3 weight quants (`RBQ3_*`); MTP research | recent |
 | [domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip) | TriAttention KV compression with GPU scoring, `--hugepages` | moderate |
 | [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) | IK quants (IQ\*_K, IQ\*_KS), BitNet, MLA / FlashMLA, fused MoE, ongoing MTP improvements | very active; **not a git merge source** — see [docs/IK_LLAMA_PORTS.md](docs/IK_LLAMA_PORTS.md) |
+| [Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp) | DFlash spec-decode — monitoring only; hardened implementation + DDTree algorithm; revival candidate when drafter GGUF sourcing resolves | active; monitoring |
 
 Forks deliberately excluded:
 
 - **groxaxo/llama.cpp-tq3** — stale mirror of turbo-tan with no novel commits.
-- **domvox's TurboQuant KV / HIP work** — superseded by TheTom catching up on HIP. Only domvox's triattention branch is pulled in.
+- **domvox's TurboQuant KV / HIP work** — superseded by TheTom catching up on HIP. Only domvox's triattention branch is tracked.
 
 ## Architecture: layer stack
 
@@ -82,52 +86,54 @@ cross-backend PPL matches within tolerance. See
 | 0 | Type-ID contract + PPL regression harness (dual-backend) | this project | **complete** |
 | 0.5 | ik_llama architectural recon + EAGLE3 recon | this project | **complete** |
 | 0.7 | Sidecar plugin engine (~355 LoC, backend-agnostic) — runtime adapters at residual-stream / MoE-expert / post-logits / weight-delta hook points; out-of-tree `.so` plugins | this project | **complete** |
-| 1 | TurboQuant KV foundation (TURBOQ2/3/4_0 + WHT3/4_0 + Boundary V) | TheTom `feature/turboquant-kv-cache` | **complete (milestone tag `phase-1-turboquant-kv-foundation`)** |
-| 2 | MTP spec-decode spine — upstream-style MTP driver layer; internal qwen35/qwen35moe NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP | mainline `#22738` (gemma4-assistant) + upstream MTP-driver pattern | **merged to `main`** (milestone tag pending) |
-| 3 | TCQ KV | buun `master` | pending |
-| 4 | TriAttention | domvox `feature/triattention-scoring` | pending |
-| 5 | Carlosfundora bundle (1-bit, RotorQuant, EAGLE3, PHANTOM-X, TurboMind, Wave32) | carlosfundora `1-bit-turbo` | pending |
-| 6 | ik_llama subsystem backports (IK quants, MLA, BitNet, fused MoE, MTP perf) | ik_llama (one subsystem at a time) | pending |
-| 7 | RaBitQ TQ3 weight quants | turbo-tan `main` | pending |
-| 8 | DFlash/PFlash as spec-decode strategies | buun SD-* branches | pending |
-| 9 | Polish (TURBO_ALPHA env-var defaults, --hugepages, gfx1030 norm) | mixed | pending |
+| 1 | TurboQuant KV foundation (TURBOQ2/3/4_0 + WHT3/4_0 + layer-adaptive + Boundary V) | TheTom `feature/turboquant-kv-cache` | **complete (milestone `phase-1-turboquant-kv-foundation`)** |
+| 2 | MTP spec-decode — mainline-aligned driver layer; internal Qwen3.5/MoE NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP | mainline PR #22673 + mainline `#22738` (gemma4-assistant) | **complete (milestone `phase-2-gemma4-mtp`)** |
+| 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
+| 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | yggdrasil port | **complete (main v307)** |
+| 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; yggdrasil port | **merged to main; ROCm RDC-enable pending (`feature/innerq-rdc-enable`); Vulkan gap documented** |
+| 4a | RotorQuant V-cache — planar3/4 + iso3/4 (`RQ_*`) | carlosfundora | **in-flight — planar PPL gate passing; iso3/iso4 blocked on FA decoder (Phase 4a-1)** |
+| 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
+| 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
+| 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
+| 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
+| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **in-flight — placeholder scorer mode on `feature/pflash-1a` (20× TTFT speedup); real scorer (1b) pending** |
+| 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
+| 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
 
 Each layer's Vulkan port is scheduled per its priority in
 [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md). No upstream fork has
 Vulkan implementations for novel features, so yggdrasil bears the Vulkan
 port burden in-house.
-
 ## What's available now
 
-As of milestone `phase-1-turboquant-kv-foundation`, the following types
-are usable on both ROCm and Vulkan (gfx1150 first-class; gfx1102/1103
-Vulkan supported, ROCm regression-smoke only).
+As of **v326 (`9ffaa0967`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
 
-### TurboQuant KV cache types (no model re-quantization required)
+---
 
-These are KV cache types — pass them to `--cache-type-k` / `--cache-type-v`
-on any existing GGUF model whose `head_dim` is a multiple of 128. The KV
-cache is quantized at runtime via `SET_ROWS`; the weights of the model
-stay whatever quantization the GGUF was built with.
+### TurboQuant KV cache types (`TURBOQ{2,3,4}_0`) — Phase 1
 
-| Type | Bits | Block | Compression vs fp16 KV | Notes |
+Calibration-free KV compression. Pass to `--cache-type-k` / `--cache-type-v`
+on any GGUF whose `head_dim` is a multiple of 128. The KV cache is quantized
+at runtime via `SET_ROWS`; model weights are unchanged.
+
+| Type | Bits | Block | Compression vs fp16 | Notes |
 |---|---|---|---|---|
-| `turboq2` (`GGML_TYPE_TURBOQ2_0`, slot 60) | 2.125 | 128 (one block per rotation group) | ~7.5× | 4-centroid PolarQuant, no QJL |
-| `turboq3` (`GGML_TYPE_TURBOQ3_0`, slot 61) | 3.125 | 128 | ~5.1× | 2-bit PolarQuant + 1-bit QJL signs |
-| `turboq4` (`GGML_TYPE_TURBOQ4_0`, slot 62) | 4.25 | 128 | ~3.8× | 4-bit PolarQuant (default mode) |
+| `turboq2` (slot 60) | 2.125 | 128 | ~7.5× | 4-centroid PolarQuant, no QJL |
+| `turboq3` (slot 61) | 3.125 | 128 | ~5.1× | 2-bit PolarQuant + 1-bit QJL signs |
+| `turboq4` (slot 62) | 4.25 | 128 | ~3.8× | 4-bit PolarQuant |
 
 Example:
 ```bash
-llama-perplexity --no-mmap -fa on \
-    -m Qwen3.5-9B-BF16.gguf \
-    -f wikitext-2-raw-test.txt \
+llama-cli --no-mmap -fa on \
+    -m Qwen3.5-9B-Q4_K_M.gguf \
     --cache-type-k turboq3 --cache-type-v turboq3 \
-    -c 512 --chunks 32 -ngl 99
+    -c 4096 -ngl 99
 ```
 
-PPL gates on Qwen3.5-9B-BF16 (32 chunks, c=512, wikitext-2-raw-test):
+PPL gates (Qwen3.5-9B-BF16, 32 chunks, c=512, wikitext-2-raw-test;
+**legacy methodology** — current PPL harness uses c=4096, see [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md)):
 
-| KV type | ROCm PPL | Vulkan PPL | Cross-backend Δ | vs F16 KV baseline 6.8168 |
+| KV type | ROCm PPL | Vulkan PPL | Cross-backend Δ | vs F16 KV 6.8168 |
 |---|---|---|---|---|
 | `turboq2` | 7.8041 | 7.8059 | +0.023% | +14.5% |
 | `turboq3` | 7.5939 | 7.6065 | +0.17% | +11.4% |
@@ -143,38 +149,108 @@ PPL gates on Qwen3.5-9B-BF16 (32 chunks, c=512, wikitext-2-raw-test):
 
 Default is off (uniform precision); each non-zero mode is an explicit opt-in.
 
-### WHT-rotated weight quants (requires re-quantization)
+---
 
-These are weight quantization types — re-quantize your model with
-`llama-quantize` to get a smaller GGUF. **An imatrix is required** for
-these types (ADR-016); see the `--imatrix` flag in `llama-imatrix` and
-`llama-quantize`.
+### TCQ KV cache types (`TURBOQ{2,3}_TCQ`) — Phase 3
+
+Trellis Coded Quantization KV cache. Same CLI interface as TurboQuant_0 types;
+higher per-bit quality from the Viterbi-coded codebook at the cost of a slower
+encode step.
+
+| Type | Bits | Block | Compression vs fp16 | Notes |
+|---|---|---|---|---|
+| `turboq2_tcq` (slot 66) | 2.125 | 128 | ~7.5× | TCQ2 Viterbi codebook |
+| `turboq3_tcq` (slot 67) | 3.125 | 128 | ~5.1× | TCQ3 Viterbi codebook |
+
+Example:
+```bash
+llama-cli --no-mmap -fa on \
+    -m Qwen3.5-9B-Q4_K_M.gguf \
+    --cache-type-k turboq2_tcq --cache-type-v turboq2_tcq \
+    -c 4096 -ngl 99
+```
+
+PPL anchors (Qwen3.5-9B-Q4_K_M, n_seq=1, c=4096, wikitext-2-raw-test):
+
+| KV type | ROCm PPL | vs F16 KV 6.49 | Vulkan notes |
+|---|---|---|---|
+| F16 (baseline) | 6.49 | — | Vulkan F16 ≈ 6.55 |
+| `turboq2_tcq` | 6.53 ± 0.079 | +0.6% | Asymmetric K=TCQ2, V=F16 on Vulkan (RADV constraint) |
+| `turboq3_tcq` | 6.90 ± 0.053 | +6.3% | Asymmetric K=TCQ3, V=F16 on Vulkan (RADV constraint) |
+
+**Vulkan note:** The FA uber-shader on RADV PHOENIX (gfx1103) faults when
+both K and V are TCQ-typed. The αA fix (Phase 3c) works around this by
+pre-dequantizing V to F16 before FA dispatch, making Vulkan TCQ asymmetric
+(`K=TCQ, V=F16`) by design. ROCm uses the symmetric `K=V=TCQ` path.
+
+---
+
+### InnerQ KV types (`TURBOQ{2,3,4}_INNERQ`) — Phase 3d
+
+Calibrated KV quantization types. Unlike TurboQuant_0 and TCQ (which run on
+any model), InnerQ uses per-model calibration data collected by a CUDA
+calibration engine (`d_innerq_*` kernels from TheTom). Calibration is
+one-time and stored alongside the GGUF.
+
+| Type | Bits | Block | Notes |
+|---|---|---|---|
+| `turboq2_innerq` (slot 68) | 2.125 | 128 | Calibrated 2-bit |
+| `turboq3_innerq` (slot 69) | 3.125 | 128 | Calibrated 3-bit |
+| `turboq4_innerq` (slot 70) | 4.25 | 128 | Calibrated 4-bit |
+
+**Backend support:** CUDA/HIP type traits, calibration engine, and FA-vec
+dispatch are on `main`. ROCm RDC (separable compilation) required for the
+calibration engine is pending default enablement (`feature/innerq-rdc-enable`,
+PPL gate passed). Vulkan support is not yet implemented (gap documented).
+
+---
+
+### WHT-rotated weight quants — Phase 1
+
+Weight quantization types requiring re-quantization and an imatrix.
 
 | Type | Bits/value | Block | Backends | Notes |
 |---|---|---|---|---|
-| `WHT3_0` (slot 80) | ~3 | 32 | CPU + CUDA/HIP | Vulkan port deferred (no TQ3_1S shaders in upstream sources; tracked as a yggdrasil-original future port) |
+| `WHT3_0` (slot 80) | ~3 | 32 | CPU + CUDA/HIP + Vulkan | |
 | `WHT4_0` (slot 81) | ~4 | 32 | CPU + CUDA/HIP + Vulkan | 5.18 BPW; PPL beats `Q4_K_M` by ~1% at slightly higher BPW |
 
 Example (Qwen3.5-9B-F16 → WHT4_0):
 ```bash
-# 1. Compute imatrix on a calibration corpus
 llama-imatrix -m Qwen3.5-9B-F16.gguf -f calibration.txt -o imatrix.dat
 
-# 2. Quantize with imatrix
 llama-quantize --imatrix imatrix.dat \
     Qwen3.5-9B-F16.gguf Qwen3.5-9B-WHT4_0.gguf WHT4_0
 ```
 
-PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test):
+PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test;
+**legacy methodology**):
 
-| Backend | PPL | vs F16 weights 6.8168 | vs Q4_K_M 7.6278 (4.5 BPW) |
+| Backend | PPL | vs F16 6.8168 | vs Q4_K_M 7.6278 (4.5 BPW) |
 |---|---|---|---|
 | ROCm | 7.5563 | +10.85% | **-0.94%** at 5.18 BPW |
 | Vulkan | 7.5520 | +10.79% | — |
 
-Cross-backend Δ +0.057% — well within the 0.5% release gate.
+---
 
-### Sidecar plugin engine (Phase 0.7)
+### Asymmetric KV cache
+
+All types above support asymmetric K/V assignments — K and V can be different
+types. This is useful to trade off quality vs compression on a per-cache-half
+basis:
+
+```bash
+# K=turboq2_tcq (aggressive compression), V=turboq3_0 (higher quality)
+llama-cli --no-mmap -fa on -m model.gguf \
+    --cache-type-k turboq2_tcq --cache-type-v turboq3 -c 4096 -ngl 99
+```
+
+Asymmetric combinations are supported across the TURBOQ2/3/4_0, TURBOQ2/3_TCQ,
+and F16/Q8_0 types. InnerQ asymmetric pairs are planned as part of Phase 8
+(asymmetric KV pair matrix completion).
+
+---
+
+### Sidecar plugin engine — Phase 0.7
 
 A backend-agnostic plugin runtime (~355 LoC) for hooking the forward graph
 at residual-stream / MoE-expert / post-logits sites + weight deltas, via
@@ -182,25 +258,24 @@ out-of-tree `.so` plugins. Released alongside Phase 0.7; six companion
 plugin tools are tracked separately. See `src/llama-sidecar.cpp` and the
 plugin-engine commit `f99ad5df8`.
 
-### MTP speculative decoding (Phase 2)
+---
 
-Multi-token-prediction speculative decoding, built on the upstream-style MTP
-driver layer. Two model families are supported; both run through
-`--spec-type mtp` and require `--parallel 1` on the server.
+### MTP speculative decoding — Phase 2
+
+Multi-token-prediction speculative decoding, aligned with the mainline
+implementation (PR #22673). Two model families are supported.
 
 **Internal NextN-tail MTP** — for Qwen3.5 / Qwen3.5-MoE GGUFs that carry
-`nextn_predict_layers` MTP-tail blocks. The MTP head is part of the same GGUF;
-launch with `--mtp` and no separate draft model:
+`nextn_predict_layers` MTP-tail blocks:
 
 ```bash
 llama-server -m Qwen3.5-4B-MTP-BF16.gguf \
     --mtp --spec-type mtp --parallel 1 --no-mmap -fa on -ngl 999 -c 4096
 ```
 
-**External-assistant MTP** — for the Gemma 4 family, whose MTP drafter is a
-separate "assistant" GGUF (mainline #22738 `gemma4-assistant` arch: a
-foreign-KV, Q-only transformer that borrows the backbone's K/V). Pass the
-assistant as the draft model with `-md` (do **not** pass `--mtp`):
+**External-assistant MTP** — for the Gemma 4 family, whose drafter is a
+separate "assistant" GGUF (foreign-KV, Q-only transformer that borrows the
+backbone's K/V):
 
 ```bash
 llama-server -m Gemma4-26B-A4B-it-IQ4_XS.gguf \
@@ -208,55 +283,91 @@ llama-server -m Gemma4-26B-A4B-it-IQ4_XS.gguf \
     --spec-type mtp --parallel 1 --no-mmap -fa on -ngl 999 -ngld 999 -c 4096
 ```
 
-Smoke-verified draft acceptance: ~89% on Qwen3.5-4B-MTP (internal), 85–89% on
-Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path, not the
-output distribution, so there is no PPL gate — correctness is verified by
-output coherence plus accept rate.
+Smoke-verified draft acceptance: ~89% on Qwen3.5-4B-MTP (internal), 85–89%
+on Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path,
+not the output distribution, so there is no PPL gate — correctness is
+verified by output coherence plus accept rate.
 
-### Novel model architectures (in-tree ports)
+**Divergence note:** Gemma 4 external-assistant MTP (`_external` context type,
+666 LoC) has no mainline equivalent and is kept as a deliberate yggdrasil
+divergence per `conventions/port-fidelity-to-mainline-llamacpp.md §D1`.
+
+---
+
+### Novel model architectures — in-tree ports
 
 In addition to all mainline-supported architectures (inherited via upstream
 sync), yggdrasil ships in-tree ports for novel hybrid architectures that
 mainline does not yet recognize.
 
-**Zyphra ZAYA1-8B** (`LLM_ARCH_ZAYA`) — 8.4B-param (760M active) hybrid MoE with
-80 layers alternating CCA (Mamba-cached convolutional attention) and 16-expert
-top-1 MoE, plus a depth-recurrent router state averaging (EDA) second hidden
-stream, mixture-of-depths (MoD) skip routing, and per-layer learned residual
-scaling. Gemma-family tokenizer (262 144 vocab), 131K context, partial-RoPE
-0.5, GQA 8/2. Runs end-to-end under default-flag llama-perplexity / llama-server
-(both single-seq and multi-seq paths validated). 3 shipping quants:
+**Zyphra ZAYA1-8B** (`LLM_ARCH_ZAYA`) — 8.4B-param (760M active) hybrid MoE
+with 80 layers alternating CCA (Mamba-cached convolutional attention) and
+16-expert top-1 MoE, plus a depth-recurrent router state averaging (EDA)
+second hidden stream, mixture-of-depths (MoD) skip routing, and per-layer
+learned residual scaling. Gemma-family tokenizer (262 144 vocab), 131K
+context, partial-RoPE 0.5, GQA 8/2. Runs end-to-end under default-flag
+`llama-perplexity` / `llama-server` (both single-seq and multi-seq paths
+validated). 3 shipping quants:
 
 ```bash
-# Convert (Zyphra HF release):
 python3 convert_hf_to_gguf.py Zyphra/ZAYA1-8B \
     --outfile zaya1-8B-F16.gguf --outtype f16
 
-# Quantize (use bundled tensor-override list to protect kernel-2 conv,
-# top-1 routing, tied LM head, and deep router MLP — see docs/zaya1.md):
 llama-quantize --imatrix imatrix.dat --override-tensor zaya1-overrides.txt \
     zaya1-8B-F16.gguf zaya1-8B-IQ4_XS-imat-guq5k.gguf IQ4_XS
 ```
 
-PPL gates (80 chunks, c=512, wikitext-2-raw-test, default multi-seq `-np 4`):
+PPL gates (80 chunks, c=512, wikitext-2-raw-test, multi-seq `-np 4`):
 
 | Quant | Bits | Multi-seq PPL | vs F16 30.5270 |
 |---|---|---|---|
 | F16 | 16 | 30.5270 | — |
 | Q8_0 | 8.5 | 30.5231 | -0.01% |
-| Q5_K_M | 5.5 | 29.9468 | -1.9% (PPL improves slightly; in-noise) |
+| Q5_K_M | 5.5 | 29.9468 | -1.9% (in-noise) |
 | IQ4_XS-imat-guq5k | 4.25 | 32.0073 | +4.9% |
 
-All four within ±5% F16 on this single-corpus measurement; Q8_0 and Q5_K_M
-are within ±0.5% release parity gate. See [docs/zaya1.md](docs/zaya1.md)
-for converter details, the override-tensor list, multi-seq fix history,
-and the latent `ggml_conv_1d` N>1 reshape workaround.
+See [docs/zaya1.md](docs/zaya1.md) for converter details, the
+override-tensor list, multi-seq fix history, and the latent `ggml_conv_1d`
+N>1 reshape workaround.
+
+---
 
 ### Build flags
 
-Phase 1 features are built unconditionally as part of the standard cmake
+All shipped features are built unconditionally as part of the standard cmake
 recipe; no new feature-gate flags are required. See [README.upstream.md](README.upstream.md)
 for the unchanged mainline build instructions.
+
+**InnerQ calibration exception:** the CUDA/HIP separable compilation flag
+(`-fgpu-rdc` / `CUDA_SEPARABLE_COMPILATION`) required by the InnerQ
+calibration engine is pending default enablement (in-flight on
+`feature/innerq-rdc-enable`). Until that lands, InnerQ types are registered
+and KV cache dispatch works, but the calibration-engine entry points require
+a manual RDC build.
+
+## In-flight workstreams
+
+Active feature branches with work in progress; not yet on `/opt`.
+
+| Workstream | Branch | Status |
+|---|---|---|
+| RotorQuant KV V-cache (planar3/4, iso3/iso4) | `feature/rotorquant-port-with-kv-alloc-fix` | planar4 PPL gate PASS; planar3 LIKELY PASS; iso3/iso4 blocked on FA decoder (Phase 4a-1 gap) |
+| PFlash prompt compression — placeholder scorer | `feature/pflash-1a` | CLI + server wiring done; 20× TTFT speedup measured; real scorer (1b) pending quality validation |
+| InnerQ RDC separable compilation | `feature/innerq-rdc-enable` | PPL gate PASS (12 chunks, within 1σ of anchor); ship pending |
+| Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
+| MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
+| Vulkan BF16 FA allowlist | merged to main v324 | **SHIPPED** |
+| KV alloc CPU fallback for types without GPU SET_ROWS | merged to main v324 | **SHIPPED** |
+
+## Blocked / awaiting decision
+
+| Item | Blocked on |
+|---|---|
+| DFlash spec-decode revival | Drafter GGUF sourcing (no Qwen3.5-9B DFlash drafter available from z-lab or community); beellama Criterion B satisfied, architecture verified |
+| RotorQuant iso3/iso4 | Phase 4a-1 FA decoder gap — iso types currently fall to all-CPU (164s/pass); fix required before quality gate is meaningful |
+| PFlash 1b (real scorer) | Quality validation smoke on existing 1a branch; user decision on 1b scope |
+| Asymmetric KV pair matrix completion | Phase 8 planning; gap analysis approved |
+| PolarQuant v2 evaluation | arXiv 2603.29078 withdrawn 2026-04-20 for errors; awaiting v2 repost or independent audit |
 
 ## Backend support
 
@@ -273,13 +384,12 @@ hardware we can't measure perf, can't catch regressions, can't sign off on
 correctness — so we don't commit to supporting AMD targets we can't test.
 **gfx1030, gfx900, gfx94X, gfx12XX, and other AMD GPUs are explicitly out of
 scope** for active development; sibling-fork features targeting those GPUs are
-SKIP-class by default. If a contributor stages hardware for one of these
-targets and offers maintenance, that can be revisited.
+SKIP-class by default.
 
 Vulkan support is first-class because it's the cross-vendor path that lets
-yggdrasil-novel work (TurboQuant KV, TCQ KV, sidecars, etc.) reach users
-on hardware we don't own; the Vulkan port effort is a yggdrasil-owned burden
-for each in-tree feature regardless of which fork it came from.
+yggdrasil-novel work (TurboQuant KV, TCQ KV, sidecars, etc.) reach users on
+hardware we don't own; the Vulkan port effort is a yggdrasil-owned burden for
+each in-tree feature regardless of which fork it came from.
 
 gfx1102/1103 ROCm is used as a regression-smoke target (catches HIP-shim
 breakage early; cross-host PPL parity is validated against ai00 gfx1150).
@@ -289,8 +399,8 @@ to AMD upstream Tensile/hipBLAS GEMM gaps. See
 
 ## Key documents
 
-- [**CHANGELOG.md**](CHANGELOG.md) — milestone-tagged change history (Phase 0,
-  0.7, 1 to date).
+- [**CHANGELOG.md**](CHANGELOG.md) — milestone-tagged change history (Phases 0,
+  0.7, 1, 2, 3 to date).
 - [**docs/TYPE_ASSIGNMENTS.md**](docs/TYPE_ASSIGNMENTS.md) — authoritative
   GGUF type-ID contract. Every cherry-pick renumbers to match. Resolves
   the five-fork collision space.
@@ -298,7 +408,8 @@ to AMD upstream Tensile/hipBLAS GEMM gaps. See
   `GGML_OP_*` registry (currently: `GGML_OP_TURBO_WHT`).
 - [**docs/BACKEND_PARITY.md**](docs/BACKEND_PARITY.md) — ROCm/Vulkan
   parity policy, per-feature backend status, Vulkan port priorities,
-  gfx1102/1103 partial-scope (smoke target) recipe.
+  gfx1102/1103 partial-scope (smoke target) recipe, current PPL
+  measurement methodology (c=4096, n_seq=1).
 - [**docs/IK_LLAMA_PORTS.md**](docs/IK_LLAMA_PORTS.md) — subsystem tracker
   for ik_llama backports (not a git remote).
 - [**docs/gemma4-assistant.md**](docs/gemma4-assistant.md) — Gemma 4 MTP
@@ -311,26 +422,47 @@ to AMD upstream Tensile/hipBLAS GEMM gaps. See
 
 ## Build / usage
 
-Yggdrasil follows mainline's build system unchanged. Phase 1 features
-(TurboQuant KV + WHT weight quants + sidecar engine) are built
-unconditionally — no new feature-gate flags. See
+Yggdrasil follows mainline's build system unchanged. All shipped features
+(TurboQuant KV + TCQ KV + InnerQ KV + WHT weight quants + sidecar engine)
+are built unconditionally — no new feature-gate flags. See
 [README.upstream.md](README.upstream.md) and the upstream `docs/`
 directory for build instructions.
 
 For usage of the new types, see [What's available now](#whats-available-now)
 above. For change history, see [CHANGELOG.md](CHANGELOG.md).
 
+## Companion projects
+
+The following projects are built against yggdrasil's `/opt` install prefix
+and are updated with every `/opt` rebuild. They are designed to work with
+**any** llama.cpp fork and contain no yggdrasil-specific type names or
+conditionals.
+
+- **sidecar-abliteration, sidecar-control-vector, sidecar-logit-bias,
+  sidecar-weight-delta** — out-of-tree `.so` plugins for the sidecar
+  engine. Installed under `/opt/llama-yggdrasil-{rocm,vulkan}/lib/sidecars/`.
+- **llama-quantize-cost** — quantization cost estimator. Installed as part
+  of the main cmake build via `tools/quantize-cost` symlink.
+- **prismaquant-llama** — Python-based prequantization pipeline with
+  incremental probe, AWQ calibration, and GPTQ support. Invokes the
+  installed `llama-quantize` binary; not included in the cmake install.
+
 ## Project shape
 
 - Single long-lived downstream fork.
-- Mainline sync cadence: every 2 weeks (target).
-- Trunk: `main` (mainline-tracking; current HEAD at milestone
-  `phase-1-turboquant-kv-foundation`).
+- Mainline sync cadence: every 2 weeks (target). Current merge base:
+  `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
+  ~2026-05-24 to close ~80 commits of upstream drift.
+- Trunk: `main` (HEAD `9ffaa0967` v326; /opt installed at v326).
+- Milestone tags on origin: `milestone/phase-0-foundation-complete`,
+  `milestone/phase-0.7-sidecar-engine`,
+  `milestone/phase-1-turboquant-kv-foundation`,
+  `milestone/phase-2-mtp-foothold`,
+  `milestone/phase-2-gemma4-mtp`.
 - Feature work happens on `feature/<phase>-<scope>` topic branches and
   FF-merges back to `main` once all gates pass. See
   [conventions/git-workflow.md](conventions/git-workflow.md) in
   yggdrasil-context for the detailed workflow.
-- Each completed phase is tagged `milestone/<phase>-...` on origin.
 - ik_llama work is tracked subsystem-by-subsystem rather than as branches,
   because ik_llama's history is unrelated to mainline's. Cherry-pick
   individual commits or re-implement, never bulk-merge.
