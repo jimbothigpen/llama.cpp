@@ -398,6 +398,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_TURBOQ3_INNERQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_INNERQ, GGML_TYPE_TURBOQ4_INNERQ)
 
+    // RotorQuant V-only types (K=F16 only)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_PLANAR3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_PLANAR4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_ISO3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_ISO4_0)
+
     GGML_ABORT("fatal error");
 }
 
@@ -498,6 +504,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
                 || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ
+                || t == GGML_TYPE_RQ_PLANAR3_0 || t == GGML_TYPE_RQ_PLANAR4_0
+                || t == GGML_TYPE_RQ_ISO3_0    || t == GGML_TYPE_RQ_ISO4_0
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16;
         };
         if (!is_kv_compat(K->type) || !is_kv_compat(V->type)) {

@@ -132,6 +132,30 @@ GGML_API void quantize_row_wht4_0_ref(const float * GGML_RESTRICT x, block_wht4_
 GGML_API void dequantize_row_wht4_0(const block_wht4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_wht4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+// RotorQuant KV cache — PlanarQuant 3-bit (Givens-rotation, 8 centroids, sign-mag split)
+GGML_API void quantize_row_planar3_0_ref(const float * GGML_RESTRICT x, block_planar3_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_planar3_0    (const float * GGML_RESTRICT x, void            * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_planar3_0  (const void  * GGML_RESTRICT x, float           * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_planar3_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// RotorQuant KV cache — PlanarQuant 4-bit (Givens-rotation, 16 centroids, nibble-packed)
+GGML_API void quantize_row_planar4_0_ref(const float * GGML_RESTRICT x, block_planar4_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_planar4_0    (const float * GGML_RESTRICT x, void            * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_planar4_0  (const void  * GGML_RESTRICT x, float           * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_planar4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// RotorQuant KV cache — IsoQuant 3-bit (Hadamard/isometric rotation, 8 centroids, sign-mag split)
+GGML_API void quantize_row_iso3_0_ref(const float * GGML_RESTRICT x, block_iso3_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_iso3_0    (const float * GGML_RESTRICT x, void         * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_iso3_0  (const void  * GGML_RESTRICT x, float        * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_iso3_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// RotorQuant KV cache — IsoQuant 4-bit (Hadamard/isometric rotation, 16 centroids, nibble-packed)
+GGML_API void quantize_row_iso4_0_ref(const float * GGML_RESTRICT x, block_iso4_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_iso4_0    (const float * GGML_RESTRICT x, void         * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_iso4_0  (const void  * GGML_RESTRICT x, float        * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_iso4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);
