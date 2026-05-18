@@ -11,6 +11,70 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 Phase 2 (MTP spec-decode spine) in design.
 
+### Added — PFlash base port Phase 3: HIP GPU scorer (2026-05-19, v355, `abe0bb81a`)
+
+HIP-ify scorer compute graph. Replaces CPU backend with GPU backend via
+`ggml_backend_dev_by_type(GPU)` in both `pflash-loader.cpp` (weight storage)
+and `pflash-graph.cpp` (compute graph). CPU fallback retained for Vulkan-only
+builds. Compute context memory bumped 4 MB → 16 MB for GPU tensor overhead.
+Enables 24× scorer speedup versus Phase 2A CPU baseline (9.89s → ~0.41s per
+prefill window on ai01 ROCm gfx1102+HSA_OVERRIDE). Phase 2A F32 tok_embd
+dequant (`dd91b3fe7`) is the prerequisite that enables clean GPU dispatch.
+4-cell smoke PASS; FF-merged to main as v355. Follow-ups: Phase 4b (bulk
+upload) and Phase 4c (scorer caching + Vulkan GPU scorer fix).
+
+### Added — MTP E3b chain prediction support, integration ship (2026-05-19, v348, `02bf7aa67`)
+
+buun SD-091 E3b ladder fully integrated and shipped. Four phases
+(REDO-FROM-SCRATCH adapted from buun SD-091 bf22e115e):
+
+- **Phase 2-Extend-A** (`9b983083e`): graph infrastructure for chain
+  predictions — `chain_layer_output` tensor capture and `chain_inputs`
+  tensor array in `llama_context`.
+- **Phase 2-Extend-B** (`85e4ac622`): chain prediction loop in qwen35 and
+  qwen35moe graph builders; depth-indexed prediction heads wired.
+- **Phase 2-Extend-C** (`66f63ecde`): context extraction + public API —
+  `llama_get_mtp_chain_logits_ith(ctx, chain_depth, i)` and
+  `llama_get_mtp_chain_depth(ctx)` added to `include/llama.h`.
+- **Phase 2-Extend-D** (`c334fd2c3`): speculative driver consumption —
+  chain logits consumed by `llama_speculative_*` driver (Vulkan build
+  fix at integration: `+<cmath>` / `std::expf`).
+
+Integration: linear stack rebased onto v342 (`55ef1ef45`) + 4-cell build
+PASS + 4-cell smoke PASS + 16-sidecar ripple PASS + FF-merge → main v348.
+Follow-ups: Phase 2-Extend-G (accept-rate gate on 35B-MTP) + Phase 2-Extend-E
+(Vulkan chain depth=0 fix).
+
+### Fixed — RoPE theta FP64 precision for high freq_base models (2026-05-18, v342, `55ef1ef45`)
+
+Lift from Luce-Org `4a4dab41fa`. Adds `rope_theta_fp64()` device helper:
+computes `pos * theta_scale^exp` in FP64 with mod-2pi reduction in FP64,
+then narrows to float for sincosf. Replaces 9 FP32 `powf(theta_scale, ...)`
+call sites in `rope_norm`, `rope_neox`, `rope_multi`, and `rope_vision`
+kernels.
+
+FP32 theta accumulates catastrophic phase error for models with high
+`freq_base` (Qwen3.5 uses `freq_base=1e7`, which exceeds the FP32 safe
+range ~8.4e6 per arXiv:2602.10959). At positions >~8K the trig phase
+precision loss degrades attention quality. Runtime guard: FP64 path is
+gated behind `freq_scale==1.0f && ext_factor==0.0f && freq_factors==nullptr`;
+models using per-frequency factors (Gemma4, LLaMA 3.1+ long-ctx) or
+YaRN/NTK scaling fall back to the existing FP32 path transparently.
+Fork-only bugfix; not in mainline as of 2026-05-18.
+
+### Fixed — README MTP speculative usage: llama-speculative-simple and llama-server, not llama-cli (2026-05-19, `bef4a1b82`)
+
+Corrected documentation to note that MTP speculative decoding is invoked
+via `llama-speculative-simple` or `llama-server --draft`, not `llama-cli`.
+`llama-cli` does not support the `--draft` flag; the README previously
+implied it did. No code changes.
+
+### Fixed — README gfx1150 host APU name: Strix Halo → Strix Point (2026-05-19, `5c257b475`)
+
+Corrected the codename for the gfx1150 host (ai00). The APU is Strix Point
+(Ryzen AI 9 HX 370, 12C/24T Zen 5 + Zen 5c), not Strix Halo (which is a
+different product line). No code changes.
+
 ### Added — README Attribution section crediting sibling forks and original authors (2026-05-18, `466fc667e`)
 
 Post-v327 follow-up. Merged `feature/readme-attribution-additions-2026-05-18-PM` into main.
