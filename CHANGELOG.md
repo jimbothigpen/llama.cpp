@@ -11,6 +11,13 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 Phase 2 (MTP spec-decode spine) in design.
 
+### Added — README Attribution section crediting sibling forks and original authors (2026-05-18, `466fc667e`)
+
+Post-v327 follow-up. Merged `feature/readme-attribution-additions-2026-05-18-PM` into main.
+Documents the sibling fork lineage (buun, frankenturbo2, carlosfundora, TheTom,
+ik_llama) and original llama.cpp authors whose work this fork builds upon.
+No code changes.
+
 ### Fixed — Multi-backend /opt RPATH; ai01 Vulkan binary was loading ROCm libggml (2026-05-18, v327)
 
 Root cause of the v326 ai01 Vulkan SIGSEGV was a broken `RUNPATH` in installed
