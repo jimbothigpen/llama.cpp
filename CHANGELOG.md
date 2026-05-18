@@ -11,22 +11,24 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 Phase 2 (MTP spec-decode spine) in design.
 
-### Known issue — Vulkan cpy bf16→f32 pipelines SIGSEGV on RDNA3 PHOENIX GFX1103 (2026-05-18, `9ffaa0967`)
+### Fixed — Multi-backend /opt RPATH; ai01 Vulkan binary was loading ROCm libggml (2026-05-18, v327)
 
-`cpy_bf16_f32.comp` and `contig_cpy_bf16_f32.comp` shaders (added in v326)
-cause SIGSEGV during model load on RADV PHOENIX GFX1103 due to
-driver-level rejection of the compiled SPIR-V. `GL_EXT_bfloat16` not
-natively supported by `glslc` on this GPU; SPIR-V silently invalid.
-GFX1150 (Strix Halo) is unaffected. **Remediation pending — either a
-runtime-guard to skip pipeline registration when BF16 extension is absent
-or a SPIR-V fallback path.**
+Root cause of the v326 ai01 Vulkan SIGSEGV was a broken `RUNPATH` in installed
+binaries (`/../lib`, resolving to `/lib`). Without a valid `$ORIGIN`-relative
+RPATH, the dynamic linker fell back to ldconfig and resolved the ROCm
+`libggml.so.0` (listed first in `llama-yggdrasil.conf`) instead of the Vulkan
+cell's own `libggml.so.0`. The Vulkan binary was silently running as a ROCm
+binary without `HSA_OVERRIDE_GFX_VERSION=11.0.2`, causing SIGSEGV on GFX1103
+hardware. The BF16 cpy SPIR-V is structurally valid (`spirv-val` passes) and
+was never loaded on RADV PHOENIX — the crash was a misdiagnosis.
+Fix: `CMAKE_INSTALL_RPATH=$ORIGIN/../lib` in `CMakeLists.txt`; each /opt cell
+now resolves its own `libggml.so.0` via RPATH before ldconfig.
 
 ### Added — Vulkan BF16 copy pipelines (2026-05-18, `9ffaa0967` on `main`, v326)
 
 Cherry-picked from mainline PR #22677. Adds `pipeline_cpy_bf16_f32` and
 `pipeline_contig_cpy_bf16_f32` to `vk_device_struct`, registered in
 `ggml_vk_load_shaders`. Enables BF16→F32 copies on the Vulkan path.
-**See known issue above for GFX1103 regression.**
 
 ### Fixed — Pre-norm embedding mask initialization (2026-05-18, `daf0ffa70` on `main`, v325)
 
