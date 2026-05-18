@@ -16670,6 +16670,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
+                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                     }
@@ -16718,6 +16719,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ3_TCQ:
                     case GGML_TYPE_I32:
                         return true;
+                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                 }
@@ -16744,6 +16746,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         // (WHT forward needed but no copy_to_quant variant exists);
                         // returning false routes the op to CPU and silent-skips in tests.
                         return true;
+                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                 }
