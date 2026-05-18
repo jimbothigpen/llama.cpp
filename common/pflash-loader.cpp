@@ -64,7 +64,8 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	model.n_layers   = (int)get_u32("qwen3.block_count", 28);
 	model.n_ff       = (int)get_u32("qwen3.feed_forward_length", 3072);
 	model.n_vocab    = (int)get_u32("qwen3.vocab_size", 151936);
-	model.d_head     = model.n_embd / model.n_heads;
+	// key_length is the per-head QK dimension; may differ from n_embd/n_heads
+	model.d_head     = (int)get_u32("qwen3.attention.key_length", model.n_embd / model.n_heads);
 	model.rope_freq_base = get_f32("qwen3.rope.freq_base", 1000000.0f);
 	model.rope_type  = 2; // NEOX
 
