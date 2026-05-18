@@ -378,7 +378,7 @@ Active feature branches with work in progress; not yet on `/opt`.
 | CUDA, Metal, etc. | inherited from mainline | best-effort, not gated |
 
 **Why these specific targets:** the project has access to exactly two physical
-hosts — a gfx1150 Strix Halo APU and a gfx1103 RDNA3 mobile dGPU (built
+hosts — a gfx1150 Strix Point APU and a gfx1103 RDNA3 mobile dGPU (built
 single-target as gfx1102 + run with `HSA_OVERRIDE_GFX_VERSION=11.0.2`). Without
 hardware we can't measure perf, can't catch regressions, can't sign off on
 correctness — so we don't commit to supporting AMD targets we can't test.
