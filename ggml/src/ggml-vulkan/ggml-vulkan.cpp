@@ -3175,7 +3175,10 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
     const auto fa_block_bytes = [](ggml_type t) -> uint32_t {
         // decodeBufF32 uses a block of vec4s for a better memory access pattern.
-        return t == GGML_TYPE_F32 ? 16u : (uint32_t) ggml_type_size(t);
+        // BF16 is read as uvec2 blocks of 4 elements (4x2=8 bytes) via dequantize4.
+        if (t == GGML_TYPE_F32)  return 16u;
+        if (t == GGML_TYPE_BF16) return 8u;
+        return (uint32_t) ggml_type_size(t);
     };
     return {
         /* 0 WorkGroupSize   */ state.workgroup_size,
@@ -9345,11 +9348,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t v_stride = v_is_tcq ? (uint32_t)(nev2 * nev0)
                                  : (uint32_t)(nbv1 / ggml_type_size(v->type));
 
-    // For F32, the shader treats it as a block of size 4 (for vec4 loads)
-    if (k->type == GGML_TYPE_F32) {
+    // For F32 and BF16, the shader treats data as blocks of 4 elements (for vec4/uvec2 loads)
+    if (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_BF16) {
         k_stride /= 4;
     }
-    if (v->type == GGML_TYPE_F32) {
+    if (v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_BF16) {
         v_stride /= 4;
     }
 
@@ -16151,6 +16154,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
+                    case GGML_TYPE_BF16:
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
