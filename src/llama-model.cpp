@@ -278,8 +278,6 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35(params);
         case LLM_ARCH_QWEN35MOE:
             return new llama_model_qwen35moe(params);
-        case LLM_ARCH_QWEN35_MTP:
-            return new llama_model_qwen35_mtp(params);
         case LLM_ARCH_QWEN35MOE_MTP:
             return new llama_model_qwen35moe_mtp(params);
         case LLM_ARCH_MISTRAL3:
@@ -1424,7 +1422,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    const bool partial_load = (arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP || arch == LLM_ARCH_GEMMA4_ASSISTANT);
+    const bool partial_load = (arch == LLM_ARCH_QWEN35MOE_MTP || arch == LLM_ARCH_GEMMA4_ASSISTANT);
     ml.done_getting_tensors(partial_load);
 
     GGML_ASSERT(!(output && tok_embd &&
@@ -1980,6 +1978,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         // checks
         default:
             {
+                // The MTP head is dense-attention only on hybrid Qwen3.5/3.6, so
+                // use a plain attention KV cache for the MTP context instead of
+                // the hybrid wrapper.
+                const bool mtp_on_hybrid_qwen35 =
+                    cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+                    (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
+
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
                             *this,
@@ -1990,7 +1995,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             cparams.n_rs_seq,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch)) {
+                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35) {
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
@@ -2054,7 +2059,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* filter_recr       */ std::move(filter_recr));
                     }
                 } else {
-                    llama_memory_i::layer_reuse_cb reuse = nullptr;
+                    llama_memory_i::layer_reuse_cb  reuse  = nullptr;
+                    llama_kv_cache::layer_filter_cb filter = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
                         reuse = [&](int32_t il) {
@@ -2064,6 +2070,11 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                             return -1;
                         };
+                    }
+
+                    if (mtp_on_hybrid_qwen35) {
+                        const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
+                        filter = [n_main](int32_t il) { return (uint32_t)il >= n_main; };
                     }
 
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
@@ -2081,7 +2092,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 cparams.n_seq_max,
                                 cparams.n_ubatch,
                                 1,
-                                nullptr,
+                                filter,
                                 reuse);
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
@@ -2098,8 +2109,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 1,
                                 hparams.n_swa,
                                 hparams.swa_type,
-                                nullptr,
-                                nullptr);
+                                filter,
+                                reuse);
                     }
                 }
             }
@@ -2379,7 +2390,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
-        case LLM_ARCH_QWEN35_MTP:
         case LLM_ARCH_QWEN35MOE_MTP:
             return LLAMA_ROPE_TYPE_IMROPE;
 
