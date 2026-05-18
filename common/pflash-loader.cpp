@@ -72,21 +72,16 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	fprintf(stderr, "pflash: Qwen3-0.6B loaded — %d layers, %d embd, %d heads (%d kv), %d ff, %d vocab\n",
 		model.n_layers, model.n_embd, model.n_heads, model.n_kv_heads, model.n_ff, model.n_vocab);
 
-	// allocate GPU buffer for all tensors; fall back to CPU if no GPU present
-	// name-based probe is unreliable (device names are "ROCm0", "CUDA0", etc.),
-	// so use type-based probe then fall back to CPU
-	const std::string gpu_dev_params = std::to_string(gpu_device);
-	ggml_backend_dev_t bdev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-	if (!bdev)        bdev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
-	ggml_backend_t backend = bdev
-		? ggml_backend_dev_init(bdev, gpu_dev_params.c_str())
-		: ggml_backend_cpu_init();
+	// S3: use CPU backend so weights land in CPU RAM and are accessible
+	// to the CPU scorer compute graph. S4 will switch to GPU.
+	ggml_backend_t backend = ggml_backend_cpu_init();
 	if (!backend) {
-		fprintf(stderr, "pflash: cannot init compute backend for scorer\n");
+		fprintf(stderr, "pflash: cannot init CPU backend for scorer\n");
 		gguf_free(gctx);
 		pflash_model_free(model);
 		return -1;
 	}
+	(void)gpu_device;
 
 	model.buf_gpu = ggml_backend_alloc_ctx_tensors(model.ctx_ggml, backend);
 	if (!model.buf_gpu) {
