@@ -18,6 +18,13 @@
 #include <limits>
 #include <stdexcept>
 
+static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+    switch (ctx_type) {
+        case LLAMA_CONTEXT_TYPE_MTP: return LLM_GRAPH_TYPE_DECODER_MTP;
+        default:                     return LLM_GRAPH_TYPE_DECODER;
+    }
+}
+
 //
 // llama_context
 //
@@ -184,20 +191,15 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
-    cparams.mtp         = params.mtp;
-    cparams.mtp_op_type = params.mtp_op_type;
+    cparams.ctx_type   = params.ctx_type;
 
-    // MTP driver-layer safety net (mirrors frankenturbo2 A5a's arch guard). yggdrasil
-    // loads MTP heads as discrete-arch GGUFs rather than GLM4-MoE-style inline tails,
-    // so the guard is arch-agnostic: disable if the model exposes no NextN layers.
-    // Exception: the gemma4-assistant arch is an external-assistant MTP drafter by
-    // design (foreign-KV Q-only transformer, no NextN tail) — its cparams.mtp gates
-    // post-projection embedding extraction, not a NextN-tail decode.
-    if (cparams.mtp && model.hparams.nextn_predict_layers == 0 &&
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.hparams.nextn_predict_layers == 0 &&
         model.arch != LLM_ARCH_GEMMA4_ASSISTANT) {
-        LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers; disabling MTP\n", __func__);
-        cparams.mtp = false;
+        LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers; falling back to DEFAULT\n", __func__);
+        cparams.ctx_type = LLAMA_CONTEXT_TYPE_DEFAULT;
     }
+
+    cparams.mtp = (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP);
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -443,7 +445,6 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
     gf_res_prev.reset(new llm_graph_result(max_nodes));
-    gf_res_prev_mtp.reset(new llm_graph_result(max_nodes));
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
@@ -784,7 +785,6 @@ bool llama_context::memory_update(bool optimize) {
         // TODO: change the mctx->apply() to return information if a graph reserve is needed
         //       reset the graph result only if the memory module did reset the scheduler
         gf_res_prev->reset();
-        gf_res_prev_mtp->reset();
 
         if (!mctx->apply()) {
             LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
@@ -887,21 +887,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
             throw std::runtime_error("no embeddings");
         }
 
-        // MTP NONE-pass lays out embd.data per-batch-token; bypass output_ids translation
-        // so callers can index by batch position (the last decoded ubatch's mapping).
-        const bool mtp_layout =
-            model.hparams.nextn_predict_layers > 0 && cparams.mtp &&
-            n_outputs_embd > (int32_t) n_outputs;
-
-        int64_t j;
-        if (mtp_layout) {
-            j = (i < 0) ? (int64_t) n_outputs_embd + i : (int64_t) i;
-            if (j < 0 || j >= n_outputs_embd) {
-                throw std::runtime_error(format("out of range [0, %d)", n_outputs_embd));
-            }
-        } else {
-            j = output_resolve_row(i);
-        }
+        const int64_t j = output_resolve_row(i);
         const uint32_t n_embd_out = model.hparams.n_embd_out();
         return embd.data + j*n_embd_out;
     } catch (const std::exception & err) {
@@ -1356,18 +1342,14 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, int64_t mtp_token_cursor) {
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
-    // C-Graph-Reuse-MTP-Split: NONE-pass caches in gf_res_prev, MTP-pass in
-    // gf_res_prev_mtp, so a NONE -> MTP -> NONE chain keeps both cached graphs
-    // (cparams.mtp_op_type is part of llm_graph_params::allow_reuse keys).
-    auto & slot = (cparams.mtp_op_type == MTP_OP_NONE) ? gf_res_prev : gf_res_prev_mtp;
-    auto * res = slot.get();
+    auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
     // the new graph parameters
@@ -1418,17 +1400,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->set_inputs(&ubatch);
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
-    }
-
-    // MTP: copy the source hidden-state into the graph's t_mtp_states input tensor.
-    // The MTP-tail graph builder creates this tensor and stores it on res; the value comes
-    // from the just-computed embd buffer (WARMUP / UPDATE_ACCEPTED) or from the draft hidden
-    // state set by the speculative decoder (DRAFT_GEN). Graph-builder wiring lands in task #11.
-    if (cparams.mtp_op_type != MTP_OP_NONE) {
-        if (!prepare_mtp_graph_inputs(res, mtp_token_cursor)) {
-            ret = GGML_STATUS_FAILED;
-            return nullptr;
-        }
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
@@ -1748,7 +1719,10 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 }
 
 int llama_context::decode(const llama_batch & batch_inp) {
-    GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
+    // MTP contexts accept combined token+embd batches (pre-norm hidden state + token ids for KV)
+    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
+        GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
+    }
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
@@ -1887,22 +1861,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
-    // MTP NONE-pass: embd.data is laid out per-batch-token across ubatches; track separately
-    // because n_outputs only counts marked-output tokens (1 for prompt prefill).
-    const bool mtp_full_embd_pass =
-        cparams.mtp && model.hparams.nextn_predict_layers > 0 &&
-        cparams.mtp_op_type == MTP_OP_NONE;
-    int64_t n_outputs_embd_prev = 0;
-
-    // MTP WARMUP / UPDATE_ACCEPTED read cursor: draft_input_hidden_state points at the
-    // base of the full [n_embd x batch_n_tokens] hidden-state matrix; when the decode
-    // splits into multiple ubatches each ubatch must read from its own token offset.
-    // DRAFT_GEN is single-token and re-points the pointer per step, so it stays at 0.
-    const bool mtp_multi_token_read =
-        cparams.mtp_op_type == MTP_OP_WARMUP ||
-        cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
-    int64_t mtp_read_cursor = 0;
-
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -1923,8 +1881,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status,
-                                          mtp_multi_token_read ? mtp_read_cursor : 0);
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1957,27 +1914,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // plot the computation graph in dot format (for debugging purposes)
-        //if (n_past%100 == 0) {
-        //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
-        //}
-
         auto * t_logits = res->get_logits();
 
-        // MTP: when nextn-predict layers are enabled at the model level, also extract embd
-        // (result_norm) on a normal NONE-pass so it can be fed back into the MTP-tail graph for
-        // WARMUP / UPDATE_ACCEPTED. Mirrors upstream PR #1270 has_mtp logic.
-        const bool has_mtp = hparams.nextn_predict_layers > 0 && cparams.mtp;
-        auto * t_embd   = (cparams.embeddings || has_mtp) ? res->get_embd() : nullptr;
+        // gemma4-assistant WARMUP: KV-cache write only, no useful logits/embd.
+        const bool mtp_kv_only = (cparams.mtp_op_type == MTP_OP_WARMUP);
+
+        auto * t_embd = cparams.embeddings ? res->get_embd() : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
         }
-
-        // P5 (#1736): UPDATE_ACCEPTED now extracts logits + embd so mtp_accept_tokens
-        // can sample/cache the next-cycle draft seed. Only MTP_OP_WARMUP truly skips
-        // readout (no useful logit/embd produced).
-        const bool mtp_kv_only = (cparams.mtp_op_type == MTP_OP_WARMUP);
 
         // extract logits
         if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers) && !mtp_kv_only) {
@@ -1997,40 +1943,27 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // P5 (#1736): extract embeddings on NONE / DRAFT_GEN / UPDATE_ACCEPTED. The
-        // per-step hidden state on DRAFT_GEN is fed back into the next draft iteration
-        // via llama_set_draft_input_hidden_state; the last-accepted hidden state on
-        // UPDATE_ACCEPTED is captured by mtp_accept_tokens for the next-cycle accept-batch
-        // optimization. WARMUP still skipped — its K/V write produces no useful embd.
-        // MTP NONE-pass extracts one row per ubatch token (not per marked-output), so the
-        // WARMUP / UPDATE_ACCEPTED passes can read the full [n_embd x n_tokens] matrix back.
-        const bool extract_full_tokens = mtp_full_embd_pass && cparams.mtp_op_type == MTP_OP_NONE;
-        const int64_t n_extract = extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
-        if (embd.data && t_embd && n_extract > 0 &&
-            cparams.mtp_op_type != MTP_OP_WARMUP) {
+        // extract embeddings
+        if (embd.data && t_embd && n_outputs > 0 && !mtp_kv_only) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
             switch (cparams.pooling_type) {
                 case LLAMA_POOLING_TYPE_NONE:
                     {
-                        // extract token embeddings
                         GGML_ASSERT(embd.data != nullptr);
                         const uint32_t n_embd_out = hparams.n_embd_out();
-                        float * embd_out = embd.data + n_outputs_embd_prev*n_embd_out;
+                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;
 
-                        GGML_ASSERT((n_outputs_embd_prev + n_extract)*n_embd_out <= (int64_t) embd.size);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_extract*n_embd_out*sizeof(float));
+                        GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
                 case LLAMA_POOLING_TYPE_CLS:
                 case LLAMA_POOLING_TYPE_LAST:
                     {
-                        // extract sequence embeddings (cleared before processing each batch)
                         auto & embd_seq_out = embd_seq;
 
-                        // use n_embd_out (not n_embd_inp) - the pooled embedding has the model's
-                        // output dimension, which differs from input dimension for deepstack models (e.g. qwen3vl)
                         const uint32_t n_embd_out = hparams.n_embd_out();
 
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
@@ -2043,7 +1976,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
                     {
-                        // extract the rerank score - n_cls_out floats per sequence
                         auto & embd_seq_out = embd_seq;
 
                         const uint32_t n_cls_out = hparams.n_cls_out;
@@ -2092,16 +2024,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         n_outputs_prev += n_outputs;
-        n_outputs_embd_prev += extract_full_tokens ? (int64_t) ubatch.n_tokens : (int64_t) n_outputs;
-        mtp_read_cursor += (int64_t) ubatch.n_tokens;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
     sidecars_post_compute_n_outputs = (int) n_outputs_all;
 
-    // For MTP NONE-pass embd.data has one row per batch token; non-MTP paths follow n_outputs.
-    n_outputs_embd = mtp_full_embd_pass ? (int32_t) n_tokens_all : (int32_t) n_outputs_all;
+    n_outputs_embd = (int32_t) n_outputs_all;
 
     // set output mappings
     if (n_outputs > 0) {
@@ -2172,13 +2101,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_embd_out = hparams.n_embd_out();
     const auto n_embd     = hparams.n_embd;
 
-    // MTP needs the embd buffer to capture the main-model hidden state on the NONE-pass so it
-    // can be fed into WARMUP / UPDATE_ACCEPTED passes. has_logits is already unconditionally
-    // true in this fork (DRAFT_GEN draft sampling needs it), so only has_embd changes.
-    const bool has_mtp = hparams.nextn_predict_layers > 0 && cparams.mtp;
-
     bool has_logits        = true;
-    bool has_embd          = cparams.embeddings || has_mtp;
+    bool has_embd          = cparams.embeddings;
     bool has_embd_pre_norm = cparams.embeddings_pre_norm;
 
     // TODO: hacky enc-dec support
@@ -2191,14 +2115,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
-    // MTP NONE-pass writes per-batch-token rows into embd.data (so WARMUP / UPDATE_ACCEPTED
-    // can read the full hidden-state matrix back through prepare_mtp_graph_inputs). Size the
-    // buffer for n_batch tokens, not just n_outputs.
-    const int64_t n_outputs_embd_max = has_mtp ? std::max<int64_t>(n_batch, n_outputs_max) : n_outputs_max;
-
-    logits.size        = has_logits        ? n_vocab*n_outputs_max         : 0;
-    embd.size          = has_embd          ? n_embd_out*n_outputs_embd_max : 0;
-    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max          : 0;
+    logits.size        = has_logits        ? n_vocab*n_outputs_max    : 0;
+    embd.size          = has_embd          ? n_embd_out*n_outputs_max : 0;
+    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max     : 0;
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
@@ -2399,7 +2318,6 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // when the scheduler is reset, we cannot reuse the old graph, so we reset the previous graph result to prevent that
     gf_res_prev->reset();
-    gf_res_prev_mtp->reset();
 
     // store the n_outputs as it is, and restore it afterwards
     // TODO: not sure if needed, might simplify in the future by removing this
@@ -3401,8 +3319,7 @@ void llama_context::opt_epoch_iter(
                 break;
             }
 
-            auto & slot = (cparams.mtp_op_type == MTP_OP_NONE) ? gf_res_prev : gf_res_prev_mtp;
-            auto * res = slot.get();
+            auto * res = gf_res_prev.get();
 
             const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 
@@ -3533,8 +3450,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
-        /*.mtp                         =*/ false,
-        /*.mtp_op_type                 =*/ MTP_OP_NONE,
+        /*.ctx_type                     =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };
@@ -3804,37 +3720,6 @@ void llama_context::set_mtp_target_seq_id(llama_seq_id seq_id) {
 
 llama_seq_id llama_context::get_mtp_target_seq_id() const {
     return mtp_target_seq_id;
-}
-
-bool llama_context::prepare_mtp_graph_inputs(llm_graph_result * res, int64_t token_cursor) {
-    ggml_tensor * dst = res ? res->t_mtp_states : nullptr;
-    if (!dst) {
-        LLAMA_LOG_ERROR("%s: res->t_mtp_states is null (graph builder did not expose MTP input)\n", __func__);
-        return false;
-    }
-
-    // F2 (PR #1499): always read from draft_input_hidden_state. Server-context (task #11)
-    // sets it BEFORE every WARMUP / UPDATE_ACCEPTED on the MTP context via the main
-    // context's per-token embd buffer; DRAFT_GEN sets it per-step inside
-    // mtp_speculative_gen_draft from the secondary ctx's own previous output. The pre-F2
-    // WARMUP/UPDATE_ACCEPTED branch read embd.data of the MTP context — but that context
-    // only ever runs MTP-tail graphs, so its embd.data is never populated by a NONE-pass.
-    const float * src = draft_input_hidden_state;
-
-    if (!src) {
-        LLAMA_LOG_ERROR("%s: source hidden state is null (op=%d)\n", __func__, (int) cparams.mtp_op_type);
-        return false;
-    }
-
-    // Multi-ubatch WARMUP / UPDATE_ACCEPTED: draft_input_hidden_state points at the base
-    // of the full per-token hidden-state matrix, so ubatches 2+ must read from their own
-    // token offset. Row width is llama_mtp_state_n_embd (backbone-width for a
-    // gemma4-assistant, n_embd otherwise) — never hard-code hparams.n_embd. The caller
-    // passes token_cursor == 0 for the single-ubatch and DRAFT_GEN cases.
-    src += token_cursor * (int64_t) llama_mtp_state_n_embd(this);
-
-    ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
-    return true;
 }
 
 void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
