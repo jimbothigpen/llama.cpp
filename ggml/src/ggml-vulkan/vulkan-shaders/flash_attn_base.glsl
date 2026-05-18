@@ -103,14 +103,18 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define FA_TYPE_TURBOQ4_0 62u
 #define FA_TYPE_TURBOQ2_TCQ 66u
 #define FA_TYPE_TURBOQ3_TCQ 67u
+#define FA_TYPE_BF16        30u
 
 // Number of matrix elements per buffer block, derived from the K/V type spec
 // constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1
-// and bypasses the dequant path entirely. Quants follow their ggml block sizes.
+// and bypasses the dequant path entirely. BF16 is read as uvec2 blocks of 4
+// elements via dequantize4 (bf16_to_fp32; no block struct needed).
+// Quants follow their ggml block sizes.
 uint fa_block_elems(uint ty) {
     switch (ty) {
         case FA_TYPE_F32:      return 4u;
         case FA_TYPE_F16:      return 1u;
+        case FA_TYPE_BF16:     return 4u;
         case FA_TYPE_Q4_0:     return uint(QUANT_K_Q4_0);
         case FA_TYPE_Q4_1:     return uint(QUANT_K_Q4_1);
         case FA_TYPE_Q5_0:     return uint(QUANT_K_Q5_0);
