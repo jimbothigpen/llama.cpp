@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -1021,7 +1022,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
                         const auto cit = std::max_element(cl, cl + n_vocab_chain);
                         const float cmax = *cit;
                         double csum = 0.0;
-                        for (int32_t v = 0; v < n_vocab_chain; ++v) csum += expf(cl[v] - cmax);
+                        for (int32_t v = 0; v < n_vocab_chain; ++v) csum += std::expf(cl[v] - cmax);
                         if ((float)(1.0 / csum) < params.p_min) break;
                         result.push_back((llama_token)(cit - cl));
                     }
