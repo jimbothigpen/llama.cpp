@@ -28,13 +28,15 @@ layout (binding = 2) readonly buffer V_PACKED_Q5_1 { block_q5_1_packed16 data[];
 layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[]; } k_packed_q8_0;
 layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[]; } v_packed_q8_0;
 
-// turboq2_0 / turboq3_0 use struct bindings (block_turboq{2,3}_0) rather than
-// packed16 views because their 34/50-byte blocks don't fit a uniform 16/32-bit
+// turboq2_0 / turboq3_0 / turboq4_0 use struct bindings (block_turboq{2,3,4}_0) rather than
+// packed16 views because their 34/50/68-byte blocks don't fit a uniform 16/32-bit
 // interleave. Same applies to turboq{2,3}_tcq (36/52-byte blocks).
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ2_0 { block_turboq2_0 data[]; } k_packed_turboq2_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_0 { block_turboq2_0 data[]; } v_packed_turboq2_0;
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } k_packed_turboq3_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } v_packed_turboq3_0;
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } k_packed_turboq4_0;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } v_packed_turboq4_0;
 
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } k_packed_turboq2_tcq;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } v_packed_turboq2_tcq;
@@ -181,6 +183,25 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     return FLOAT_TYPE(nm) * c;                                                                    \
 }
 
+// PolarQuant 4-bit centroids (Lloyd-Max for Gaussian). 16 levels.
+// Matches CENTROIDS_4BIT in ggml-turbo-quant.c dequantize_row_turboq4_0.
+// iqs is always a multiple of 4 (coord = 4*d), so qs[iqs/2] and qs[iqs/2+1]
+// cover exactly the 4 nibble-packed elements iqs..iqs+3.
+const float T4C[16] = float[16](
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+);
+
+#define FA_DEQUANT4_TURBOQ4_0(BUF) {                                                              \
+    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 2    ]);                               \
+    const uint qb1 = uint(BUF.data[a_offset + ib].qs[iqs / 2 + 1]);                               \
+    return FLOAT_TYPE(BUF.data[a_offset + ib].norm) *                                             \
+           FLOAT_TYPEV4(T4C[(qb0)      & 0xFu], T4C[(qb0 >> 4) & 0xFu],                          \
+                        T4C[(qb1)      & 0xFu], T4C[(qb1 >> 4) & 0xFu]);                          \
+}
+
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {
         switch (FaTypeK) {
@@ -192,6 +213,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (k_packed_q8_0)
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(k_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(k_packed_turboq3_0)
+            case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(k_packed_turboq3_tcq)
         }
@@ -205,6 +227,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q8_0:     FA_DEQUANT4_Q8_0    (v_packed_q8_0)
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(v_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(v_packed_turboq3_0)
+            case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ: FA_DEQUANT4_TURBOQ2_TCQ(v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ: FA_DEQUANT4_TURBOQ3_TCQ(v_packed_turboq3_tcq)
         }
