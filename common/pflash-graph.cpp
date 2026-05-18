@@ -83,9 +83,9 @@ pflash_scorer_result pflash_score(
     const float scale_attn = 1.0f / sqrtf((float)d_head);
 
     pflash_scorer_result result;
-    result.n_lookahead = N_LOOKAHEAD;
+    result.n_lookahead = n_layers; // actual scoring layers (may be < N_LOOKAHEAD for hybrid models)
     result.seq_len     = S;
-    result.running_max.assign((size_t)N_LOOKAHEAD * S, 0.0f);
+    result.running_max.assign((size_t)n_layers * S, 0.0f);
 
     fprintf(stderr,
         "pflash: real scorer — %d tokens, %d layers, n_heads=%d n_kv=%d d=%d\n",
@@ -197,10 +197,9 @@ pflash_scorer_result pflash_score(
         return result;
     }
 
-    // Fill token ID input — clamp any out-of-range IDs to [0, n_vocab-1].
-    // The main model may have a larger vocabulary than the scorer (e.g. Qwen3.5-9B
-    // has 248320 tokens vs Qwen3-0.6B's 151936). Out-of-range IDs map to token 0;
-    // they produce noisy scores but don't crash. S4 will require tokenizer alignment.
+    // Fill token ID input — clamp to scorer vocab bounds as a safety measure.
+    // With a matched-vocab scorer (e.g. Qwen3.5-0.8B for Qwen3.5-9B target), all
+    // token IDs should be in range; this guard prevents crashes with mismatched models.
     const int32_t n_vocab_max = (int32_t)(model.n_vocab - 1);
     std::vector<int32_t> clamped_ids(token_ids.size());
     for (int i = 0; i < S; i++) {
