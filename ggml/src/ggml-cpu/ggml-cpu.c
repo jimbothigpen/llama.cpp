@@ -474,28 +474,29 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
-    // RotorQuant V-only types — no CPU mul_mat, GPU FA V-dequant only
+    // RotorQuant KV cache types — GPU FA preferred; CPU vec_dot handles fallback
+    // when K=iso3/planar3 is used and GPU FA has no K-side dispatch (routes to CPU)
     [GGML_TYPE_RQ_PLANAR3_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_planar3_0_ref,
-        .vec_dot                  = NULL,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rq_planar3_0,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_RQ_PLANAR4_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_planar4_0_ref,
-        .vec_dot                  = NULL,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rq_planar4_0,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_RQ_ISO3_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_iso3_0_ref,
-        .vec_dot                  = NULL,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rq_iso3_0,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_RQ_ISO4_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_iso4_0_ref,
-        .vec_dot                  = NULL,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rq_iso4_0,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
