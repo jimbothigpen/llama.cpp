@@ -929,10 +929,10 @@ private:
             // Gemma 4 external-assistant MTP: the assistant is a separately-loaded
             // draft GGUF (foreign-KV drafter, mainline #22738). Its context must
             // extract the post-projection hidden state so the speculative driver
-            // can read it back via llama_get_embeddings_ith; cparams.mtp gates that
-            // extraction and params_dft does not inherit has_mtp.
+            // can read it back via llama_get_embeddings_ith; embeddings=true gates
+            // that extraction and params_dft does not inherit has_mtp.
             if (llama_model_is_gemma4_assistant(model_dft.get())) {
-                cparams.mtp = true;
+                cparams.embeddings = true;
                 SRV_INF("%s", "draft model is a Gemma 4 external MTP assistant - enabling MTP extraction on its context\n");
             }
 
