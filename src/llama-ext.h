@@ -95,7 +95,7 @@ LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_c
 
 // mirrors:
 // LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
-LLAMA_API void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value);
+LLAMA_API void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value, bool masked);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
