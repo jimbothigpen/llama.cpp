@@ -147,11 +147,24 @@ pflash_scorer_result pflash_score(
             (size_t)(S - 1) * n_embd * sizeof(float) // offset (bytes)
         );
 
-        // Q_flat = wq^T @ h_last → [n_heads*d_head, 1]
+        // Q_flat = wq^T @ h_last → [q_proj_dim, 1]
+        // Qwen3:   q_proj_dim = n_heads * d_head (Q only)
+        // Qwen3.5: q_proj_dim = n_heads * 2 * d_head (Q interleaved with gate per head)
         ggml_tensor * Q_flat = ggml_mul_mat(ctx, lw.wq, h_last);
 
-        // Reshape to [d_head, n_heads], apply per-head Q-norm
-        ggml_tensor * Q_3d     = ggml_reshape_2d(ctx, Q_flat, d_head, n_heads);
+        // Reshape to [d_head, n_heads], apply per-head Q-norm.
+        // For Qwen3.5, extract Q (first d_head of each 2*d_head block) via stride view.
+        ggml_tensor * Q_3d;
+        if (Q_flat->ne[0] == (int64_t)n_heads * 2 * d_head) {
+            // Qwen3.5 full-attention: reshape to [2*d_head, n_heads], view first d_head per head
+            ggml_tensor * Q_both = ggml_reshape_3d(ctx, Q_flat, 2 * d_head, n_heads, 1);
+            ggml_tensor * Q_nc   = ggml_view_3d(ctx, Q_both,
+                d_head, n_heads, 1,
+                Q_both->nb[1], Q_both->nb[2], 0);
+            Q_3d = ggml_cont_2d(ctx, Q_nc, d_head, n_heads);
+        } else {
+            Q_3d = ggml_reshape_2d(ctx, Q_flat, d_head, n_heads);
+        }
         ggml_tensor * Q_normed = ggml_mul(ctx, ggml_rms_norm(ctx, Q_3d, NORM_EPS), lw.q_norm);
         ggml_set_output(Q_normed);
         out_Q[l] = Q_normed;
