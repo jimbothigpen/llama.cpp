@@ -817,7 +817,7 @@ private:
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
         } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
+                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
             // MTP head lives in the *target* GGUF — load it as a sibling model
             // with override_arch and feed it through the existing ctx_dft slot.
             char trunk_arch[64] = {0};
@@ -970,7 +970,7 @@ private:
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
             slot.is_mtp_enabled = (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end())
+                                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end())
                                   && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
 

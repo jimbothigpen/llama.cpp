@@ -73,35 +73,8 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
-// ----------------------------------------------------------------------------
-// MTP driver-layer free functions (upstream-style; see driver-port-plan-session-26.md).
-// These coexist with the hook-driven common_speculative_impl_mtp path; they are
-// not yet wired into common_speculative_init (task #11).
-// ----------------------------------------------------------------------------
-
-// Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
-//
-// constant_draft_positions: when true (gemma4-assistant external MTP), every draft
-// step pins its position to n_past — the assistant attends the backbone's frozen KV
-// at that single position rather than advancing per step. When false (internal
-// MTP-tail head), the position advances with each generated token.
-std::vector<llama_token> mtp_speculative_gen_draft(
-    struct common_sampler * smpl,
-    struct llama_context * ctx,
-    int n_draft,
-    float p_min,
-    llama_token id_last,
-    int32_t n_past,
-    llama_seq_id seq_id,
-    bool constant_draft_positions = false);
-
-void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup);
-
-void mtp_accept_tokens(
-    struct llama_context * ctx,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
-    llama_seq_id seq_id);
+// true if any implementation requires target pre-norm embeddings to be extracted
+bool common_speculative_need_embd_pre_norm(common_speculative * spec);
 
 struct common_speculative_deleter {
     void operator()(common_speculative * s) { common_speculative_free(s); }
