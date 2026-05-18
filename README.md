@@ -30,7 +30,7 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 > Yggdrasil: the Norse world-tree where many branches converge at the trunk.
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, and 3 COMPLETE — **v326 (`9ffaa0967`)** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, and 3 COMPLETE — **v327 (`4a50e66df`)** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
 types) are merged to `/opt`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
 (PFlash prompt compression) has a working placeholder implementation on a feature
@@ -106,7 +106,7 @@ Vulkan implementations for novel features, so yggdrasil bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **v326 (`9ffaa0967`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
+As of **v327 (`4a50e66df`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
 
 ---
 
@@ -453,7 +453,7 @@ conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `9ffaa0967` v326; /opt installed at v326).
+- Trunk: `main` (HEAD `4a50e66df` v327; /opt installed at v327).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
