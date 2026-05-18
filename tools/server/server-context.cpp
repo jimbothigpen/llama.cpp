@@ -803,10 +803,10 @@ private:
             // Gemma 4 external-assistant MTP: the assistant is a separately-loaded
             // draft GGUF (foreign-KV drafter, mainline #22738). Its context must
             // extract the post-projection hidden state so the speculative driver
-            // can read it back via llama_get_embeddings_ith; cparams.mtp gates that
-            // extraction and params_dft does not inherit has_mtp.
+            // can read it back via llama_get_embeddings_ith; embeddings=true gates
+            // that extraction and params_dft does not inherit has_mtp.
             if (llama_model_is_gemma4_assistant(model_dft.get())) {
-                cparams.mtp = true;
+                cparams.embeddings = true;
                 SRV_INF("%s", "draft model is a Gemma 4 external MTP assistant - enabling MTP extraction on its context\n");
             }
 
@@ -846,12 +846,7 @@ private:
             }
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
-            // The MTP head runs the driver-layer MTP-tail graph: it must extract
-            // per-token embeddings (result_norm) on DRAFT_GEN / UPDATE_ACCEPTED so
-            // the speculative impl can read them back. cparams.mtp gates that
-            // extraction (has_mtp in output_reserve / process_ubatch). The arch
-            // guard keeps it set because the head has nextn_predict_layers > 0.
-            cparams_mtp.mtp = true;
+            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
             if (ctx_dft == nullptr) {
