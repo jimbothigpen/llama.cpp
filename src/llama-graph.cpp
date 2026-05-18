@@ -895,6 +895,11 @@ void llm_graph_result::set_outputs() {
     if (t_mtp_out != nullptr) {
         ggml_set_output(t_mtp_out);
     }
+    for (int k = 0; k < MTP_CHAIN_MAX; ++k) {
+        if (t_logits_mtp_chain[k] != nullptr) {
+            ggml_set_output(t_logits_mtp_chain[k]);
+        }
+    }
 }
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
