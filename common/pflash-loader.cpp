@@ -111,6 +111,25 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	fprintf(stderr, "pflash: %s scorer — %d scoring layers (/%d total), %d embd, %d heads (%d kv), d=%d, vocab=%d\n",
 		arch_str, model.n_layers, n_total_layers, model.n_embd, model.n_heads, model.n_kv_heads, model.d_head, model.n_vocab);
 
+	// If tok_embd is quantized, override its type to F32 before backend allocation so
+	// ggml_get_rows works on all backends (quantized get_rows unsupported on GPU backends).
+	// ggml_compute_forward_get_rows_f16 writes F32 output to an F16-sized buffer (crash),
+	// so F32 is the correct target type. We dequantize in the tensor copy loop below.
+	ggml_type tok_embd_orig_type = GGML_TYPE_F32;
+	{
+		ggml_tensor * te = ggml_get_tensor(model.ctx_ggml, "token_embd.weight");
+		if (te && ggml_is_quantized(te->type)) {
+			tok_embd_orig_type = te->type;
+			te->type  = GGML_TYPE_F32;
+			te->nb[0] = sizeof(float);
+			te->nb[1] = te->ne[0] * te->nb[0];
+			te->nb[2] = te->ne[1] * te->nb[1];
+			te->nb[3] = te->ne[2] * te->nb[2];
+			fprintf(stderr, "pflash: tok_embd %s → F32 dequant for get_rows compat\n",
+					ggml_type_name(tok_embd_orig_type));
+		}
+	}
+
 	// S3: use CPU backend so weights land in CPU RAM and are accessible
 	// to the CPU scorer compute graph. S4 will switch to GPU.
 	ggml_backend_t backend = ggml_backend_cpu_init();
@@ -140,7 +159,21 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 
 		size_t offset = gguf_get_data_offset(gctx) + gguf_get_tensor_offset(gctx, i);
 		const void * src = (const char *)model.mmap_addr + offset;
-		ggml_backend_tensor_set(t, src, 0, ggml_nbytes(t));
+
+		if (tok_embd_orig_type != GGML_TYPE_F32 && strcmp(name, "token_embd.weight") == 0) {
+			// Dequantize row-by-row: quantized mmap → F32 backend buffer
+			int64_t n_embd  = t->ne[0];
+			int64_t n_vocab = t->ne[1];
+			size_t  qbytes  = ggml_row_size(tok_embd_orig_type, n_embd);
+			const struct ggml_type_traits * traits = ggml_get_type_traits(tok_embd_orig_type);
+			std::vector<float> f32row(n_embd);
+			for (int64_t r = 0; r < n_vocab; r++) {
+				traits->to_float((const char *)src + r * qbytes, f32row.data(), n_embd);
+				ggml_backend_tensor_set(t, f32row.data(), r * n_embd * sizeof(float), n_embd * sizeof(float));
+			}
+		} else {
+			ggml_backend_tensor_set(t, src, 0, ggml_nbytes(t));
+		}
 	}
 
 	// resolve tensor pointers
