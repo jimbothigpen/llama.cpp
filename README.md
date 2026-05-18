@@ -346,3 +346,149 @@ and KV cache dispatch works, but the calibration-engine entry points require
 a manual RDC build.
 
 ## In-flight workstreams
+
+Active feature branches with work in progress; not yet on `/opt`.
+
+| Workstream | Branch | Status |
+|---|---|---|
+| RotorQuant KV V-cache (planar3/4, iso3/iso4) | `feature/rotorquant-port-with-kv-alloc-fix` | planar4 PPL gate PASS; planar3 LIKELY PASS; iso3/iso4 blocked on FA decoder (Phase 4a-1 gap) |
+| PFlash prompt compression — placeholder scorer | `feature/pflash-1a` | CLI + server wiring done; 20× TTFT speedup measured; real scorer (1b) pending quality validation |
+| InnerQ RDC separable compilation | `feature/innerq-rdc-enable` | PPL gate PASS (12 chunks, within 1σ of anchor); ship pending |
+| Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
+| MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
+| Vulkan BF16 FA allowlist | merged to main v324 | **SHIPPED** |
+| KV alloc CPU fallback for types without GPU SET_ROWS | merged to main v324 | **SHIPPED** |
+
+## Blocked / awaiting decision
+
+| Item | Blocked on |
+|---|---|
+| DFlash spec-decode revival | Drafter GGUF sourcing (no Qwen3.5-9B DFlash drafter available from z-lab or community); beellama Criterion B satisfied, architecture verified |
+| RotorQuant iso3/iso4 | Phase 4a-1 FA decoder gap — iso types currently fall to all-CPU (164s/pass); fix required before quality gate is meaningful |
+| PFlash 1b (real scorer) | Quality validation smoke on existing 1a branch; user decision on 1b scope |
+| Asymmetric KV pair matrix completion | Phase 8 planning; gap analysis approved |
+| PolarQuant v2 evaluation | arXiv 2603.29078 withdrawn 2026-04-20 for errors; awaiting v2 repost or independent audit |
+
+## Backend support
+
+| Backend | Primary targets | Status |
+|---|---|---|
+| **ROCm** | gfx1150 (mandatory); gfx1102 / gfx1103 (regression-smoke target via single-target `-DAMDGPU_TARGETS=gfx1102` build + `HSA_OVERRIDE_GFX_VERSION=11.0.2` at runtime) | first-class on gfx1150; smoke-only on gfx1102/1103 |
+| **Vulkan** | RDNA3 / RDNA3.5 (and broader — driver-portable) | first-class — high priority |
+| CUDA, Metal, etc. | inherited from mainline | best-effort, not gated |
+
+**Why these specific targets:** the project has access to exactly two physical
+hosts — a gfx1150 Strix Halo APU and a gfx1103 RDNA3 mobile dGPU (built
+single-target as gfx1102 + run with `HSA_OVERRIDE_GFX_VERSION=11.0.2`). Without
+hardware we can't measure perf, can't catch regressions, can't sign off on
+correctness — so we don't commit to supporting AMD targets we can't test.
+**gfx1030, gfx900, gfx94X, gfx12XX, and other AMD GPUs are explicitly out of
+scope** for active development; sibling-fork features targeting those GPUs are
+SKIP-class by default.
+
+Vulkan support is first-class because it's the cross-vendor path that lets
+yggdrasil-novel work (TurboQuant KV, TCQ KV, sidecars, etc.) reach users on
+hardware we don't own; the Vulkan port effort is a yggdrasil-owned burden for
+each in-tree feature regardless of which fork it came from.
+
+gfx1102/1103 ROCm is used as a regression-smoke target (catches HIP-shim
+breakage early; cross-host PPL parity is validated against ai00 gfx1150).
+Production-inference calibration on those hosts still defers to Vulkan due
+to AMD upstream Tensile/hipBLAS GEMM gaps. See
+[docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md).
+
+## Key documents
+
+- [**CHANGELOG.md**](CHANGELOG.md) — milestone-tagged change history (Phases 0,
+  0.7, 1, 2, 3 to date).
+- [**docs/TYPE_ASSIGNMENTS.md**](docs/TYPE_ASSIGNMENTS.md) — authoritative
+  GGUF type-ID contract. Every cherry-pick renumbers to match. Resolves
+  the five-fork collision space.
+- [**docs/OP_ASSIGNMENTS.md**](docs/OP_ASSIGNMENTS.md) — yggdrasil-original
+  `GGML_OP_*` registry (currently: `GGML_OP_TURBO_WHT`).
+- [**docs/BACKEND_PARITY.md**](docs/BACKEND_PARITY.md) — ROCm/Vulkan
+  parity policy, per-feature backend status, Vulkan port priorities,
+  gfx1102/1103 partial-scope (smoke target) recipe, current PPL
+  measurement methodology (c=4096, n_seq=1).
+- [**docs/IK_LLAMA_PORTS.md**](docs/IK_LLAMA_PORTS.md) — subsystem tracker
+  for ik_llama backports (not a git remote).
+- [**docs/gemma4-assistant.md**](docs/gemma4-assistant.md) — Gemma 4 MTP
+  assistant arch (`gemma4-assistant`): GGUF format, conversion, tensor schema.
+- [**docs/zaya1.md**](docs/zaya1.md) — Zyphra ZAYA1-8B arch (`LLM_ARCH_ZAYA`):
+  CCA / EDA / MoD architecture, conversion, tensor schema, quant overrides,
+  multi-seq fix history.
+- [**README.upstream.md**](README.upstream.md) — preserved mainline llama.cpp
+  README for reference on build/usage docs that aren't yggdrasil-specific.
+
+## Build / usage
+
+Yggdrasil follows mainline's build system unchanged. All shipped features
+(TurboQuant KV + TCQ KV + InnerQ KV + WHT weight quants + sidecar engine)
+are built unconditionally — no new feature-gate flags. See
+[README.upstream.md](README.upstream.md) and the upstream `docs/`
+directory for build instructions.
+
+For usage of the new types, see [What's available now](#whats-available-now)
+above. For change history, see [CHANGELOG.md](CHANGELOG.md).
+
+## Companion projects
+
+The following projects are built against yggdrasil's `/opt` install prefix
+and are updated with every `/opt` rebuild. They are designed to work with
+**any** llama.cpp fork and contain no yggdrasil-specific type names or
+conditionals.
+
+- **sidecar-abliteration, sidecar-control-vector, sidecar-logit-bias,
+  sidecar-weight-delta** — out-of-tree `.so` plugins for the sidecar
+  engine. Installed under `/opt/llama-yggdrasil-{rocm,vulkan}/lib/sidecars/`.
+- **llama-quantize-cost** — quantization cost estimator. Installed as part
+  of the main cmake build via `tools/quantize-cost` symlink.
+- **prismaquant-llama** — Python-based prequantization pipeline with
+  incremental probe, AWQ calibration, and GPTQ support. Invokes the
+  installed `llama-quantize` binary; not included in the cmake install.
+
+## Project shape
+
+- Single long-lived downstream fork.
+- Mainline sync cadence: every 2 weeks (target). Current merge base:
+  `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
+  ~2026-05-24 to close ~80 commits of upstream drift.
+- Trunk: `main` (HEAD `9ffaa0967` v326; /opt installed at v326).
+- Milestone tags on origin: `milestone/phase-0-foundation-complete`,
+  `milestone/phase-0.7-sidecar-engine`,
+  `milestone/phase-1-turboquant-kv-foundation`,
+  `milestone/phase-2-mtp-foothold`,
+  `milestone/phase-2-gemma4-mtp`.
+- Feature work happens on `feature/<phase>-<scope>` topic branches and
+  FF-merges back to `main` once all gates pass. See
+  [conventions/git-workflow.md](conventions/git-workflow.md) in
+  yggdrasil-context for the detailed workflow.
+- ik_llama work is tracked subsystem-by-subsystem rather than as branches,
+  because ik_llama's history is unrelated to mainline's. Cherry-pick
+  individual commits or re-implement, never bulk-merge.
+
+## Why yggdrasil (vs. picking one fork as base)
+
+Mainline as base is the right choice for six of seven contributing forks
+because their histories are GitHub-forks of mainline and their work
+expresses as cherry-pickable topic branches. The seventh, ik_llama, has
+independent history — porting subsystem-by-subsystem from it onto mainline
+is a multi-month effort, but choosing ik_llama as base would orphan the
+mainline-side improvements that arrive every week.
+
+The trade-off: yggdrasil pays an ongoing ik_llama-port cost forever, in
+exchange for staying mainline-current forever. The alternative (forking
+ik_llama and pulling mainline in) would pay a giant one-time mainline
+rebase cost upfront, then a forever cost of fighting ik_llama's
+independent direction with mainline's.
+
+The single-author velocity of mainline + ik_llama combined is too high to
+choose either side as base and expect the other's improvements to arrive
+cheaply. Yggdrasil's answer is to accept both as ongoing inputs.
+
+## Contributing
+
+This is currently a personal project. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the current PR / issue posture (TL;DR: the owner can discuss intent
+but can't independently review code; please cite upstream
+`ggml-org/llama.cpp` for everything not introduced by yggdrasil layers).
