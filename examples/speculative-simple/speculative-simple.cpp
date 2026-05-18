@@ -53,7 +53,7 @@ int main(int argc, char ** argv) {
     const bool spec_is_mtp = std::find(
             params.speculative.types.begin(),
             params.speculative.types.end(),
-            COMMON_SPECULATIVE_TYPE_MTP) != params.speculative.types.end();
+            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     // TODO: simplify this logic
     if (spec_is_mtp && params.speculative.draft.mparams.path.empty()) {
