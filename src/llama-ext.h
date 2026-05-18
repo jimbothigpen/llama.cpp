@@ -108,3 +108,7 @@ LLAMA_API float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, 
 // Get the raw pre-norm embedding row by token row index from the last decode graph.
 // Unlike llama_get_embeddings_pre_norm_ith(), this does not resolve through output rows.
 LLAMA_API float * llama_get_embeddings_pre_norm_raw_ith(struct llama_context * ctx, int32_t i);
+
+// gemma4-assistant internal: set which MTP op the context performs on the next decode.
+// Demoted from llama.h to llama-ext.h; consumed only by the static Gemma4 speculative free fns.
+LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
