@@ -293,3 +293,94 @@ size_t quantize_iso4_0(const float * src, void * dst,
     }
     return (size_t)(nrows * (int64_t)row_size);
 }
+
+// ---------------------------------------------------------------------------
+// CPU vec_dot — needed when K=iso3/planar3/iso4/planar4 falls back to CPU
+// attention (GPU FA has no K-side dispatch for RQ types; scheduler routes to CPU
+// where ggml_compute_forward_mul_mat_one_chunk calls vec_dot unconditionally).
+// vec_dot_type = GGML_TYPE_F32, so vy is a plain float array.
+// ---------------------------------------------------------------------------
+
+void ggml_vec_dot_rq_planar3_0(int n, float * GGML_RESTRICT s, size_t bs,
+                                const void * GGML_RESTRICT vx, size_t bx,
+                                const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_ASSERT(n % QK_PLANAR3 == 0);
+    const block_planar3_0 * x = (const block_planar3_0 *) vx;
+    const float           * y = (const float *)           vy;
+    const int nb = n / QK_PLANAR3;
+    float sum = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float norm = GGML_FP16_TO_FP32(x[ib].norm);
+        for (int j = 0; j < QK_PLANAR3; ++j) {
+            const int midx = (x[ib].qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            const int sign = (x[ib].signs[j / 8] >> (j % 8)) & 0x1;
+            const float mag = PLANAR3_MAG_CENTROIDS[midx] * norm;
+            sum += (sign ? -mag : mag) * y[ib * QK_PLANAR3 + j];
+        }
+    }
+    *s = sum;
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by);
+}
+
+void ggml_vec_dot_rq_planar4_0(int n, float * GGML_RESTRICT s, size_t bs,
+                                const void * GGML_RESTRICT vx, size_t bx,
+                                const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_ASSERT(n % QK_PLANAR4 == 0);
+    const block_planar4_0 * x = (const block_planar4_0 *) vx;
+    const float           * y = (const float *)           vy;
+    const int nb = n / QK_PLANAR4;
+    float sum = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float scale = GGML_FP16_TO_FP32(x[ib].norm) / 7.5f;
+        for (int j = 0; j < QK_PLANAR4; ++j) {
+            const int q = (j % 2 == 0) ? (x[ib].qs[j / 2] & 0xF) : ((x[ib].qs[j / 2] >> 4) & 0xF);
+            sum += ((float)q - 7.5f) * scale * y[ib * QK_PLANAR4 + j];
+        }
+    }
+    *s = sum;
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by);
+}
+
+void ggml_vec_dot_rq_iso3_0(int n, float * GGML_RESTRICT s, size_t bs,
+                              const void * GGML_RESTRICT vx, size_t bx,
+                              const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_ASSERT(n % QK_ISO3 == 0);
+    const block_iso3_0 * x = (const block_iso3_0 *) vx;
+    const float        * y = (const float *)        vy;
+    const int nb = n / QK_ISO3;
+    float sum = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float norm = GGML_FP16_TO_FP32(x[ib].norm);
+        for (int j = 0; j < QK_ISO3; ++j) {
+            const int midx = (x[ib].qs[j / 4] >> ((j % 4) * 2)) & 0x3;
+            const int sign = (x[ib].signs[j / 8] >> (j % 8)) & 0x1;
+            const float mag = ISO3_MAG_CENTROIDS[midx] * norm;
+            sum += (sign ? -mag : mag) * y[ib * QK_ISO3 + j];
+        }
+    }
+    *s = sum;
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by);
+}
+
+void ggml_vec_dot_rq_iso4_0(int n, float * GGML_RESTRICT s, size_t bs,
+                              const void * GGML_RESTRICT vx, size_t bx,
+                              const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_ASSERT(n % QK_ISO4 == 0);
+    const block_iso4_0 * x = (const block_iso4_0 *) vx;
+    const float        * y = (const float *)        vy;
+    const int nb = n / QK_ISO4;
+    float sum = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float scale = GGML_FP16_TO_FP32(x[ib].norm) / 7.5f;
+        for (int j = 0; j < QK_ISO4; ++j) {
+            const int q = (j % 2 == 0) ? (x[ib].qs[j / 2] & 0xF) : ((x[ib].qs[j / 2] >> 4) & 0xF);
+            sum += ((float)q - 7.5f) * scale * y[ib * QK_ISO4 + j];
+        }
+    }
+    *s = sum;
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by);
+}
