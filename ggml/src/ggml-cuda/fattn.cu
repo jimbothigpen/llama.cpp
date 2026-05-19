@@ -476,6 +476,21 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_Q8_0)
 
+    // Q4_1 K × TURBOQ_0 V (X-2b-s2)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ2_0)
+    // Q4_0 K × TURBOQ_0 V (X-2b-s2)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ4_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ2_0)
+    // Q4_1 K × TURBOQ_TCQ V (X-2b-s2)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ3_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ2_TCQ)
+    // Q4_0 K × TURBOQ_TCQ V (X-2b-s2)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ3_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ2_TCQ)
+
     GGML_ABORT("fatal error");
 }
 
@@ -578,7 +593,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ
                 || t == GGML_TYPE_RQ_PLANAR3_0 || t == GGML_TYPE_RQ_PLANAR4_0
                 || t == GGML_TYPE_RQ_ISO3_0    || t == GGML_TYPE_RQ_ISO4_0
-                || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16;
+                || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
+                || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1;
         };
         if (!is_kv_compat(K->type) || !is_kv_compat(V->type)) {
             return BEST_FATTN_KERNEL_NONE;
@@ -590,12 +606,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
             break;
-        case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
 #ifndef GGML_CUDA_FA_ALL_QUANTS
             return BEST_FATTN_KERNEL_NONE;
 #endif // GGML_CUDA_FA_ALL_QUANTS
+        case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_BF16:
