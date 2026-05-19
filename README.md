@@ -89,7 +89,7 @@ cross-backend PPL matches within tolerance. See
 | 2 | MTP spec-decode — mainline-aligned driver layer; internal Qwen3.5/MoE NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP | mainline PR #22673 + mainline `#22738` (gemma4-assistant) | **complete (milestone `phase-2-gemma4-mtp`)** |
 | 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | yggdrasil port | **complete (main v307)** |
-| 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; yggdrasil port | **merged to main; ROCm RDC-enable pending (`feature/innerq-rdc-enable`); Vulkan gap documented** |
+| 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; yggdrasil port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
 | 4a | RotorQuant V-cache — planar3/4 + iso3/4 (`RQ_*`) | carlosfundora | **in-flight — planar PPL gate passing; iso3/iso4 blocked on FA decoder (Phase 4a-1)** |
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
@@ -198,9 +198,8 @@ one-time and stored alongside the GGUF.
 | `turboq4_innerq` (slot 70) | 4.25 | 128 | Calibrated 4-bit |
 
 **Backend support:** CUDA/HIP type traits, calibration engine, and FA-vec
-dispatch are on `main`. ROCm RDC (separable compilation) required for the
-calibration engine is pending default enablement (`feature/innerq-rdc-enable`,
-PPL gate passed). Vulkan support is not yet implemented (gap documented).
+dispatch are on `main`. RDC enabled broadly in v368 (commit 5e314b5f5) for
+ggml-hip and ggml-cuda. Vulkan support is not yet implemented (gap documented).
 
 ---
 
@@ -342,12 +341,10 @@ All shipped features are built unconditionally as part of the standard cmake
 recipe; no new feature-gate flags are required. See [README.upstream.md](README.upstream.md)
 for the unchanged mainline build instructions.
 
-**InnerQ calibration exception:** the CUDA/HIP separable compilation flag
-(`-fgpu-rdc` / `CUDA_SEPARABLE_COMPILATION`) required by the InnerQ
-calibration engine is pending default enablement (in-flight on
-`feature/innerq-rdc-enable`). Until that lands, InnerQ types are registered
-and KV cache dispatch works, but the calibration-engine entry points require
-a manual RDC build.
+**InnerQ calibration:** RDC enabled broadly in v368 (commit 5e314b5f5) for
+ggml-hip and ggml-cuda. The CUDA/HIP separable compilation flag
+(`-fgpu-rdc` / `CUDA_SEPARABLE_COMPILATION`) is on by default; no manual
+RDC build is required.
 
 ## In-flight workstreams
 
@@ -357,7 +354,7 @@ Active feature branches with work in progress; not yet merged to `main`.
 |---|---|---|
 | RotorQuant KV V-cache (planar3/4, iso3/iso4) | `feature/rotorquant-port-with-kv-alloc-fix` | planar4 PPL gate PASS; planar3 LIKELY PASS; iso3/iso4 blocked on FA decoder (Phase 4a-1 gap) |
 | PFlash prompt compression — real scorer (1b) | pending | Quality validation and real scorer implementation pending |
-| InnerQ RDC separable compilation | `feature/innerq-rdc-enable` | PPL gate PASS (12 chunks, within 1σ of anchor); ship pending |
+| InnerQ RDC separable compilation | merged to main v368 (5e314b5f5) | **SHIPPED** |
 | Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
 | MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
 | Vulkan BF16 FA allowlist | merged to main v324 | **SHIPPED** |
