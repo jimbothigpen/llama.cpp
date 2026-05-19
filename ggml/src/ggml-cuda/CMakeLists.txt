@@ -231,7 +231,13 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q4_0-turboq3_0.cu
             template-instances/fattn-vec-instance-q4_0-turboq2_0.cu
             template-instances/fattn-vec-instance-q4_0-turboq3_tcq.cu
-            template-instances/fattn-vec-instance-q4_0-turboq2_tcq.cu)
+            template-instances/fattn-vec-instance-q4_0-turboq2_tcq.cu
+            template-instances/fattn-vec-instance-turboq4_0-turboq3_tcq.cu
+            template-instances/fattn-vec-instance-turboq4_0-turboq2_tcq.cu
+            template-instances/fattn-vec-instance-turboq3_0-turboq2_tcq.cu
+            template-instances/fattn-vec-instance-turboq3_tcq-turboq3_0.cu
+            template-instances/fattn-vec-instance-turboq3_tcq-turboq2_0.cu
+            template-instances/fattn-vec-instance-turboq2_tcq-turboq2_0.cu)
     endif()
 
     ggml_add_backend_library(ggml-cuda
