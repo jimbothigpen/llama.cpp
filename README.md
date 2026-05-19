@@ -29,7 +29,7 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `0f8fe8321`** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `88afd0b5a`** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
 types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
@@ -88,7 +88,7 @@ cross-backend PPL matches within tolerance. See
 | 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
 | 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
-| 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **shipped 34/34 pairs (HEAD `0f8fe8321`); iso3-K cross-V hang (4 pairs) remains open per TODO 68; HIP kernel Cat 2/3 bugs surface ppl-gate failures** |
+| 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **shipped 34/34 pairs (HEAD `88afd0b5a`); iso3-K cross-V hang (4 pairs) remains open per TODO 68; HIP kernel Cat 2/3 bugs surface ppl-gate failures** |
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
@@ -103,7 +103,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `0f8fe8321`**, the following features are on `main`.
+As of **HEAD `88afd0b5a`**, the following features are on `main`.
 
 ---
 
@@ -248,7 +248,7 @@ PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test;
 | `planar3` (slot 73) | 1.0 | 128 | ~16× | Planar 1-bit (3 codebook vectors) |
 | `planar4` (slot 74) | 1.0 | 128 | ~16× | Planar 1-bit (4 codebook vectors) |
 
-All 34 asymmetric K/V pairs are shipped as of `0f8fe8321`. Quality gate (PPL)
+All 34 asymmetric K/V pairs are shipped as of `88afd0b5a`. Quality gate (PPL)
 validates planar variants; iso3/iso4 have known HIP kernel bugs (TODO 68)
 blocking full validation.
 
@@ -272,14 +272,16 @@ llama-cli --no-mmap -fa on -m model.gguf \
     --cache-type-k turboq2_tcq --cache-type-v turboq3 -c 4096 -ngl 99
 ```
 
-**Shipped asymmetric coverage (~57+ pairs):**
+**Shipped asymmetric coverage (~77+ pairs):**
 - Q4_0 / Q4_1 K × TURBOQ V (X-2b-s2, `46c5dec9c`)
 - F16 / BF16 / Q8_0 K × TURBOQ V (X-2a)
 - TURBOQ_0 × TURBOQ_TCQ cross-family (X-2c, `305901807`)
-- RotorQuant K-side (iso3/4, planar3/4) × RotorQuant V-side (34/34 pairs, `0f8fe8321`)
-- InnerQ asymmetric (7 pairs, X-InnerQ-s1, committed `121388041`, merge pending)
+- RotorQuant K-side (iso3/4, planar3/4) × RotorQuant V-side (34/34 pairs, `88afd0b5a`)
+- InnerQ asymmetric (7 pairs, X-InnerQ-s1, shipped `42078ec1b`)
+- TURBOQ/TCQ × Q4/Q5 K (10 lower-priority, X-3-s1, shipped `52b316453`)
+- TURBOQ/TCQ/Q4/Q5 × INNERQ (10 HIGH-priority, X-InnerQ-s2, shipped `88afd0b5a`)
 
-Remaining pairs (10 lower-priority, X-3-s1) are committed pending ship.
+Remaining pairs (X-3-s2, X-3-s3) pending.
 
 ---
 
@@ -387,9 +389,7 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| X-InnerQ-s1 ship (7 INNERQ pairs) | — | committed `121388041`, push + merge pending |
-| X-3-s1 ship (10 lower-priority pairs) | — | committed `18e0cb247`, build + smoke + push + merge pending |
-| X-3-s2, X-3-s3 (remaining pairs) | — | starters exist, not yet spawned |
+| X-3-s2, X-3-s3 (remaining asymmetric pairs) | — | starters exist, not yet spawned |
 | PFlash NEW-D (Vulkan) + NEW-E (shared model) | — | deferred post-4c |
 | PPL-gate bug triage (5 categories) | — | iso/planar K Vulkan FA registration + ROCm NaN/crash + turboq4/turboq3_tcq Vulkan DeviceLost + ai01 gfx1102 regression; triage pending |
 
@@ -484,7 +484,7 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `0f8fe8321`).
+- Trunk: `main` (HEAD `88afd0b5a`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
