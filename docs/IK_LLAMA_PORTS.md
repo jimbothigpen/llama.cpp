@@ -14,7 +14,7 @@ The companion type-ID contract lives at [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.m
 - **recon-structural** — Recon classified as structural. Must inform
   architecture decisions before downstream layers land.
 - **port-in-progress** — Active porting work.
-- **ported** — Landed on yggdrasil, regression-tested.
+- **ported** — Landed on this fork, regression-tested.
 - **dormant** — ik_llama work itself is shelved; we may skip the port.
 - **declined** — We chose not to port; record the reason.
 
@@ -42,13 +42,13 @@ The companion type-ID contract lives at [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.m
 | CPU MLA | `ik/cpu_mla_all_quants`, `ik/cpu_deepseek_fa` | pending-recon | |
 | bf16 KV cache | `ik/bf16_kv_cache` | pending-recon | Likely additive. |
 | Better Q4_0 KV cache | `ik/better_q40_kv_cache`, `ik/better_q40_kv_cache_cpu` | pending-recon | Likely additive. |
-| Fused MoE | `GGML_OP_MOE_FUSED_UP_GATE` op; `iqk_moe_fused_up_gate()` in `ggml/src/iqk/iqk_mul_mat.cpp`; graph builder in `src/llama-build-context.cpp:1014`; PR #1707 + scattered. | **recon-additive** (2026-05-12, session 2) | Adds new ggml op enum (`GGML_OP_MOE_FUSED_UP_GATE`). CPU path depends on IK quants (`IQK_IMPLEMENT`); Metal/Vulkan stubs are yggdrasil-original. Port-order: IK quants → fused MoE CPU → fused MoE GPU. See `yggdrasil-context/recon/03-fused-moe.md`. |
+| Fused MoE | `GGML_OP_MOE_FUSED_UP_GATE` op; `iqk_moe_fused_up_gate()` in `ggml/src/iqk/iqk_mul_mat.cpp`; graph builder in `src/llama-build-context.cpp:1014`; PR #1707 + scattered. | **recon-additive** (2026-05-12, session 2) | Adds new ggml op enum (`GGML_OP_MOE_FUSED_UP_GATE`). CPU path depends on IK quants (`IQK_IMPLEMENT`); Metal/Vulkan stubs are fork-original. Port-order: IK quants → fused MoE CPU → fused MoE GPU. See `yggdrasil-context/recon/03-fused-moe.md`. |
 
 ### Speculative decoding (MTP)
 
 | Subsystem | ik_llama refs | Status | Notes |
 |---|---|---|---|
-| MTP foundation (Qwen3.5 MoE, Gemma 4, GLM, Mistral3) | PRs #1736, #1741, #1744, #1745 (Gemma 4), #1758 (multimodal), #1771 (GLM fix) | pending-recon | **Already partially-ported to mainline by turbo-tan's `experiment/gemma4-mtp-upstream-pr`.** Phase 2 of yggdrasil layer plan uses turbo-tan's port as the foothold. ik_llama subsystem-port becomes "backport ongoing improvements" rather than "port from scratch." |
+| MTP foundation (Qwen3.5 MoE, Gemma 4, GLM, Mistral3) | PRs #1736, #1741, #1744, #1745 (Gemma 4), #1758 (multimodal), #1771 (GLM fix) | pending-recon | **Already partially-ported to mainline by turbo-tan's `experiment/gemma4-mtp-upstream-pr`.** Phase 2 of this fork's layer plan uses turbo-tan's port as the foothold. ik_llama subsystem-port becomes "backport ongoing improvements" rather than "port from scratch." |
 | MTP graph reuse | PRs #1713, #1728, #1780 | pending-recon | Sits on top of turbo-tan's foundation. |
 | MTP per-step SSM optimizations | PRs #1713, #1718, #1724, #1728, #1767, #1773, #1778 | **recon-structural** (2026-05-12, session 2) | Confirmed structural risk: requires ik_llama's `split_s_l_shadow`, dual-graph reuse (`prev_mtp`), and `ggml_delta_net` 6-src-tensor signature. Forces Phase 2 choice: mainline-style MTP foothold (Path α, first-pass recommended) vs ik_llama-style foundation (Path β). See `yggdrasil-context/recon/02-mtp-per-step-ssm.md`. |
 | MTP async copies | PR #1781 | pending-recon | |
@@ -70,7 +70,7 @@ Each subsystem port follows this template:
 
 1. **Recon (Phase 0.5)** — classify additive/structural. ~1 day per subsystem.
 2. **Topic branch** — create `port/ik_llama/<subsystem>` off the current
-   yggdrasil trunk. Cherry-pick commits one-by-one; do NOT bulk-merge a
+   trunk. Cherry-pick commits one-by-one; do NOT bulk-merge a
    range of ik_llama commits (their history is rebased and unrelated).
 3. **Renumber types** — any new ggml_type from this port follows
    [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.md).
@@ -85,8 +85,8 @@ Each subsystem port follows this template:
 
 ik_llama lands ~3 PRs/week (mostly MTP). For each new ik_llama PR:
 
-1. Triage: relevant to yggdrasil? (yes/no/maybe)
-2. If yes: open a yggdrasil tracking issue with the ik_llama PR URL.
+1. Triage: relevant to this fork? (yes/no/maybe)
+2. If yes: open a tracking issue with the ik_llama PR URL.
 3. Schedule the backport based on which subsystem it targets and what
    already-ported subsystems it depends on.
 

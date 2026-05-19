@@ -1,7 +1,7 @@
 # Zyphra ZAYA1-8B (`LLM_ARCH_ZAYA`)
 
 This page documents the in-tree port of Zyphra's ZAYA1-8B hybrid MoE
-architecture into llama-yggdrasil. ZAYA1 is the first novel model port
+architecture into this fork. ZAYA1 is the first novel model port
 that did not originate in mainline llama.cpp or any of the six tracked
 sibling forks; the reference implementations were the unmerged
 `Zyphra/vllm@zaya1-pr` and `transformers@zaya1` branches.
@@ -197,7 +197,7 @@ The four bugs and their fixes:
 | 3 | `src/models/zaya.cpp` `QKraw_t` build | `cont(transpose(QKraw))+reshape_3d(., n_seq_tokens, n_qk, n_seqs)` silently scrambles channel/seq for `n_seqs>1` (mapping coincidentally correct for `n_seqs=1`); **same bug present in Zyphra's reference fork** | reshape `QKraw` directly to `(n_qk, n_seq_tokens, n_seqs)` (memory-preserving because ubatch is seq-major per `llama_batch_allocr::split_equal`), then `permute(1,0,2,3) + cont` |
 | 4 | `ggml/src/ggml.c` `ggml_conv_1d` (latent mainline bug) | final `mul_mat(im2col_2d, a_2d) → reshape_3d(., OL, OC, N)` reinterprets the `(N*OL, OC)` mul_mat output as `(OL, OC, N)`, but flat layout only matches semantically when `N=1` (seq-stride collapse) or `OC=1`; for `N>1` and `OC>1` channels and seqs get cross-mixed | local `conv_1d_grouped_multiseq` lambda in `src/models/zaya.cpp` with corrected `reshape_3d(OL, N, OC) + permute(0,2,1,3) + cont`; **no ggml-core changes** |
 
-Future yggdrasil models that call `ggml_conv_1d` / `ggml_conv_1d_grouped`
+Future models that call `ggml_conv_1d` / `ggml_conv_1d_grouped`
 with `n_seqs > 1` must either copy the lambda or discuss a ggml-core fix
 with the user first (per the mainline-fidelity policy).
 
@@ -205,7 +205,7 @@ with the user first (per the mainline-fidelity policy).
 
 ZAYA1 was originally cataloged in `yggdrasil-context/future-watch.md` as a
 HARD-BUT-DOABLE 4–8-week port, deferred because none of the planned
-yggdrasil phases share kernel surface with CCA / EDA and the vLLM reference
+this fork's phases share kernel surface with CCA / EDA and the vLLM reference
 PR was unmerged. Trigger #4 of that ledger entry — user production need —
 fired off-tracker, and the port was built end-to-end in seven phases
 (P1 converter, P2 arch + stub, P3 graph, P4 HF parity, P5 single-seq quant

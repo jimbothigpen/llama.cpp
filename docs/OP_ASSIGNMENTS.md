@@ -1,11 +1,11 @@
 # GGML op-enum assignments
 
-Yggdrasil-original GGML ops have no explicit integer assignments. The mainline
+Original GGML ops have no explicit integer assignments. The mainline
 `ggml/include/ggml.h` `enum ggml_op` enumerates positionally (no explicit
 values) and ends in `GGML_OP_COUNT`. New ops append immediately before
 `GGML_OP_COUNT`.
 
-Per Phase 0.5 constraint **C1.3**, yggdrasil-added ops are listed here so the
+Per Phase 0.5 constraint **C1.3**, added ops are listed here so the
 intent and ordering are explicit and audit-able. The "slot" column is the
 position-index in `enum ggml_op` after each op is inserted (counting from 0).
 Mainline-side reordering will shift slot numbers — the contract is
@@ -17,7 +17,7 @@ Mainline-side reordering will shift slot numbers — the contract is
 
 ## Update protocol
 
-When adding a yggdrasil-original `GGML_OP_*`:
+When adding an original `GGML_OP_*`:
 
 1. Append the op to `enum ggml_op` immediately before `GGML_OP_COUNT` in
    `ggml/include/ggml.h`.

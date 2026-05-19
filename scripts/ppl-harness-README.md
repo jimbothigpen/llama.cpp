@@ -1,20 +1,20 @@
 # ppl-harness.py — PPL Regression Harness
 
 Runs `llama-perplexity` against the ROCm and/or Vulkan installs of
-llama-yggdrasil, writes structured JSON baselines to
+this fork, writes structured JSON baselines to
 `yggdrasil-context/ppl-baselines/`, and emits a PASS/WARN/FAIL parity
 verdict between backends.
 
 ## Requirements
 
 - Python 3.8+ (stdlib only — no venv needed)
-- `llama-yggdrasil` built and installed to `/opt/llama-yggdrasil-{rocm,vulkan}/`
+- This fork built and installed to `/opt/llama-yggdrasil-{rocm,vulkan}/`
 - wikitext-2 corpus (auto-fetched on first run)
 
 ## Quick start
 
 ```bash
-cd /path/to/llama-yggdrasil
+cd /path/to/llama.cpp
 
 # Both backends, 20 chunks (~10k tokens)
 ./scripts/ppl-harness.py --model /path/to/model.gguf --chunks 20
@@ -93,6 +93,6 @@ This is baked into the harness and cannot be overridden from the CLI.
   ai01 read identical bytes (same sha256 = same slice = valid comparison).
 - Model sha256 is cached at `~/.cache/yggdrasil/model-sha256.json`
   (keyed by path + mtime + size) to avoid rehashing large GGUFs.
-- Do **not** use `ldconfig` system-wide for the yggdrasil library path —
+- Do **not** use `ldconfig` system-wide for the library path —
   multiple forks live under `/opt/`. RPATH is embedded in the installed
   binaries (`$ORIGIN/../lib`).
