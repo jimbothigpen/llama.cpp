@@ -430,6 +430,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ3_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ2_TCQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ2_0)
+    // X-RQ-s1b: K=planar3 HIGH pairs (K-RQ-12 through K-RQ-16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_PLANAR3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ2_TCQ)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ2_0)
 
     GGML_ABORT("fatal error");
 }
@@ -570,7 +576,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
             break;
         case GGML_TYPE_RQ_ISO3_0:
-            // VEC-only K type; handled via is_turbo_type bypass below.
+        case GGML_TYPE_RQ_PLANAR3_0:
+            // VEC-only K types; handled via is_turbo_type bypass below.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -591,7 +598,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
             || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
             || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ
-            || t == GGML_TYPE_RQ_ISO3_0;  // VEC-only; bypass FATTN_KQ_STRIDE alignment check
+            || t == GGML_TYPE_RQ_ISO3_0    // VEC-only; bypass FATTN_KQ_STRIDE alignment check
+            || t == GGML_TYPE_RQ_PLANAR3_0;
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
         const bool tcq_kv = K->type == GGML_TYPE_TURBOQ2_TCQ || K->type == GGML_TYPE_TURBOQ3_TCQ ||
