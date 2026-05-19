@@ -29,7 +29,7 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `88afd0b5a`** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `4684c13c8`** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
 types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
@@ -103,7 +103,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `88afd0b5a`**, the following features are on `main`.
+As of **HEAD `4684c13c8`**, the following features are on `main`.
 
 ---
 
@@ -272,7 +272,7 @@ llama-cli --no-mmap -fa on -m model.gguf \
     --cache-type-k turboq2_tcq --cache-type-v turboq3 -c 4096 -ngl 99
 ```
 
-**Shipped asymmetric coverage (~77+ pairs):**
+**Shipped asymmetric coverage (~85+ pairs):**
 - Q4_0 / Q4_1 K × TURBOQ V (X-2b-s2, `46c5dec9c`)
 - F16 / BF16 / Q8_0 K × TURBOQ V (X-2a)
 - TURBOQ_0 × TURBOQ_TCQ cross-family (X-2c, `305901807`)
@@ -280,6 +280,7 @@ llama-cli --no-mmap -fa on -m model.gguf \
 - InnerQ asymmetric (7 pairs, X-InnerQ-s1, shipped `42078ec1b`)
 - TURBOQ/TCQ × Q4/Q5 K (10 lower-priority, X-3-s1, shipped `52b316453`)
 - TURBOQ/TCQ/Q4/Q5 × INNERQ (10 HIGH-priority, X-InnerQ-s2, shipped `88afd0b5a`)
+- RQ K × INNERQ V (8 pairs, X-InnerQ-s3, shipped `4684c13c8`)
 
 Remaining pairs (X-3-s2, X-3-s3) pending.
 
