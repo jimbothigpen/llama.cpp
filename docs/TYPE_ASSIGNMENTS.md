@@ -1,8 +1,8 @@
-# llama-yggdrasil GGUF type-ID contract — v1
+# GGUF type-ID contract — v1
 
 Authoritative assignments for `enum ggml_type` and `enum llama_ftype` in
-llama-yggdrasil. Every cherry-pick from a contributing fork MUST renumber to
-match this table before landing on a yggdrasil branch.
+this fork. Every cherry-pick from a contributing fork MUST renumber to
+match this table before landing on a branch.
 
 This document is normative. If reality disagrees with this document, fix the
 code, not the document — unless the contract itself is being revised, in
@@ -23,10 +23,10 @@ incompatible ways. Concrete known collisions:
 | 46 | — | `TQ4_1S` | — | `TURBO2_TCQ` | `ISO3_0` | `TQ3_4S` | — |
 | 47 | — | — | — | — | `ISO4_0` | — | — |
 
-**Note (2026-05-12, recon/06):** TheTom HEAD branch is `feature/turboquant-kv-cache`; alpha-scaling is now stale and superseded. Between alpha-scaling and TQ-KV, the TURBO_*_0 trio was reordered (TURBO2/3/4 = 42/43/44 instead of 43/41/42) and the TQ_1S types shifted up by one slot. This affects the cherry-pick recipe's "FROM" mapping but not yggdrasil's own slot assignments (60–95 zone unchanged).
+**Note (2026-05-12, recon/06):** TheTom HEAD branch is `feature/turboquant-kv-cache`; alpha-scaling is now stale and superseded. Between alpha-scaling and TQ-KV, the TURBO_*_0 trio was reordered (TURBO2/3/4 = 42/43/44 instead of 43/41/42) and the TQ_1S types shifted up by one slot. This affects the cherry-pick recipe's "FROM" mapping but not this fork's own slot assignments (60–95 zone unchanged).
 
 GGUF files produced by any one fork are silently misread by any other.
-Cherry-picking without renumbering would propagate this hazard into yggdrasil.
+Cherry-picking without renumbering would propagate this hazard into this fork.
 
 ## Partitioning policy
 
@@ -37,13 +37,13 @@ fixed-purpose zones:
 |---|---|---|
 | 0–41 | Mainline core types | upstream ggml-org/llama.cpp |
 | 42–59 | **Mainline growth reserve** — DO NOT USE | upstream (future) |
-| 60–95 | **Yggdrasil extensions** — new types from contributing forks | this project |
+| 60–95 | **Fork extensions** — new types from contributing forks | this project |
 | 96–199 | ik_llama compatibility zone | preserve ik_llama assignments |
 | 200–255 | Row-interleaved / packed variants | preserve ik_llama R-suffix layout |
 
 **Why a mainline growth reserve.** Mainline added `Q1_0` at slot 41 after
 several forks had already placed their own types at 41. Mainline will keep
-adding types in this range. Yggdrasil refuses to play tug-of-war for these
+adding types in this range. This fork refuses to play tug-of-war for these
 slots. We accept whatever mainline assigns; we never compete.
 
 **Why a high-number zone (60–95).** Same reason ik_llama did it: collisions
@@ -55,13 +55,13 @@ require either (a) a loader compatibility shim or (b) forcing users to
 re-quantize. Preserving the IDs lets us read existing ik_llama GGUFs
 without modification.
 
-## Yggdrasil extension zone (60–95) — canonical assignments
+## Fork extension zone (60–95) — canonical assignments
 
 ### 60–65: TurboQuant KV family (source: TheTom `feature/turboquant-kv-cache`)
 
 Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2026-05-12). Earlier drafts of this document named `feature/alpha-scaling` as the source; alpha-scaling has since been superseded by TQ-KV (1 substantive unique commit, the optional `TURBO_ALPHA` env var knob). All "TheTom name (renamed)" slot numbers below reflect TQ-KV HEAD as of `5aeb2fdbe`.
 
-| Slot | Yggdrasil name | TheTom name (renamed) | Description |
+| Slot | Type name | TheTom name (renamed) | Description |
 |---|---|---|---|
 | 60 | `GGML_TYPE_TURBOQ2_0` | `TURBO2_0` (42) | 2-bit PolarQuant, no QJL |
 | 61 | `GGML_TYPE_TURBOQ3_0` | `TURBO3_0` (43) | 2-bit PolarQuant + 1-bit QJL |
@@ -74,7 +74,7 @@ disambiguates from the `TURBO*_0` collisions in contributing forks.
 
 ### 66–71: TCQ + InnerQ KV family (source: buun `master` / frankenturbo2)
 
-| Slot | Yggdrasil name | Source name (renamed) | Description | Block size | Vulkan |
+| Slot | Type name | Source name (renamed) | Description | Block size | Vulkan |
 |---|---|---|---|---|---|
 | 66 | `GGML_TYPE_TURBOQ2_TCQ` | `TURBO2_TCQ` (buun 46) | TCQ k=2, L=8, 256 states | 36 bytes | CPU fallback |
 | 67 | `GGML_TYPE_TURBOQ3_TCQ` | `TURBO3_TCQ` (buun 45) | TCQ k=3, Viterbi-decoded | 52 bytes | CPU fallback |
@@ -94,7 +94,7 @@ TURBOQ_0 block structs.
 
 ### 72–79: RotorQuant KV family (source: carlosfundora `1-bit-turbo`)
 
-| Slot | Yggdrasil name | Carlosfundora name (renamed) | Description |
+| Slot | Type name | Carlosfundora name (renamed) | Description |
 |---|---|---|---|
 | 72 | `GGML_TYPE_RQ_PLANAR3_0` | `PLANAR3_0` (44) | Givens-rotation, 8 centroids, sign-mag split |
 | 73 | `GGML_TYPE_RQ_PLANAR4_0` | `PLANAR4_0` (45) | Givens-rotation, 16 centroids |
@@ -109,7 +109,7 @@ TCQ and TheTom's TurboQuant.
 
 Originally drafted against `pr/tq4-weight-compression`; that branch is fully subsumed by `feature/turboquant-kv-cache` (zero unique commits by subject — see `recon/06-thetom-branches.md`). All slot numbers below reflect TQ-KV HEAD as of `5aeb2fdbe`.
 
-| Slot | Yggdrasil name | TheTom name (renamed) | Description |
+| Slot | Type name | TheTom name (renamed) | Description |
 |---|---|---|---|
 | 80 | `GGML_TYPE_WHT3_0` | `TQ3_1S` (45) | WHT-rotated 8-level Lloyd-Max, block_size=32 |
 | 81 | `GGML_TYPE_WHT4_0` | `TQ4_1S` (46) | WHT-rotated 16-level Lloyd-Max, block_size=32 |
@@ -121,7 +121,7 @@ transform (Walsh-Hadamard) and breaks the collision.
 
 ### 86–91: RaBitQ weight family (source: turbo-tan `main`)
 
-| Slot | Yggdrasil name | Turbo-tan name (renamed) | Description |
+| Slot | Type name | Turbo-tan name (renamed) | Description |
 |---|---|---|---|
 | 86 | `GGML_TYPE_RBQ3_1S` | `TQ3_1S` (44) | RaBitQ 3-bit, two half-block scales |
 | 87 | `GGML_TYPE_RBQ3_4S` | `TQ3_4S` (46) | RaBitQ 3-bit, four u8 per-8 scales (4.0 bpw) |
@@ -166,7 +166,7 @@ Three forks place "Q1_0 with 128-element groups" at three different slots:
 - Carlosfundora: `Q1_0_g128 = 43` (lowercase `g`)
 - Mainline: no equivalent
 
-**Resolution:** Place `GGML_TYPE_Q1_0_G128 = 96` in yggdrasil (first slot of
+**Resolution:** Place `GGML_TYPE_Q1_0_G128 = 96` in this fork (first slot of
 ik_llama compat zone). This means:
 
 - Existing ik_llama GGUFs marked with type 41 must be re-quantized OR loaded
@@ -174,7 +174,7 @@ ik_llama compat zone). This means:
 - Existing carlosfundora GGUFs marked with type 43 must be re-quantized OR
   loaded through a fork-detection shim.
 
-Slot 96 is the canonical yggdrasil ID for this type going forward.
+Slot 96 is the canonical ID for this type going forward.
 
 Symbol: `q1_0_g128_` (kernels), `Q1_0_G128` (constant). Uppercase `G` follows
 ik_llama's convention.
@@ -223,12 +223,12 @@ corresponding `LLAMA_FTYPE_MOSTLY_*` in the same commit.
 ## Reader compatibility for legacy fork GGUFs
 
 We will NOT silently re-interpret legacy fork-specific GGUFs. If a user
-brings a GGUF quantized with (e.g.) buun's `TURBO3_0=42`, the yggdrasil
+brings a GGUF quantized with (e.g.) buun's `TURBO3_0=42`, this fork's
 loader will fail with an explicit error:
 
 ```
 unrecognized ggml_type 42 in <file.gguf>. This appears to be a buun-fork
-GGUF; yggdrasil places TurboQuant3 at type 61. Re-quantize with
+GGUF; this fork places TurboQuant3 at type 61. Re-quantize with
 `llama-quantize <model> turboq3_0`.
 ```
 
@@ -237,7 +237,7 @@ implement on-the-fly remapping. This is not part of the v1 contract.
 
 ## Policy for adding new types
 
-When yggdrasil grows a new quant type (whether ported from a fork or
+When this fork grows a new quant type (whether ported from a fork or
 invented):
 
 1. Allocate the lowest-numbered available slot in the appropriate family
@@ -253,7 +253,7 @@ invented):
 ## Open issues
 
 - **TheTom's `TURBO3_0` shipped existing GGUFs at slot 41.** Production
-  TheTom-quantized models exist with this ID. The yggdrasil v1 reader
+  TheTom-quantized models exist with this ID. The v1 reader
   rejects them. A `--legacy-fork-ids=thetom` flag is a likely v2 addition.
 
 - **Mainline may at some point claim slots 42–59 with types whose names

@@ -6,6 +6,6 @@
 
 <!-- You can provide more details and link related discussions here. Delete this section if not applicable -->
 
-<!-- Note: llama-yggdrasil is an AI-generated fork (see README disclaimer).
+<!-- Note: This fork is AI-generated (see README disclaimer).
      AI authorship is the default here, not an exception. -->
 

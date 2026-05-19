@@ -1,6 +1,6 @@
 # Backend parity policy
 
-llama-yggdrasil targets **ROCm and Vulkan as first-class backends**. Every
+This fork targets **ROCm and Vulkan as first-class backends**. Every
 feature is expected to reach parity across both; features that cannot are
 explicitly documented as such.
 
@@ -19,7 +19,7 @@ A feature progresses through three states:
 
 **Vulkan parity is high-priority, not a hard gate.** A feature ROCm-lands
 first; the Vulkan port is scheduled as a follow-up sub-layer. The feature
-does NOT appear as a yggdrasil-released feature until both backends are
+does NOT appear as a released feature until both backends are
 on trunk and cross-backend PPL matches.
 
 **A feature is shipped ROCm-only if and only if** the Vulkan port has been
@@ -73,7 +73,7 @@ Status updated per layer landing. Initial state derived from
 |---|---|---|---|---|
 | Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3.5 (ai01); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
 | TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
-| WHT weight quants (WHT3_0) | 1 | **RELEASED** | **deferred** — no TQ3_1S shaders in upstream; tracked as yggdrasil-original port | P2 — yggdrasil-original ~50-100 LOC; lands alongside RotorQuant Phase 5 |
+| WHT weight quants (WHT3_0) | 1 | **RELEASED** | **deferred** — no TQ3_1S shaders in upstream; tracked as original port | P2 — original ~50-100 LOC; lands alongside RotorQuant Phase 5 |
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | Boundary V / `TURBO_LAYER_ADAPTIVE` | 1 | **RELEASED** | **RELEASED** | n/a (default-off; backend-agnostic plumbing) |
@@ -135,7 +135,7 @@ encountered in production workloads. ROCm calibration on RDNA3-mobile
 systems is unworkable for production inference; Vulkan is the practical
 alternative for those workloads.
 
-**Project decision (2026-05-12, refined 2026-05-21):** Yggdrasil treats
+**Project decision (2026-05-12, refined 2026-05-21):** This fork treats
 gfx1102/1103 ROCm as **out of scope for production inference / calibration**,
 **in scope as a regression-smoke target**. The build catches HIP-shim
 breakage early (e.g., new `__shfl_xor_sync` call sites, missing
@@ -167,7 +167,7 @@ HSA_OVERRIDE_GFX_VERSION=11.0.2 ./build-rocm-gfx1102/bin/llama-perplexity ...
 ```
 
 If AMD ships upstream support for gfx1102/1103 GEMM kernels at some
-future point, yggdrasil will inherit it via the standard cmake recipe
+future point, this fork will inherit it via the standard cmake recipe
 without project-side work, and this section will collapse back to
 "first-class".
 
@@ -176,7 +176,7 @@ without project-side work, and this section will collapse back to
 If a feature's Vulkan port is attempted and abandoned, document it here
 with:
 
-- Feature name and yggdrasil layer
+- Feature name and layer
 - What was attempted
 - What failed (technical reason)
 - ROCm-only marker added to feature documentation
@@ -212,7 +212,7 @@ A test that runs on only one backend is not a complete regression test.
 
 ## imatrix requirement (weight quants)
 
-Every weight quantization type that lands in yggdrasil must support the
+Every weight quantization type that lands in this fork must support the
 imatrix (importance-matrix) mechanism. Adding a weight quant without
 imatrix support is a layer-landing failure.
 
@@ -235,7 +235,7 @@ apply to KV-cache quants (`TURBOQ*_0`, `TURBOQ*_TCQ`, `RQ_*`).
 
 Rationale: weight-quant quality degrades sharply without activation-
 weighted importance at low bit-rates (≤4-bit). Mainline already requires
-imatrix for some quant types; yggdrasil's contributing forks target ≤4-bit
+imatrix for some quant types; this fork's contributing forks target ≤4-bit
 quants where imatrix is not optional.
 
 ## Audit baseline (2026-05-12)
@@ -253,7 +253,7 @@ Key finding: **no contributing fork has Vulkan implementations for its
 distinctive features.** Vulkan shader counts at or below mainline for all
 forks. ik_llama is 56 Vulkan shaders behind mainline.
 
-The implication: yggdrasil bears the entire Vulkan-port burden in-house.
+The implication: this fork bears the entire Vulkan-port burden in-house.
 Community work in the wider llama.cpp ecosystem (e.g., experiments outside
 the seven audited forks) may have Vulkan implementations of some of these
 features; sweep regularly.
@@ -262,6 +262,6 @@ features; sweep regularly.
 
 - **v1** (2026-05-12) — initial policy + audit baseline.
 - **v2** (2026-05-21) — Phase 1 release: TurboQuant KV (TURBOQ2/3/4_0) +
-  WHT4_0 released on both backends; WHT3_0 Vulkan deferred (yggdrasil-original
+  WHT4_0 released on both backends; WHT3_0 Vulkan deferred (original
   port pending). gfx1102/1103 ROCm scope refined from "out of scope" to
   "partial scope: smoke target" (HSA_OVERRIDE recipe documented).
