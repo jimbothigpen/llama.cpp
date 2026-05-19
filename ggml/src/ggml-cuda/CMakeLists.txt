@@ -124,6 +124,11 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
             template-instances/fattn-vec-instance-q8_0-q8_0.cu
             template-instances/fattn-vec-instance-bf16-bf16.cu
+            template-instances/fattn-vec-instance-bf16-turboq4_0.cu
+            template-instances/fattn-vec-instance-bf16-turboq3_0.cu
+            template-instances/fattn-vec-instance-bf16-turboq2_0.cu
+            template-instances/fattn-vec-instance-bf16-turboq3_tcq.cu
+            template-instances/fattn-vec-instance-bf16-turboq2_tcq.cu
             template-instances/fattn-vec-instance-turboq3_0-turboq3_0.cu
             template-instances/fattn-vec-instance-turboq3_0-q8_0.cu
             template-instances/fattn-vec-instance-q8_0-turboq3_0.cu
@@ -274,7 +279,17 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-turboq3_tcq-q5_0.cu
             template-instances/fattn-vec-instance-turboq3_tcq-q5_1.cu
             template-instances/fattn-vec-instance-turboq3_0-q4_0.cu
-            template-instances/fattn-vec-instance-turboq3_0-q4_1.cu)
+            template-instances/fattn-vec-instance-turboq3_0-q4_1.cu
+            template-instances/fattn-vec-instance-q5_1-turboq4_0.cu
+            template-instances/fattn-vec-instance-q5_1-turboq3_0.cu
+            template-instances/fattn-vec-instance-q5_1-turboq2_0.cu
+            template-instances/fattn-vec-instance-q5_1-turboq3_tcq.cu
+            template-instances/fattn-vec-instance-q5_1-turboq2_tcq.cu
+            template-instances/fattn-vec-instance-q5_0-turboq4_0.cu
+            template-instances/fattn-vec-instance-q5_0-turboq3_0.cu
+            template-instances/fattn-vec-instance-q5_0-turboq2_0.cu
+            template-instances/fattn-vec-instance-q5_0-turboq3_tcq.cu
+            template-instances/fattn-vec-instance-q5_0-turboq2_tcq.cu)
     endif()
 
     ggml_add_backend_library(ggml-cuda
