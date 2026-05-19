@@ -13,6 +13,7 @@ struct pflash_config {
 	float alpha              = 0.12f;
 	int   gpu_device         = 0;
 	int   scorer_cache_size  = 64;   // LRU entries; 0 = disabled
+	std::string cache_dir;           // directory for on-disk scorer cache ("" = next to scorer model)
 
 	static pflash_config from_params(const common_params_speculative & sp);
 };
