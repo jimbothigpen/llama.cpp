@@ -29,9 +29,9 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `4684c13c8`** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `276508aaa`** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
-types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache. See [What's available now](#whats-available-now) and
+types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache and Vulkan GPU scorer fix (NEW-D). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -93,7 +93,7 @@ cross-backend PPL matches within tolerance. See
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
-| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`)** |
+| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`); NEW-D Vulkan GPU scorer fix shipped (`276508aaa`) — IGPU fallback enables ~0.20s GPU scoring on Strix Halo Vulkan (was 3-5s CPU fallback)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
 
@@ -103,7 +103,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `4684c13c8`**, the following features are on `main`.
+As of **HEAD `276508aaa`**, the following features are on `main`.
 
 ---
 
@@ -281,6 +281,7 @@ llama-cli --no-mmap -fa on -m model.gguf \
 - TURBOQ/TCQ × Q4/Q5 K (10 lower-priority, X-3-s1, shipped `52b316453`)
 - TURBOQ/TCQ/Q4/Q5 × INNERQ (10 HIGH-priority, X-InnerQ-s2, shipped `88afd0b5a`)
 - RQ K × INNERQ V (8 pairs, X-InnerQ-s3, shipped `4684c13c8`)
+- PFlash NEW-D Vulkan GPU scorer fix (IGPU fallback, `276508aaa`)
 
 Remaining pairs (X-3-s2, X-3-s3) pending.
 
@@ -391,7 +392,7 @@ Active feature branches with work in progress; not yet merged to `main`.
 | Workstream | Branch | Status |
 |---|---|---|
 | X-3-s2, X-3-s3 (remaining asymmetric pairs) | — | starters exist, not yet spawned |
-| PFlash NEW-D (Vulkan) + NEW-E (shared model) | — | deferred post-4c |
+| PFlash NEW-E (cache persistence / shared model) | — | deferred; NEW-D shipped (`276508aaa`) |
 | PPL-gate bug triage (5 categories) | — | iso/planar K Vulkan FA registration + ROCm NaN/crash + turboq4/turboq3_tcq Vulkan DeviceLost + ai01 gfx1102 regression; triage pending |
 
 ## Blocked / awaiting decision
@@ -485,7 +486,7 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `88afd0b5a`).
+- Trunk: `main` (HEAD `276508aaa`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
@@ -526,7 +527,7 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 
 - **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
 - **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
-- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, in-flight)
+- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D)
 - **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4, in-flight); EAGLE3, PHANTOM-X, TurboMind allocator
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a, reference + monitoring, currently paused)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending)
