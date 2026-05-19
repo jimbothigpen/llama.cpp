@@ -87,7 +87,7 @@ No code changes.
 Root cause of the v326 ai01 Vulkan SIGSEGV was a broken `RUNPATH` in installed
 binaries (`/../lib`, resolving to `/lib`). Without a valid `$ORIGIN`-relative
 RPATH, the dynamic linker fell back to ldconfig and resolved the ROCm
-`libggml.so.0` (listed first in `llama-yggdrasil.conf`) instead of the Vulkan
+`libggml.so.0` (listed first in the ldconfig configuration) instead of the Vulkan
 cell's own `libggml.so.0`. The Vulkan binary was silently running as a ROCm
 binary without `HSA_OVERRIDE_GFX_VERSION=11.0.2`, causing SIGSEGV on GFX1103
 hardware. The BF16 cpy SPIR-V is structurally valid (`spirv-val` passes) and

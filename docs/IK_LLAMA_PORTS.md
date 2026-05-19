@@ -37,12 +37,12 @@ The companion type-ID contract lives at [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.m
 
 | Subsystem | ik_llama refs | Status | Notes |
 |---|---|---|---|
-| MLA (Multi-head Latent Attention) | 20+ branches `ik/cuda_mla*`, `ik/FlashMLA-3`, `ik/cpu_mla_all_quants`, `ik/deepseek_*` | **recon-structural** (2026-05-12, session 2) | Requires per-layer conditional v_cache + 4 new hparams (`n_lora_q`, `n_lora_kv`, `n_embd_head_k_full`, `n_embd_head_v_full`). Cannot be added post-Phase-1 without refactoring memory + hparams. See `yggdrasil-context/recon/01-mla.md`. |
+| MLA (Multi-head Latent Attention) | 20+ branches `ik/cuda_mla*`, `ik/FlashMLA-3`, `ik/cpu_mla_all_quants`, `ik/deepseek_*` | **recon-structural** (2026-05-12, session 2) | Requires per-layer conditional v_cache + 4 new hparams (`n_lora_q`, `n_lora_kv`, `n_embd_head_k_full`, `n_embd_head_v_full`). Cannot be added post-Phase-1 without refactoring memory + hparams. |
 | FlashMLA CUDA kernels | `ik/cuda_flash_mla*` family | pending-recon | Depends on MLA recon outcome. |
 | CPU MLA | `ik/cpu_mla_all_quants`, `ik/cpu_deepseek_fa` | pending-recon | |
 | bf16 KV cache | `ik/bf16_kv_cache` | pending-recon | Likely additive. |
 | Better Q4_0 KV cache | `ik/better_q40_kv_cache`, `ik/better_q40_kv_cache_cpu` | pending-recon | Likely additive. |
-| Fused MoE | `GGML_OP_MOE_FUSED_UP_GATE` op; `iqk_moe_fused_up_gate()` in `ggml/src/iqk/iqk_mul_mat.cpp`; graph builder in `src/llama-build-context.cpp:1014`; PR #1707 + scattered. | **recon-additive** (2026-05-12, session 2) | Adds new ggml op enum (`GGML_OP_MOE_FUSED_UP_GATE`). CPU path depends on IK quants (`IQK_IMPLEMENT`); Metal/Vulkan stubs are fork-original. Port-order: IK quants → fused MoE CPU → fused MoE GPU. See `yggdrasil-context/recon/03-fused-moe.md`. |
+| Fused MoE | `GGML_OP_MOE_FUSED_UP_GATE` op; `iqk_moe_fused_up_gate()` in `ggml/src/iqk/iqk_mul_mat.cpp`; graph builder in `src/llama-build-context.cpp:1014`; PR #1707 + scattered. | **recon-additive** (2026-05-12, session 2) | Adds new ggml op enum (`GGML_OP_MOE_FUSED_UP_GATE`). CPU path depends on IK quants (`IQK_IMPLEMENT`); Metal/Vulkan stubs are fork-original. Port-order: IK quants → fused MoE CPU → fused MoE GPU. |
 
 ### Speculative decoding (MTP)
 
@@ -50,7 +50,7 @@ The companion type-ID contract lives at [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.m
 |---|---|---|---|
 | MTP foundation (Qwen3.5 MoE, Gemma 4, GLM, Mistral3) | PRs #1736, #1741, #1744, #1745 (Gemma 4), #1758 (multimodal), #1771 (GLM fix) | pending-recon | **Already partially-ported to mainline by turbo-tan's `experiment/gemma4-mtp-upstream-pr`.** Phase 2 of this fork's layer plan uses turbo-tan's port as the foothold. ik_llama subsystem-port becomes "backport ongoing improvements" rather than "port from scratch." |
 | MTP graph reuse | PRs #1713, #1728, #1780 | pending-recon | Sits on top of turbo-tan's foundation. |
-| MTP per-step SSM optimizations | PRs #1713, #1718, #1724, #1728, #1767, #1773, #1778 | **recon-structural** (2026-05-12, session 2) | Confirmed structural risk: requires ik_llama's `split_s_l_shadow`, dual-graph reuse (`prev_mtp`), and `ggml_delta_net` 6-src-tensor signature. Forces Phase 2 choice: mainline-style MTP foothold (Path α, first-pass recommended) vs ik_llama-style foundation (Path β). See `yggdrasil-context/recon/02-mtp-per-step-ssm.md`. |
+| MTP per-step SSM optimizations | PRs #1713, #1718, #1724, #1728, #1767, #1773, #1778 | **recon-structural** (2026-05-12, session 2) | Confirmed structural risk: requires ik_llama's `split_s_l_shadow`, dual-graph reuse (`prev_mtp`), and `ggml_delta_net` 6-src-tensor signature. Forces Phase 2 choice: mainline-style MTP foothold (Path α, first-pass recommended) vs ik_llama-style foundation (Path β). |
 | MTP async copies | PR #1781 | pending-recon | |
 | MTP target slot position | PR #1781 | pending-recon | |
 | MTP discard fix | PR #1757 | pending-recon | |
@@ -102,7 +102,6 @@ A weekly ik_llama sweep (every Monday) catches new PRs.
   started; all entries marked pending-recon.
 - **v2** (2026-05-12, session 2) — first-pass recon completed for 3
   high-priority subsystems (MLA, MTP per-step SSM, fused MoE). Carlosfundora
-  EAGLE3 + PHANTOM-X also recon'd (see `yggdrasil-context/recon/04-eagle3-phantom-x.md`).
+  EAGLE3 + PHANTOM-X also recon'd.
   Remaining subsystems (IK quants, BitNet, bf16 KV, R-suffix variants,
   CPU MLA, etc.) still pending-recon but not blocking Phase 1 entry.
-  Output: `yggdrasil-context/phase-0.5-recon-constraints.md`.

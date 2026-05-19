@@ -203,7 +203,7 @@ with the user first (per the mainline-fidelity policy).
 
 ## Why this port is in-tree (not future-watch)
 
-ZAYA1 was originally cataloged in `yggdrasil-context/future-watch.md` as a
+ZAYA1 was originally cataloged as a
 HARD-BUT-DOABLE 4–8-week port, deferred because none of the planned
 this fork's phases share kernel surface with CCA / EDA and the vLLM reference
 PR was unmerged. Trigger #4 of that ledger entry — user production need —
