@@ -1,9 +1,3 @@
-> **⚠️ This repository has moved.** Development continues at **[jimbothigpen/llama.cpp](https://github.com/jimbothigpen/llama.cpp)** — a proper GitHub fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp).
->
-> This repository is preserved for historical reference and will not receive further updates. Existing external links continue to work read-only. Please update any references to point at the new URL.
->
-> Last update: 2026-05-19.
-
 # llama.cpp
 
 > ## ⚠️ Disclaimer — please read before reviewing or using this repository
