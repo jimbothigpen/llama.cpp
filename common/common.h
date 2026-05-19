@@ -362,10 +362,11 @@ struct common_params_speculative {
     }
 
     // PFlash (Phase 7) — scorer model and compression parameters
-    std::string pflash_scorer_path;           // scorer model GGUF path
-    int32_t     pflash_min_tokens  = 8192;    // minimum prompt length to trigger PFlash
-    float       pflash_keep_ratio  = 0.05f;   // fraction of chunks to keep
-    float       pflash_alpha       = 0.12f;   // FlashPrefill block selection threshold
+    std::string pflash_scorer_path;                // scorer model GGUF path
+    int32_t     pflash_min_tokens        = 8192;   // minimum prompt length to trigger PFlash
+    float       pflash_keep_ratio        = 0.05f;  // fraction of chunks to keep
+    float       pflash_alpha             = 0.12f;  // FlashPrefill block selection threshold
+    int32_t     pflash_scorer_cache_size = 64;     // LRU cache for scorer results (0 = disabled)
 };
 
 struct common_params_vocoder {
