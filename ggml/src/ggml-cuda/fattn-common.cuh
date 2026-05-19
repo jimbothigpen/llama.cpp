@@ -852,6 +852,108 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_rq_planar3_0(
     return sum;
 }
 
+// RQ_ISO4_0 KQ dot product.
+// Block layout: {norm: half, rnorm: half, qs: uint8[64]} (68 bytes, QK=128).
+// Dequant: 4-bit nibble-packed index per element; value = (q - 7.5f) * norm / 7.5f.
+// j0 is always even in the KQ pair loop: both elements share the same qs byte (low/high nibbles).
+// LIFT-WITH-GLUE-REAUTHOR from ft2 carlosfundora (iso4_0: identical layout to planar4_0).
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_rq_iso4_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_iso4_0 * K_iso4 = (const block_iso4_0 *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;
+            const int ib    = elem0 / QK_ISO4;
+            const int j0    = elem0 % QK_ISO4;      // always even, 0..126
+
+            const float norm  = __half2float(K_iso4[ib].norm);
+            const float scale = norm / 7.5f;
+            // j0 is even: low nibble = elem0, high nibble = elem0+1, packed in same byte j0/2
+            const uint8_t qs_byte = K_iso4[ib].qs[j0 / 2];
+            const int q0 = qs_byte & 0xF;
+            const int q1 = (qs_byte >> 4) & 0xF;
+
+            float2 kv;
+            kv.x = ((float)q0 - 7.5f) * scale;
+            kv.y = ((float)q1 - 7.5f) * scale;
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
+
+// RQ_PLANAR4_0 KQ dot product — identical layout to RQ_ISO4_0 (block_planar4_0 = block_iso4_0 modulo name).
+// Block layout: {norm: half, rnorm: half, qs: uint8[64]} (68 bytes, QK=128).
+// Dequant: 4-bit nibble-packed index per element; value = (q - 7.5f) * norm / 7.5f.
+// LIFT-WITH-GLUE-REAUTHOR from ft2 carlosfundora; only name/type differs from vec_dot_fattn_vec_KQ_rq_iso4_0.
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_rq_planar4_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_planar4_0 * K_planar4 = (const block_planar4_0 *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;
+            const int ib    = elem0 / QK_PLANAR4;
+            const int j0    = elem0 % QK_PLANAR4;      // always even, 0..126
+
+            const float norm  = __half2float(K_planar4[ib].norm);
+            const float scale = norm / 7.5f;
+            const uint8_t qs_byte = K_planar4[ib].qs[j0 / 2];
+            const int q0 = qs_byte & 0xF;
+            const int q1 = (qs_byte >> 4) & 0xF;
+
+            float2 kv;
+            kv.x = ((float)q0 - 7.5f) * scale;
+            kv.y = ((float)q1 - 7.5f) * scale;
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
+
 // TURBOQ2_TCQ KQ dot product: 2-bit Trellis-Coded Quantization (k=2, L=8, 256 states).
 // Decode of element t: 8-bit sliding window starting at bit t*2; state indexes a 256-entry codebook.
 // Block size QK_TURBOQ2_TCQ = 128 elements; layout = norm(fp16) + qs[33] bitstream.
@@ -1519,6 +1621,10 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_rq_iso3_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_RQ_PLANAR3_0) {
         return vec_dot_fattn_vec_KQ_rq_planar3_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_RQ_ISO4_0) {
+        return vec_dot_fattn_vec_KQ_rq_iso4_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_RQ_PLANAR4_0) {
+        return vec_dot_fattn_vec_KQ_rq_planar4_0<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;

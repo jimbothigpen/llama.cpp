@@ -147,7 +147,41 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-rq_iso3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq2_tcq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq2_0.cu)
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq2_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-turboq3_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-turboq4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-rq_planar4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso3_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq3_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-turboq4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-rq_planar4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar3_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-rq_planar4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-rq_iso3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-rq_planar3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-turboq4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-turboq3_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-turboq3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-turboq2_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-turboq2_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_iso4_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-rq_planar4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-rq_iso3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-rq_planar3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-turboq4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-turboq3_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-turboq3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-turboq2_tcq.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-turboq2_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-rq_planar4_0-q8_0.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
