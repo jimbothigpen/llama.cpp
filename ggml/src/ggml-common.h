@@ -365,6 +365,58 @@ static_assert(sizeof(block_turboq4_0) == 2*sizeof(ggml_half) + QK_TURBOQ4*3/8 + 
 #endif
 static_assert(QK_TURBOQ4 == 128, "turboq4 kernels assume QK_TURBOQ4 == 128");
 
+// RotorQuant: PlanarQuant 3-bit KV cache compression (Givens-rotation, 8 centroids, sign-mag split)
+// Per block: norm(fp16) + 2-bit magnitude index per element (32 bytes) + 1-bit sign per element (16 bytes)
+// = 50 bytes per 128 values = 3.125 bits/value
+// Source: carlosfundora/llama.cpp-1-bit-turbo @85ba5b945 (PLANAR3_0 = 44)
+#define QK_PLANAR3 128
+#define NL_PLANAR3 1
+typedef struct {
+    ggml_half norm;             //  2 bytes: scale factor = max(|x|) over the block
+    uint8_t   qs[QK_PLANAR3/4]; // 32 bytes: 2-bit magnitude index per element, packed 4 per byte
+    uint8_t   signs[QK_PLANAR3/8]; // 16 bytes: 1 sign bit per element, packed 8 per byte
+} block_planar3_0;
+static_assert(sizeof(block_planar3_0) == sizeof(ggml_half) + QK_PLANAR3/4 + QK_PLANAR3/8, "wrong block_planar3_0 size/padding");
+
+// RotorQuant: PlanarQuant 4-bit KV cache compression (Givens-rotation, 16 centroids, nibble-packed)
+// Per block: norm(fp16) + rnorm(fp16) + 4-bit index per element (64 bytes)
+// = 68 bytes per 128 values = 4.25 bits/value
+// Source: carlosfundora/llama.cpp-1-bit-turbo @85ba5b945 (PLANAR4_0 = 45)
+#define QK_PLANAR4 128
+#define NL_PLANAR4 1
+typedef struct {
+    ggml_half norm;             //  2 bytes: scale factor = max(|x|) over the block
+    ggml_half rnorm;            //  2 bytes: reciprocal 1/norm (precomputed for fast encode)
+    uint8_t   qs[QK_PLANAR4/2]; // 64 bytes: 4-bit index per element, nibble-packed (low nibble first)
+} block_planar4_0;
+static_assert(sizeof(block_planar4_0) == 2*sizeof(ggml_half) + QK_PLANAR4/2, "wrong block_planar4_0 size/padding");
+
+// RotorQuant: IsoQuant 3-bit KV cache compression (Hadamard/isometric rotation, 8 centroids, sign-mag split)
+// Identical block layout to planar3_0; rotation differs at encode/decode time.
+// = 50 bytes per 128 values = 3.125 bits/value
+// Source: carlosfundora/llama.cpp-1-bit-turbo @85ba5b945 (ISO3_0 = 46)
+#define QK_ISO3 128
+#define NL_ISO3 1
+typedef struct {
+    ggml_half norm;           //  2 bytes: scale factor = max(|x|) over the block
+    uint8_t   qs[QK_ISO3/4];  // 32 bytes: 2-bit magnitude index per element, packed 4 per byte
+    uint8_t   signs[QK_ISO3/8]; // 16 bytes: 1 sign bit per element, packed 8 per byte
+} block_iso3_0;
+static_assert(sizeof(block_iso3_0) == sizeof(ggml_half) + QK_ISO3/4 + QK_ISO3/8, "wrong block_iso3_0 size/padding");
+
+// RotorQuant: IsoQuant 4-bit KV cache compression (Hadamard/isometric rotation, 16 centroids, nibble-packed)
+// Identical block layout to planar4_0; rotation differs at encode/decode time.
+// = 68 bytes per 128 values = 4.25 bits/value
+// Source: carlosfundora/llama.cpp-1-bit-turbo @85ba5b945 (ISO4_0 = 47)
+#define QK_ISO4 128
+#define NL_ISO4 1
+typedef struct {
+    ggml_half norm;           //  2 bytes: scale factor = max(|x|) over the block
+    ggml_half rnorm;          //  2 bytes: reciprocal 1/norm (precomputed for fast encode)
+    uint8_t   qs[QK_ISO4/2];  // 64 bytes: 4-bit index per element, nibble-packed (low nibble first)
+} block_iso4_0;
+static_assert(sizeof(block_iso4_0) == 2*sizeof(ggml_half) + QK_ISO4/2, "wrong block_iso4_0 size/padding");
+
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max for N(0,1))
 // Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
 // Per block: d0(fp16) + d1(fp16) + 3-bit indices packed (12 bytes) = 16 bytes per 32 values
