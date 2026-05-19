@@ -3837,6 +3837,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--pflash-scorer-cache-size"}, "N",
+        string_format("PFlash: LRU cache capacity for scorer results, 0 to disable (default: %d)", 64),
+        [](common_params & params, int value) {
+            params.speculative.pflash_scorer_cache_size = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     //
     // removed params
     //
