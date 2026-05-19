@@ -29,7 +29,7 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **v355 (`4260989e8`)** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `a1cd5bb1d`** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
 types) are merged to `main`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
 (PFlash prompt compression) shipped with HIP-optimized scorer. See [What's available now](#whats-available-now) and
@@ -94,7 +94,7 @@ cross-backend PPL matches within tolerance. See
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
-| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline)** |
+| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache to `feature/pflash-phase-4c-scorer-caching-NEW-C-2026-05-19-cutover` (awaits PPL gate + merge)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
 
@@ -104,7 +104,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **v355 (`4260989e8`)**, the following features are on `main`.
+As of **HEAD `a1cd5bb1d`**, the following features are on `main`.
 
 ---
 
@@ -351,13 +351,12 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| RotorQuant KV V-cache (planar3/4, iso3/iso4) | `feature/rotorquant-port-with-kv-alloc-fix` | planar4 PPL gate PASS; planar3 LIKELY PASS; iso3/iso4 blocked on FA decoder (Phase 4a-1 gap) |
-| PFlash prompt compression — real scorer (1b) | pending | Quality validation and real scorer implementation pending |
-| InnerQ RDC separable compilation | merged to main v368 (5e314b5f5) | **SHIPPED** |
+| PFlash Phase 4c — LRU scorer cache | `feature/pflash-phase-4c-scorer-caching-NEW-C-2026-05-19-cutover` | awaits PPL gate + merge post-reboot |
+| Asym-KV Phase X wave 2 | `feature/asym-kv-batch-wave2-...` (1a58c1310) | WIP; blocked on Q4_1 K-side HIP segfault (Worker G escalation pending) |
+| RotorQuant xrq-wave2 partial-ship | `feature/xrq-wave2-s2-s3-batched-...` (3e9e27756) | 22/34 confirmed PASS pairs (pre-kill); 12 LOWER pairs untested; awaits post-reboot retest with syncwarp fix |
+| fattn-vec ROCm syncwarp fix | `feature/fattn-vec-syncwarp-rocm-fix-K-2026-05-19-cutover` | awaits regression smoke + merge post-reboot |
 | Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
 | MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
-| Vulkan BF16 FA allowlist | merged to main v324 | **SHIPPED** |
-| KV alloc CPU fallback for types without GPU SET_ROWS | merged to main v324 | **SHIPPED** |
 
 ## Blocked / awaiting decision
 
@@ -451,7 +450,7 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `4260989e8` v355).
+- Trunk: `main` (HEAD `a1cd5bb1d`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
