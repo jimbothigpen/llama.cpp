@@ -75,10 +75,14 @@ static __global__ void flash_attn_ext_vec(
 #endif // GGML_USE_HIP
 
     constexpr int nthreads    = ggml_cuda_fattn_vec_get_nthreads_device();
-    // Turbo3 uses the float Q path (like f16/bf16), not q8_1 integer path
-    constexpr bool K_is_unquantized = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16 || type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ2_TCQ || type_K == GGML_TYPE_TURBOQ3_TCQ || type_K == GGML_TYPE_RQ_ISO3_0 || type_K == GGML_TYPE_RQ_PLANAR3_0);
+    // RQ types use the float Q path (like f16/bf16/turbo), not q8_1 integer path.
+    // iso4/planar4 added here to fix silent NaN (Q_q8_1=true was loading Q via wrong path).
+    constexpr bool K_is_unquantized = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16 || type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ2_TCQ || type_K == GGML_TYPE_TURBOQ3_TCQ || type_K == GGML_TYPE_RQ_ISO3_0 || type_K == GGML_TYPE_RQ_PLANAR3_0 || type_K == GGML_TYPE_RQ_ISO4_0 || type_K == GGML_TYPE_RQ_PLANAR4_0);
     constexpr bool V_is_unquantized = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16 || type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ);
-    constexpr bool K_is_turbo = (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ2_TCQ || type_K == GGML_TYPE_TURBOQ3_TCQ || type_K == GGML_TYPE_RQ_ISO3_0 || type_K == GGML_TYPE_RQ_PLANAR3_0);
+    // RQ types excluded from K_is_turbo: nthreads_KQ=1 causes ~256 VGPR/thread at D=256 on
+    // RQ K types, exceeding RDNA limits and causing register spill → GPU hang/crash. Use the
+    // standard unquantized path (nthreads_KQ=8) instead; warp_reduce_sum<8> handles the rest.
+    constexpr bool K_is_turbo = (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ2_TCQ || type_K == GGML_TYPE_TURBOQ3_TCQ);
     // Turbo KQ dot does byte extraction + centroid lookup + scalar mul, not vectorized f16 loads.
     // nthreads_KQ=1: each thread computes a full KQ product alone — eliminates warp_reduce_sum
     // shuffle and halves KQ loop iterations. Each thread holds full Q vector in registers.
