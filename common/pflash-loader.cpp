@@ -133,7 +133,6 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	// Phase 3: use ROCm GPU backend to store scorer weights in VRAM;
 	// fall back to CPU if no GPU device is registered (e.g. Vulkan-only build).
 	ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-	if (!dev) dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU_FULL); // Vulkan registers as GPU_FULL
 	ggml_backend_t backend = dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
 	if (!backend) {
 		fprintf(stderr, "pflash: no GPU device; falling back to CPU backend for scorer weights\n");

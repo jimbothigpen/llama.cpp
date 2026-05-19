@@ -94,7 +94,6 @@ pflash_scorer_result pflash_score(
     // Phase 3: use GPU backend for scorer compute; weights are in GPU VRAM.
     // Fall back to CPU if no GPU device registered (e.g. Vulkan-only build).
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-    if (!dev) dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU_FULL); // Vulkan registers as GPU_FULL
     ggml_backend_t backend = dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
     if (!backend) {
         fprintf(stderr, "pflash: no GPU device; falling back to CPU scorer\n");
