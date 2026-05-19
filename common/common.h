@@ -357,6 +357,12 @@ struct common_params_speculative {
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
     }
+
+    // PFlash (Phase 7) — scorer model and compression parameters
+    std::string pflash_scorer_path;           // scorer model GGUF path
+    int32_t     pflash_min_tokens  = 8192;    // minimum prompt length to trigger PFlash
+    float       pflash_keep_ratio  = 0.05f;   // fraction of chunks to keep
+    float       pflash_alpha       = 0.12f;   // FlashPrefill block selection threshold
 };
 
 struct common_params_vocoder {

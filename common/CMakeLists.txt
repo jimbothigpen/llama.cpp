@@ -102,6 +102,14 @@ add_library(${TARGET}
     sampling.h
     speculative.cpp
     speculative.h
+    pflash.cpp
+    pflash.h
+    pflash-loader.cpp
+    pflash-loader.h
+    pflash-graph.cpp
+    pflash-graph.h
+    pflash-score.cpp
+    pflash-score.h
     unicode.cpp
     unicode.h
     jinja/lexer.cpp
