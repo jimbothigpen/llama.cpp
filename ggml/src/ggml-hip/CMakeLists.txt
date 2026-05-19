@@ -121,7 +121,13 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-rq_planar3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-rq_planar4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-rq_iso3_0.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-f16-rq_iso4_0.cu)
+        ../ggml-cuda/template-instances/fattn-vec-instance-f16-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-rq_planar3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-rq_planar4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-rq_iso3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-rq_iso4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-rq_iso3_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-rq_planar3_0.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
