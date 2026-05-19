@@ -1,8 +1,7 @@
 # ppl-harness.py — PPL Regression Harness
 
 Runs `llama-perplexity` against the ROCm and/or Vulkan installs of
-this fork, writes structured JSON baselines to
-`yggdrasil-context/ppl-baselines/`, and emits a PASS/WARN/FAIL parity
+this fork, writes structured JSON baselines, and emits a PASS/WARN/FAIL parity
 verdict between backends.
 
 ## Requirements
@@ -70,7 +69,7 @@ Delta = `abs(ppl_a - ppl_b) / min(ppl_a, ppl_b) * 100` (conservative).
 ## Baseline layout
 
 ```
-yggdrasil-context/ppl-baselines/
+ppl-baselines/
 └── <model-basename>/
     └── <git-commit>/             (prefix "dirty-" if tree is unclean)
         └── <host>__<backend>__<N>chunks.json
@@ -88,10 +87,9 @@ This is baked into the harness and cannot be overridden from the CLI.
 ## Notes
 
 - Backends run **sequentially** — llama-perplexity holds the GPU exclusively.
-- The wikitext corpus is stored on cephfs at
-  `yggdrasil-context/corpora/wikitext-2-raw/wiki.test.raw` so ai00 and
-  ai01 read identical bytes (same sha256 = same slice = valid comparison).
-- Model sha256 is cached at `~/.cache/yggdrasil/model-sha256.json`
+- The wikitext corpus is stored on cephfs so ai00 and ai01 read identical bytes
+  (same sha256 = same slice = valid comparison).
+- Model sha256 is cached at `~/.cache/llama/model-sha256.json`
   (keyed by path + mtime + size) to avoid rehashing large GGUFs.
 - Do **not** use `ldconfig` system-wide for the library path —
   multiple forks live under `/opt/`. RPATH is embedded in the installed
