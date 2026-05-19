@@ -29,10 +29,9 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `a1cd5bb1d`** on
-`main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
-types) are merged to `main`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
-(PFlash prompt compression) shipped with HIP-optimized scorer. See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `0f8fe8321`** on
+`main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
+types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -89,12 +88,12 @@ cross-backend PPL matches within tolerance. See
 | 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
 | 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
-| 4a | RotorQuant V-cache — planar3/4 + iso3/4 (`RQ_*`) | carlosfundora | **in-flight — planar PPL gate passing; iso3/iso4 blocked on FA decoder (Phase 4a-1)** |
+| 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **shipped 34/34 pairs (HEAD `0f8fe8321`); iso3-K cross-V hang (4 pairs) remains open per TODO 68; HIP kernel Cat 2/3 bugs surface ppl-gate failures** |
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
-| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache to `feature/pflash-phase-4c-scorer-caching-NEW-C-2026-05-19-cutover` (awaits PPL gate + merge)** |
+| 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
 
@@ -104,7 +103,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `a1cd5bb1d`**, the following features are on `main`.
+As of **HEAD `0f8fe8321`**, the following features are on `main`.
 
 ---
 
@@ -196,9 +195,18 @@ one-time and stored alongside the GGUF.
 | `turboq3_innerq` (slot 69) | 3.125 | 128 | Calibrated 3-bit |
 | `turboq4_innerq` (slot 70) | 4.25 | 128 | Calibrated 4-bit |
 
+Example:
+```bash
+llama-cli --no-mmap -fa on \
+    -m Qwen3.5-9B-Q4_K_M-calibrated.gguf \
+    --cache-type-k turboq3_innerq --cache-type-v turboq3_innerq \
+    -c 4096 -ngl 99
+```
+
 **Backend support:** CUDA/HIP type traits, calibration engine, and FA-vec
 dispatch are on `main`. RDC enabled broadly in v368 (commit 5e314b5f5) for
-ggml-hip and ggml-cuda. Vulkan support is not yet implemented (gap documented).
+ggml-hip and ggml-cuda. InnerQ types require model-specific calibration data
+alongside the GGUF. Vulkan support is not yet implemented (gap documented).
 
 ---
 
@@ -229,6 +237,29 @@ PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test;
 
 ---
 
+### RotorQuant KV cache types (`iso3`, `iso4`, `planar3`, `planar4`) — Phase 4a
+
+1-bit quantization for K and V caches with iso (isotropic) and planar variants.
+
+| Type | Bits | Block | Compression vs fp16 | Notes |
+|---|---|---|---|---|
+| `iso3` (slot 71) | 1.0 | 128 | ~16× | Isotropic 1-bit (3 codebook vectors) |
+| `iso4` (slot 72) | 1.0 | 128 | ~16× | Isotropic 1-bit (4 codebook vectors) |
+| `planar3` (slot 73) | 1.0 | 128 | ~16× | Planar 1-bit (3 codebook vectors) |
+| `planar4` (slot 74) | 1.0 | 128 | ~16× | Planar 1-bit (4 codebook vectors) |
+
+All 34 asymmetric K/V pairs are shipped as of `0f8fe8321`. Quality gate (PPL)
+validates planar variants; iso3/iso4 have known HIP kernel bugs (TODO 68)
+blocking full validation.
+
+Example:
+```bash
+llama-cli --no-mmap -fa on -m model.gguf \
+    --cache-type-k iso3 --cache-type-v iso3 -c 4096 -ngl 99
+```
+
+---
+
 ### Asymmetric KV cache
 
 All types above support asymmetric K/V assignments — K and V can be different
@@ -241,9 +272,14 @@ llama-cli --no-mmap -fa on -m model.gguf \
     --cache-type-k turboq2_tcq --cache-type-v turboq3 -c 4096 -ngl 99
 ```
 
-Asymmetric combinations are supported across the TURBOQ2/3/4_0, TURBOQ2/3_TCQ,
-and F16/Q8_0 types. InnerQ asymmetric pairs are planned as part of Phase 8
-(asymmetric KV pair matrix completion).
+**Shipped asymmetric coverage (~57+ pairs):**
+- Q4_0 / Q4_1 K × TURBOQ V (X-2b-s2, `46c5dec9c`)
+- F16 / BF16 / Q8_0 K × TURBOQ V (X-2a)
+- TURBOQ_0 × TURBOQ_TCQ cross-family (X-2c, `305901807`)
+- RotorQuant K-side (iso3/4, planar3/4) × RotorQuant V-side (34/34 pairs, `0f8fe8321`)
+- InnerQ asymmetric (7 pairs, X-InnerQ-s1, committed `121388041`, merge pending)
+
+Remaining pairs (10 lower-priority, X-3-s1) are committed pending ship.
 
 ---
 
@@ -351,21 +387,19 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| PFlash Phase 4c — LRU scorer cache | `feature/pflash-phase-4c-scorer-caching-NEW-C-2026-05-19-cutover` | awaits PPL gate + merge post-reboot |
-| Asym-KV Phase X wave 2 | `feature/asym-kv-batch-wave2-...` (1a58c1310) | WIP; blocked on Q4_1 K-side HIP segfault (Worker G escalation pending) |
-| RotorQuant xrq-wave2 partial-ship | `feature/xrq-wave2-s2-s3-batched-...` (3e9e27756) | 22/34 confirmed PASS pairs (pre-kill); 12 LOWER pairs untested; awaits post-reboot retest with syncwarp fix |
-| fattn-vec ROCm syncwarp fix | `feature/fattn-vec-syncwarp-rocm-fix-K-2026-05-19-cutover` | awaits regression smoke + merge post-reboot |
-| Mainline bug-fix cherry-pick batch | `feature/mainline-bugfixes-2026-05-18-am` | 2 new cherry-picks clean; 2 pending conflict triage |
-| MTP migration phase G verify | `feature/mtp-migration-phase-g-verify` | verification run in progress |
+| X-InnerQ-s1 ship (7 INNERQ pairs) | — | committed `121388041`, push + merge pending |
+| X-3-s1 ship (10 lower-priority pairs) | — | committed `18e0cb247`, build + smoke + push + merge pending |
+| X-3-s2, X-3-s3 (remaining pairs) | — | starters exist, not yet spawned |
+| PFlash NEW-D (Vulkan) + NEW-E (shared model) | — | deferred post-4c |
+| PPL-gate bug triage (5 categories) | — | iso/planar K Vulkan FA registration + ROCm NaN/crash + turboq4/turboq3_tcq Vulkan DeviceLost + ai01 gfx1102 regression; triage pending |
 
 ## Blocked / awaiting decision
 
 | Item | Blocked on |
 |---|---|
 | DFlash spec-decode revival | Drafter GGUF sourcing (no Qwen3.5-9B DFlash drafter available from z-lab or community); beellama Criterion B satisfied, architecture verified |
-| RotorQuant iso3/iso4 | Phase 4a-1 FA decoder gap — iso types currently fall to all-CPU (164s/pass); fix required before quality gate is meaningful |
+| RotorQuant iso3-K cross-V (4 pairs: iso3×{iso4, f16, q8_0, planar4}) | TODO 68 — HIP kernel bugs in iso3-K side; ppl-gate Cat 2/3 triage required |
 | PFlash 1b (real scorer) | Quality validation smoke on existing 1a branch; user decision on 1b scope |
-| Asymmetric KV pair matrix completion | Phase 8 planning; gap analysis approved |
 | PolarQuant v2 evaluation | arXiv 2603.29078 withdrawn 2026-04-20 for errors; awaiting v2 repost or independent audit |
 
 ## Backend support
@@ -450,7 +484,7 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `a1cd5bb1d`).
+- Trunk: `main` (HEAD `0f8fe8321`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
