@@ -188,6 +188,7 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-rq_planar3_0-rq_planar3_0.cu
             template-instances/fattn-vec-instance-rq_planar3_0-rq_iso3_0.cu
             template-instances/fattn-vec-instance-rq_planar3_0-turboq3_0.cu
+            template-instances/fattn-vec-instance-rq_planar3_0-turboq3_tcq.cu
             template-instances/fattn-vec-instance-rq_planar3_0-turboq2_tcq.cu
             template-instances/fattn-vec-instance-rq_planar3_0-turboq2_0.cu
             template-instances/fattn-vec-instance-rq_iso3_0-turboq3_tcq.cu
