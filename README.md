@@ -32,7 +32,7 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 **Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **v355 (`4260989e8`)** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), and 3d (InnerQ KV
-types) are merged to `/opt`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
+types) are merged to `main`. Phase 4a (RotorQuant KV) is in-flight; Phase 7b
 (PFlash prompt compression) shipped with HIP-optimized scorer. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
@@ -105,7 +105,7 @@ Vulkan implementations for novel features, so yggdrasil bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **v355 (`4260989e8`)**, the following features are in `/opt/llama-yggdrasil-{rocm,vulkan}` on both hosts.
+As of **v355 (`4260989e8`)**, the following features are on `main`.
 
 ---
 
@@ -351,7 +351,7 @@ a manual RDC build.
 
 ## In-flight workstreams
 
-Active feature branches with work in progress; not yet on `/opt`.
+Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
@@ -381,11 +381,10 @@ Active feature branches with work in progress; not yet on `/opt`.
 | **Vulkan** | RDNA3 / RDNA3.5 (and broader — driver-portable) | first-class — high priority |
 | CUDA, Metal, etc. | inherited from mainline | best-effort, not gated |
 
-**Why these specific targets:** the project has access to exactly two physical
-hosts — a gfx1150 Strix Point APU and a gfx1103 RDNA3 mobile dGPU (built
-single-target as gfx1102 + run with `HSA_OVERRIDE_GFX_VERSION=11.0.2`). Without
-hardware we can't measure perf, can't catch regressions, can't sign off on
-correctness — so we don't commit to supporting AMD targets we can't test.
+**Why these specific targets:** active development targets are gfx1150 and
+gfx1103 (built single-target as gfx1102, run with `HSA_OVERRIDE_GFX_VERSION=11.0.2`
+at runtime). Without hardware to measure perf, catch regressions, and sign off
+on correctness, AMD targets outside this set are not actively supported.
 **gfx1030, gfx900, gfx94X, gfx12XX, and other AMD GPUs are explicitly out of
 scope** for active development; sibling-fork features targeting those GPUs are
 SKIP-class by default.
@@ -396,7 +395,7 @@ hardware we don't own; the Vulkan port effort is a yggdrasil-owned burden for
 each in-tree feature regardless of which fork it came from.
 
 gfx1102/1103 ROCm is used as a regression-smoke target (catches HIP-shim
-breakage early; cross-host PPL parity is validated against ai00 gfx1150).
+breakage early; cross-arch PPL parity is validated against gfx1150 ROCm builds).
 Production-inference calibration on those hosts still defers to Vulkan due
 to AMD upstream Tensile/hipBLAS GEMM gaps. See
 [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md).
@@ -437,14 +436,13 @@ above. For change history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Companion projects
 
-The following projects are built against yggdrasil's `/opt` install prefix
-and are updated with every `/opt` rebuild. They are designed to work with
-**any** llama.cpp fork and contain no yggdrasil-specific type names or
-conditionals.
+The following projects are companion tools for yggdrasil, updated in lockstep
+with every yggdrasil rebuild. They are designed to work with **any** llama.cpp
+fork and contain no yggdrasil-specific type names or conditionals.
 
 - **sidecar-abliteration, sidecar-control-vector, sidecar-logit-bias,
   sidecar-weight-delta** — out-of-tree `.so` plugins for the sidecar
-  engine. Installed under `/opt/llama-yggdrasil-{rocm,vulkan}/lib/sidecars/`.
+  engine.
 - **llama-quantize-cost** — quantization cost estimator. Installed as part
   of the main cmake build via `tools/quantize-cost` symlink.
 - **prismaquant-llama** — Python-based prequantization pipeline with
@@ -457,7 +455,7 @@ conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `4260989e8` v355; /opt installed at v355).
+- Trunk: `main` (HEAD `4260989e8` v355).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
