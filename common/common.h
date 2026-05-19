@@ -365,6 +365,7 @@ struct common_params_speculative {
     float       pflash_keep_ratio        = 0.05f;  // fraction of chunks to keep
     float       pflash_alpha             = 0.12f;  // FlashPrefill block selection threshold
     int32_t     pflash_scorer_cache_size = 64;     // LRU cache for scorer results (0 = disabled)
+    std::string pflash_scorer_cache_dir;           // directory for on-disk scorer cache (default: next to scorer model)
 };
 
 struct common_params_vocoder {
