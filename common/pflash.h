@@ -8,10 +8,11 @@ struct common_params_speculative;
 
 struct pflash_config {
 	std::string scorer_path;
-	int   min_tokens    = 8192;
-	float keep_ratio    = 0.05f;
-	float alpha         = 0.12f;
-	int   gpu_device    = 0;
+	int   min_tokens         = 8192;
+	float keep_ratio         = 0.05f;
+	float alpha              = 0.12f;
+	int   gpu_device         = 0;
+	int   scorer_cache_size  = 64;   // LRU entries; 0 = disabled
 
 	static pflash_config from_params(const common_params_speculative & sp);
 };
