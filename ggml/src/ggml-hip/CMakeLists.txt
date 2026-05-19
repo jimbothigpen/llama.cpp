@@ -204,7 +204,17 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_0-turboq2_tcq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-turboq3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-turboq2_0.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-turboq2_tcq-turboq2_0.cu)
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq2_tcq-turboq2_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-q4_1.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-q5_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_0-q5_1.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-q4_1.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-q5_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_tcq-q5_1.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_0-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_0-q4_1.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
