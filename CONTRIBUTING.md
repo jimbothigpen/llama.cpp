@@ -9,7 +9,7 @@ The project differentiates between 3 levels of contributors:
 # AI Usage Policy
 
 > [!NOTE]
-> **llama-yggdrasil is an AI-generated downstream fork.** See the disclaimer at
+> **This fork is AI-generated.** See the disclaimer at
 > the top of [README.md](README.md). The repository owner is not a developer;
 > every source change here is produced by Claude Code under conversational
 > direction. The upstream `ggml-org/llama.cpp` "no fully-or-predominantly

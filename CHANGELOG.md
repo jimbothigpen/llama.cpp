@@ -1,6 +1,6 @@
 # Changelog
 
-All notable yggdrasil-specific changes. Tagged milestones correspond to
+All notable fork-specific changes. Tagged milestones correspond to
 phase completions. For mainline llama.cpp changes inherited via upstream
 sync, see the [ggml-org/llama.cpp release notes](https://github.com/ggml-org/llama.cpp/releases).
 
@@ -125,7 +125,7 @@ respective SET_ROWS shader lifts.
 ### Added — Novel model architecture: Zyphra ZAYA1-8B (2026-05-15, `64a481bb6 → cc8455581` on `main`)
 
 In-tree port of the Zyphra ZAYA1-8B hybrid MoE — first novel-arch model
-port in yggdrasil that did not originate in mainline llama.cpp or any of
+port in this fork that did not originate in mainline llama.cpp or any of
 the six tracked sibling forks. Reference impl was the unmerged
 `Zyphra/vllm@zaya1-pr` branch + a sibling `transformers@zaya1` branch.
 
@@ -159,7 +159,7 @@ the six tracked sibling forks. Reference impl was the unmerged
     cross-mix with the seq dim). Local workaround: `conv_1d_grouped_multiseq`
     lambda inside `src/models/zaya.cpp` using corrected `reshape_3d(OL, N, OC)
     + permute(0,2,1,3) + cont`. **No ggml-core changes** per mainline-fidelity
-    policy; future yggdrasil models calling `ggml_conv_1d` /
+    policy; future models calling `ggml_conv_1d` /
     `ggml_conv_1d_grouped` with `n_seqs > 1` must use the lambda or discuss
     a ggml-core fix with the user first.
 
@@ -297,7 +297,7 @@ Released at commit `4d4351a90`.
 
 ### Added — Type-ID assignment policy
 
-See [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md). Yggdrasil
+See [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md). This fork
 extensions live at slots 60–95; ik_llama compat zone reserved at 96–199;
 mainline growth reserve 42–59.
 
