@@ -29,9 +29,9 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, and 7b COMPLETE — **HEAD `276508aaa`** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, and 7b COMPLETE — **HEAD `30067d81b`** on
 `main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
-types), and 4a (RotorQuant KV) are merged to `main`. Phase 7b (PFlash prompt compression) shipped with HIP-optimized scorer including 4c LRU cache and Vulkan GPU scorer fix (NEW-D). See [What's available now](#whats-available-now) and
+types), 4a (RotorQuant KV), 5b-1a (IQ2_K/IQ3_K/IQ4_K weight quants, parity-verified), X-2a/X-2b-s1 (asymmetric K/V expansion), and 7b (PFlash prompt compression) are merged to `main`. Phase 7b shipped with HIP-optimized scorer, 4c LRU cache, Vulkan GPU scorer fix (NEW-D), and on-disk persistence (NEW-E). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -103,7 +103,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `276508aaa`**, the following features are on `main`.
+As of **HEAD `30067d81b`**, the following features are on `main`.
 
 ---
 
@@ -287,6 +287,36 @@ Remaining pairs (X-3-s2, X-3-s3) pending.
 
 ---
 
+### ik_llama weight quants (IQ2_K, IQ3_K, IQ4_K) — Phase 5b-1a
+
+Ported IQ-family weight quantization types from ik_llama.cpp. All three types are production-ready with parity verified against frankenturbo2 (the ik_llama reference). These join the existing IQ*_KS types in providing a rich gradient of quality/compression tradeoffs for weight quantization.
+
+| Type | Bits | Block | Backends | Notes |
+|---|---|---|---|---|
+| `IQ2_K` (slot 77) | ~2 | 256 | CPU + CUDA/HIP + Vulkan | 2-bit with 128-entry codebook |
+| `IQ3_K` (slot 78) | ~3 | 256 | CPU + CUDA/HIP + Vulkan | 3-bit with 256-entry codebook |
+| `IQ4_K` (slot 79) | ~4 | 256 | CPU + CUDA/HIP + Vulkan | 4-bit with 512-entry codebook |
+
+Example:
+```bash
+llama-quantize Qwen3.5-9B-F16.gguf Qwen3.5-9B-IQ3_K.gguf IQ3_K
+```
+
+Calibration-free, no imatrix required. PPL parity verified GREEN vs mainline ik_llama reference across multiple quant/model pairs.
+
+---
+
+### PFlash NEW-E: on-disk persistence for scorer cache — Phase 7b
+
+The PFlash LRU scorer cache (4c) now supports on-disk persistence. Cache entries are serialized to disk and restored on subsequent runs, eliminating the penalty of cache cold-start on repeat queries. The on-disk format is opaque (versioned sidecar); format breakage triggers a cache rebuild.
+
+Example (scorer cache persisted to `./mymodel.pf-cache`):
+```bash
+llama-server -m model.gguf --pf-cache mymodel.pf-cache
+```
+
+---
+
 ### Sidecar plugin engine — Phase 0.7
 
 A backend-agnostic plugin runtime (~355 LoC) for hooking the forward graph
@@ -391,9 +421,9 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
+| Phase 5b-1b (row-meta KS family, ik_llama subsystem) | — | staged; Phase 5b-1a shipped (`09c0d1d6c`) |
 | X-3-s2, X-3-s3 (remaining asymmetric pairs) | — | starters exist, not yet spawned |
-| PFlash NEW-E (cache persistence / shared model) | — | deferred; NEW-D shipped (`276508aaa`) |
-| PPL-gate bug triage (5 categories) | — | iso/planar K Vulkan FA registration + ROCm NaN/crash + turboq4/turboq3_tcq Vulkan DeviceLost + ai01 gfx1102 regression; triage pending |
+| Mainline forward-sync rebase | — | pending (merge base `5d44db600` = tag b9133, 2026-05-13; ~80 commits upstream drift) |
 
 ## Blocked / awaiting decision
 
@@ -486,12 +516,13 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `276508aaa`).
+- Trunk: `main` (HEAD `30067d81b`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
   `milestone/phase-2-mtp-foothold`,
-  `milestone/phase-2-gemma4-mtp`.
+  `milestone/phase-2-gemma4-mtp`,
+  `milestone/phase-5b-1a-iq-quants` (shipped `09c0d1d6c`).
 - Feature work happens on `feature/<phase>-<scope>` topic branches and
   FF-merges back to `main` once all gates pass. See
   [conventions/git-workflow.md](conventions/git-workflow.md) for the
