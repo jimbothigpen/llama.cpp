@@ -33,6 +33,18 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
+static std::string common_speculative_get_devices_str(const std::vector<ggml_backend_dev_t> & devices) {
+    std::string result;
+    for (size_t i = 0; i < devices.size(); i++) {
+        if (devices[i] == nullptr) {
+            continue;
+        }
+        if (!result.empty()) result += ", ";
+        result += ggml_backend_dev_name(devices[i]);
+    }
+    return result.empty() ? "default" : result;
+}
+
 struct common_speculative_config {
     common_speculative_type type;
     common_params_speculative params;
