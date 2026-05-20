@@ -1463,7 +1463,12 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
+        // For types with a per-row preamble (row_meta_size > 0) the first row
+        // contains row_meta_size bytes that are not captured by ne[0]*nb[0]/blck_size.
+        // The strides nb[1..3] already include row_meta_size (set at tensor creation),
+        // so we only need to add it once for the "first row" contribution here.
+        const int64_t row_meta = ggml_get_type_traits(tensor->type)->row_meta_size;
+        nbytes = tensor->ne[0]*tensor->nb[0]/blck_size + row_meta;
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
@@ -1627,7 +1632,10 @@ static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
     if (tensor->ne[0] != ggml_blck_size(tensor->type) && tensor->nb[0] != next_nb) {
         return false;
     }
-    next_nb *= tensor->ne[0]/ggml_blck_size(tensor->type);
+    // Use ggml_row_size so that the expected nb[1] stride includes row_meta_size for
+    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.  For all other types row_meta_size is
+    // 0, making this identical to the previous next_nb *= ne[0]/blck_size formula.
+    next_nb = ggml_row_size(tensor->type, tensor->ne[0]);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         if (i > n) {
             if (tensor->ne[i] != 1 && tensor->nb[i] != next_nb) {
@@ -1659,7 +1667,9 @@ bool ggml_is_contiguous_2(const struct ggml_tensor * tensor) {
 }
 
 bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
-    return ggml_nbytes(tensor) == ggml_nelements(tensor) * ggml_type_size(tensor->type)/ggml_blck_size(tensor->type);
+    // Use ggml_row_size so row_meta_size is included for types like IQ4_KS etc.
+    const int64_t n_rows = tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+    return (size_t)(n_rows * ggml_row_size(tensor->type, tensor->ne[0])) == ggml_nbytes(tensor);
 }
 
 bool ggml_is_permuted(const struct ggml_tensor * tensor) {
@@ -1970,7 +1980,10 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     }
 
     result->nb[0] = ggml_type_size(type);
-    result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
+    // ggml_row_size includes the per-row metadata preamble (row_meta_size) for
+    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.  For all other types row_meta_size
+    // is 0, so this is identical to the previous nb[0]*(ne[0]/blck_size) formula.
+    result->nb[1] = ggml_row_size(type, result->ne[0]);
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = result->nb[i - 1]*result->ne[i - 1];
     }
