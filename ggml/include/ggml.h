@@ -2869,6 +2869,7 @@ extern "C" {
         bool                     is_quantized;
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
+        int64_t                  row_meta_size; // per-row metadata bytes prepended before block array (0 for most types)
     };
 
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);
