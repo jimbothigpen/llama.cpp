@@ -159,3 +159,8 @@ A weekly ik_llama sweep (every Monday) catches new PRs.
   P0 prereq commit before row-meta types (IQ3_KS, IQ4_KS, IQ4_KSS, IQ4_KT).
   MLA + FlashMLA + CPU MLA marked declined. Port ladder and type-ID renumber
   map added to this file. HIP/CUDA implementations confirmed present in ft2.
+- **v4** (2026-05-20, mainline-rebase-optd) — Fork forward-synced to mainline
+  `ggml-org/llama.cpp` b9246 (`871b0b70f`). All MTP-zone conflicts resolved
+  fork-side (fork's bundled MTP driver, E3b chain, and all KV-quant layers
+  preserved intact). No MLA tier story — MLA predates the merge-base b9133
+  and is already in the fork. This doc is unaffected by the rebase.
