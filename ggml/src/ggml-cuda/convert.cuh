@@ -16,6 +16,25 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type);
 
 to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type);
 
+// KS-family row-aware dequant (Phase 5b-1b): these use per-row metadata and
+// cannot use the standard to_fp{16,32}_cuda_t dispatch.  Called directly from ggml-cuda.cu.
+void ggml_dequantize_iq4_ks_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq4_ks_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq3_ks_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq3_ks_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq4_kss_to_fp32_cuda(const void * vx, float * y,
+                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq4_kss_to_fp16_cuda(const void * vx, half * y,
+                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq4_kt_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq4_kt_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+
 // TODO more general support for non-contiguous inputs
 
 template<typename T>

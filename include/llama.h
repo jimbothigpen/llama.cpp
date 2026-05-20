@@ -161,6 +161,11 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ4_K         = 43, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ3_K         = 44, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_K         = 45, // except 1d tensors
+        // Phase 5b-1b: row-meta KS family
+        LLAMA_FTYPE_MOSTLY_IQ4_KS        = 46, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_KS        = 47, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 48, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_KT        = 49, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

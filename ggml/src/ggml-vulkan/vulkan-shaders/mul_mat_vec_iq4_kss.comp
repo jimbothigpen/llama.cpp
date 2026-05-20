@@ -1,0 +1,150 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ4_KSS — see dequant_iq4_kss.comp.  Shmem-cached matvec mirroring the
+// IQ4_KS pattern: 64 threads/WG cooperatively load 8 super-blocks into
+// shared memory, then 8-thread groups process each block from shmem.
+
+#define BLOCKS_PER_WG 8
+#define U32_PER_BLOCK 32
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+const int iq4k_values_const[32] = int[32](
+    -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+);
+
+shared uint shmem_a[BLOCKS_PER_WG * U32_PER_BLOCK];
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+    const uint row_size_u32       = 1 + num_blocks_per_row * U32_PER_BLOCK;
+
+    const uint tid = gl_LocalInvocationID.x;
+    const uint sb  = tid & 7;
+    const uint ix  = tid >> 3;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row     = first_row + n;
+        const uint row_u32 = row * row_size_u32;
+        const float d_row  = uintBitsToFloat(data_a[row_u32]);
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG),
+                                              num_blocks_per_row - i_base);
+            const uint u32_to_load = blocks_this_iter * U32_PER_BLOCK;
+
+            barrier();
+            [[unroll]] for (uint pi = 0; pi < 4; ++pi) {
+                const uint shmem_idx = tid + pi * 64;
+                if (shmem_idx < u32_to_load) {
+                    const uint local_block = shmem_idx / U32_PER_BLOCK;
+                    const uint u32_in_block = shmem_idx - local_block * U32_PER_BLOCK;
+                    const uint global_block = i_base + local_block;
+                    shmem_a[shmem_idx] = data_a[row_u32 + 1 + global_block * U32_PER_BLOCK + u32_in_block];
+                }
+            }
+            barrier();
+
+            const uint local_block_idx = ix;
+            const uint global_block = i_base + local_block_idx;
+            if (global_block < num_blocks_per_row) {
+                const uint shmem_base  = local_block_idx * U32_PER_BLOCK;
+                const uint qs_u32_base = shmem_base + sb * 4;
+
+                const uint qs0 = shmem_a[qs_u32_base + 0];
+                const uint qs1 = shmem_a[qs_u32_base + 1];
+                const uint qs2 = shmem_a[qs_u32_base + 2];
+                const uint qs3 = shmem_a[qs_u32_base + 3];
+
+                const int ls = int(
+                    ( qs0        & 1u)        |
+                    ((qs0 >> 16) & 1u) <<  1  |
+                    ( qs1        & 1u) <<  2  |
+                    ((qs1 >> 16) & 1u) <<  3  |
+                    ( qs2        & 1u) <<  4  |
+                    ((qs2 >> 16) & 1u) <<  5  |
+                    ( qs3        & 1u) <<  6  |
+                    ((qs3 >> 16) & 1u) <<  7);
+
+                const float dl           = d_row * float((ls & 254) - 127);
+                const uint  codebook_off = uint(ls & 1) << 4;
+
+                const uint mask = 0xfffefffeu;
+                const uint aux0 = (qs0 & mask) ^ ((qs0 & mask) >> 1);
+                const uint aux1 = (qs1 & mask) ^ ((qs1 & mask) >> 1);
+                const uint aux2 = (qs2 & mask) ^ ((qs2 & mask) >> 1);
+                const uint aux3 = (qs3 & mask) ^ ((qs3 & mask) >> 1);
+
+                const uint y_base = global_block * 256 + sb * 32;
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    FLOAT_TYPE sum = FLOAT_TYPE(0.0);
+                    [[unroll]] for (uint q = 0; q < 4; ++q) {
+                        const uint aux32 = (q == 0) ? aux0
+                                         : (q == 1) ? aux1
+                                         : (q == 2) ? aux2 : aux3;
+
+                        const uint a0 =  aux32        & 0xff;
+                        const uint a1 = (aux32 >>  8) & 0xff;
+                        const uint a2 = (aux32 >> 16) & 0xff;
+                        const uint a3 = (aux32 >> 24) & 0xff;
+
+                        const float vl0 = float(iq4k_values_const[codebook_off + (a0 & 0xf)]);
+                        const float vl1 = float(iq4k_values_const[codebook_off + (a1 & 0xf)]);
+                        const float vl2 = float(iq4k_values_const[codebook_off + (a2 & 0xf)]);
+                        const float vl3 = float(iq4k_values_const[codebook_off + (a3 & 0xf)]);
+                        const float vh0 = float(iq4k_values_const[codebook_off + (a0 >> 4)]);
+                        const float vh1 = float(iq4k_values_const[codebook_off + (a1 >> 4)]);
+                        const float vh2 = float(iq4k_values_const[codebook_off + (a2 >> 4)]);
+                        const float vh3 = float(iq4k_values_const[codebook_off + (a3 >> 4)]);
+
+                        const vec4 b_lo = vec4(data_b_v4[(j * p.batch_stride_b + b_offset + y_base) / 4 + q    ]);
+                        const vec4 b_hi = vec4(data_b_v4[(j * p.batch_stride_b + b_offset + y_base) / 4 + q + 4]);
+
+                        sum = fma(FLOAT_TYPE(b_lo.x), FLOAT_TYPE(vl0),
+                              fma(FLOAT_TYPE(b_lo.y), FLOAT_TYPE(vl1),
+                              fma(FLOAT_TYPE(b_lo.z), FLOAT_TYPE(vl2),
+                              fma(FLOAT_TYPE(b_lo.w), FLOAT_TYPE(vl3),
+                              fma(FLOAT_TYPE(b_hi.x), FLOAT_TYPE(vh0),
+                              fma(FLOAT_TYPE(b_hi.y), FLOAT_TYPE(vh1),
+                              fma(FLOAT_TYPE(b_hi.z), FLOAT_TYPE(vh2),
+                              fma(FLOAT_TYPE(b_hi.w), FLOAT_TYPE(vh3), sum))))))));
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(dl), sum, temp[j][n]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

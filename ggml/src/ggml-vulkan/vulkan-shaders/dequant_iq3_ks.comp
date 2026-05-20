@@ -1,0 +1,100 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ3_KS — ik_llama.cpp 3-bit small (3.1875 bpw, row_meta=2)
+// Row layout in memory: [ggml_half d][block_0 (102B)][block_1]...[block_{nb-1}]
+//
+// Per block (102 bytes):
+//   uint16_t extra        (offset 0)
+//   uint8_t  scales[4]    (offset 2)
+//   uint8_t  qs[64]       (offset 6)
+//   uint8_t  qh[32]       (offset 70)
+//
+// We bind the tensor data as a uint16_t[] view and compute byte offsets
+// manually because each row begins with a 2-byte d that breaks tight
+// `block_iq3_ks[]` indexing.
+//
+// Dispatch: one workgroup per super-block (256 elements). 64 threads cooperate;
+// each thread writes 4 elements. Output layout: y[i128*128 + ib*32 + j].
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint16_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq3nl_values_const[16] = int[16](
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51
+);
+
+void main() {
+    const uint nb           = p.K / 256;          // blocks per row
+    const uint row_size_u16 = 1 + nb * 51;        // u16 elements per row
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    // Row scale (ggml_half) at u16 offset row*row_size_u16
+    const uint row_u16 = row * row_size_u16;
+    const float d = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+    // Block start in u16 indices
+    const uint block_u16 = row_u16 + 1 + ib_in_row * 51;
+
+    // extra is u16 at offset 0
+    const uint extra = uint(data_a[block_u16]);
+
+    // scales[4] are 4 bytes packed into u16[1..2] of the block
+    const uint sc01 = uint(data_a[block_u16 + 1]);
+    const uint sc23 = uint(data_a[block_u16 + 2]);
+    uint sc[4];
+    sc[0] =  sc01        & 0xff;
+    sc[1] = (sc01 >> 8 ) & 0xff;
+    sc[2] =  sc23        & 0xff;
+    sc[3] = (sc23 >> 8 ) & 0xff;
+
+    // 8 sub-block scales: ls = scales[j] (low 4) | extra-bit-as-MSB, biased by -16
+    float dl[8];
+    for (int j = 0; j < 4; ++j) {
+        int ls1 = int(sc[j] & 0xf) | int((extra >> (j + 0)) & 1) << 4;
+        int ls2 = int(sc[j] >>  4) | int((extra >> (j + 4)) & 1) << 4;
+        dl[j + 0] = d * float(ls1 - 16);
+        dl[j + 4] = d * float(ls2 - 16);
+    }
+
+    // 64 threads: sb = tid/8 (0..7), quarter = tid%8 (0..7) → 4 elements each.
+    const uint tid     = gl_LocalInvocationID.x;
+    const uint sb      = tid / 8;
+    const uint quarter = tid % 8;
+
+    const uint i128 = sb / 4;
+    const uint ib   = sb % 4;
+
+    const uint shift      = (extra >> (8 + 4*i128 + ib)) & 1;
+    const uint values_off = shift << 3;
+
+    // qs is 64 bytes at u16 offset block_u16+3 (32 u16); qh is 32 bytes at block_u16+35 (16 u16)
+    const uint j_base = quarter * 4;
+    const uint y_base = ib_global * 256 + i128 * 128 + ib * 32 + j_base;
+
+    for (uint i = 0; i < 4; ++i) {
+        const uint j = j_base + i;
+
+        const uint qs_byte_idx = i128 * 32 + j;          // 0..63
+        const uint qs_byte = (uint(data_a[block_u16 + 3  + qs_byte_idx / 2]) >> ((qs_byte_idx & 1) * 8)) & 0xff;
+        const uint qh_byte = (uint(data_a[block_u16 + 35 + j           / 2]) >> ((j           & 1) * 8)) & 0xff;
+
+        const uint idx = ((qs_byte >> (2*ib)) & 3) | (((qh_byte >> (4*i128 + ib)) & 1) << 2);
+        const int  val = iq3nl_values_const[values_off + idx];
+
+        data_b[y_base + i] = D_TYPE(dl[sb] * float(val));
+    }
+}
