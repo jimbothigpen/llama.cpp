@@ -711,10 +711,6 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
     ggml_tensor * t_h_pre_norm  = nullptr; // [n_embd, n_outputs] hidden state before final output norm
-
-    // pre-norm hidden state — graph OUTPUT, set by the trunk graphs; consumed by the
-    // user-facing embeddings_pre_norm API (llama_get_embeddings_pre_norm*).
-    ggml_tensor * t_h_pre_norm  = nullptr;
     ggml_tensor * t_mtp_out     = nullptr; // MTP post-FFN tensor — graph OUTPUT, set by the gemma4-assistant graph
 
     // MTP driver-layer (upstream-style): graph INPUT tensor the MTP-tail graph builder creates;

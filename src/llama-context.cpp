@@ -2,7 +2,6 @@
 
 #include "ggml.h"
 #include "llama-arch.h"
-#include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -29,14 +28,6 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
 // llama_context
 //
 
-static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
-    switch (ctx_type) {
-        case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
-        case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
-    }
-    throw std::runtime_error("Unsupported ctx type");
-}
-
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -59,21 +50,15 @@ llama_context::llama_context(
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
 
-    cparams.n_rs_seq = params.n_rs_seq;
-    if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
-        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model arch does not support recurrent partial rollback; clamping to 0\n",
-                        __func__, cparams.n_rs_seq);
-        cparams.n_rs_seq = 0;
-    }
-
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
     cparams.yarn_ext_factor  = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
     cparams.yarn_beta_slow   = params.yarn_beta_slow   >= 0.0f ? params.yarn_beta_slow   : hparams.yarn_beta_slow;
-    cparams.embeddings       = params.embeddings;
-    cparams.embeddings_pre_norm = false;
+    cparams.embeddings                  = params.embeddings;
+    cparams.embeddings_pre_norm         = false;
+    cparams.embeddings_pre_norm_masked  = false;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
@@ -89,8 +74,6 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
-
-    cparams.ctx_type          = params.ctx_type;
 
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
@@ -243,7 +226,6 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
-    LLAMA_LOG_INFO("%s: n_rs_seq      = %u\n",   __func__, cparams.n_rs_seq);
 
     if (cparams.n_ctx_seq < hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
@@ -316,7 +298,6 @@ llama_context::llama_context(
             /*.type_k   =*/ params.type_k,
             /*.type_v   =*/ params.type_v,
             /*.swa_full =*/ params.swa_full,
-            /*.ctx_type= */ cparams.ctx_type,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -910,42 +891,6 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     return it->second.data();
 }
 
-float * llama_context::get_embeddings_pre_norm() {
-    output_reorder();
-
-    return embd_pre_norm.data;
-}
-
-float * llama_context::get_embeddings_pre_norm_ith(int32_t i) {
-    output_reorder();
-
-    try {
-        if (embd_pre_norm.data == nullptr) {
-            throw std::runtime_error("no pre-norm embeddings");
-        }
-
-        const uint32_t n_embd = model.hparams.n_embd;
-
-        if (!cparams.embeddings_pre_norm_masked) {
-            // unmasked: pre-norm rows are stored densely, indexed by raw token position.
-            if (i < 0 || (size_t)(i + 1) * n_embd > embd_pre_norm.size) {
-                throw std::runtime_error(format("out of range [0, %zu)", embd_pre_norm.size / n_embd));
-            }
-            return embd_pre_norm.data + (size_t) i * n_embd;
-        }
-
-        const int64_t j = output_resolve_row(i);
-        return embd_pre_norm.data + j*n_embd;
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: invalid pre-norm embeddings id %d, reason: %s\n", __func__, i, err.what());
-#ifndef NDEBUG
-        GGML_ABORT("fatal error");
-#else
-        return nullptr;
-#endif
-    }
-}
-
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     output_reorder();
 
@@ -1429,9 +1374,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 }
 
 int llama_context::encode(const llama_batch & batch_inp) {
-    // MTP hook batches carry both token (next-token id) and embd (h_pre_norm row),
-    // so accept either present rather than requiring exactly one.
-    GGML_ASSERT(batch_inp.token || batch_inp.embd);
+    GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
@@ -1503,9 +1446,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
-    auto * t_logits        = res->get_logits();
-    auto * t_embd          = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
-    auto * t_h_pre_norm    = cparams.embeddings_pre_norm ? res->get_h_pre_norm() : nullptr;
+    auto * t_logits = res->get_logits();
+    auto * t_embd = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
 
     // extract logits
     if (logits.data && t_logits) {
@@ -1569,16 +1511,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     GGML_ABORT("unknown pooling type");
                 }
         }
-    }
-
-    // extract pre-norm embeddings (hidden state before the final output norm)
-    if (embd_pre_norm.data && t_h_pre_norm && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
-        ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm);
-        GGML_ASSERT(backend_h != nullptr);
-
-        const uint32_t n_embd = hparams.n_embd;
-        GGML_ASSERT(n_tokens*n_embd <= (int64_t) embd_pre_norm.size);
-        ggml_backend_tensor_get_async(backend_h, t_h_pre_norm, embd_pre_norm.data, 0, n_tokens*n_embd*sizeof(float));
     }
 
     // TODO: hacky solution
@@ -1875,7 +1807,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     };
 
     int64_t n_outputs_prev = 0;
-    int64_t n_tokens_prev  = 0;
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -2129,7 +2060,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
-    const auto n_embd     = hparams.n_embd;
     const auto n_embd_out = hparams.n_embd_out();
     const auto n_embd     = hparams.n_embd;
 
@@ -3353,7 +3283,7 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
+            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
 
             res->reset();
 
@@ -3457,7 +3387,6 @@ llama_context_params llama_context_default_params() {
         /*.n_rs_seq                    =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
-        /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -3561,13 +3490,6 @@ llama_context * llama_init_from_model(
         LLAMA_LOG_WARN("%s: model default pooling_type is [%d], but [%d] was specified\n", __func__,
                        model->hparams.pooling_type, params.pooling_type);
     }
-
-    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-        model->hparams.nextn_predict_layers == 0) {
-        LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
-        return nullptr;
-    }
-
 
     try {
         auto * ctx = new llama_context(*model, params);
