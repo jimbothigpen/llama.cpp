@@ -676,8 +676,10 @@ struct gguf_context * gguf_init_from_file_ptr(FILE * file, struct gguf_init_para
             }
 
             // calculate byte offsets given the tensor shape and type
+            // Use ggml_row_size so row_meta_size preamble is included in nb[1]
+            // for types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.
             info.t.nb[0] = type_size;
-            info.t.nb[1] = info.t.nb[0]*(info.t.ne[0]/blck_size);
+            info.t.nb[1] = ggml_row_size(info.t.type, info.t.ne[0]);
             for (int j = 2; j < GGML_MAX_DIMS; ++j) {
                 info.t.nb[j] = info.t.nb[j - 1]*info.t.ne[j - 1];
             }
@@ -1259,7 +1261,9 @@ void gguf_set_tensor_type(struct gguf_context * ctx, const char * name, enum ggm
     GGML_ASSERT(tensor->ne[0] % blck_size == 0 && "tensor row size not divisible by block size of new type");
 
     tensor->nb[0] = type_size;
-    tensor->nb[1] = tensor->nb[0]*(tensor->ne[0]/blck_size);
+    // Use ggml_row_size so that row_meta_size (per-row preamble bytes for types like
+    // IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT) is included in the stride between rows.
+    tensor->nb[1] = ggml_row_size(type, tensor->ne[0]);
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
         tensor->nb[i] = tensor->nb[i - 1]*tensor->ne[i - 1];
     }
