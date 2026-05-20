@@ -99,7 +99,7 @@ static __global__ void mul_mat_vec_iq4_kt_q8_1_kernel(
     // Warp-level reduction.
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -177,7 +177,7 @@ static __global__ void mul_mat_vec_iq4_ks_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -260,7 +260,7 @@ static __global__ void mul_mat_vec_iq4_kss_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -343,7 +343,7 @@ static __global__ void mul_mat_vec_iq4_k_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -474,7 +474,7 @@ static __global__ void mul_mat_vec_iq3_k_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -579,7 +579,7 @@ static __global__ void mul_mat_vec_iq3_ks_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
@@ -701,7 +701,7 @@ static __global__ void mul_mat_vec_iq2_k_q8_1_kernel(
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        sumf += __shfl_xor_sync(0xffffffff, sumf, offset);
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
     }
 
     if (lane == 0) {
