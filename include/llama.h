@@ -157,6 +157,10 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT3_0        = 41, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT4_0        = 42, // except 1d tensors
+        // Phase 5b-1a: ik_llama base IK weight quant family
+        LLAMA_FTYPE_MOSTLY_IQ4_K         = 43, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_K         = 44, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_K         = 45, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

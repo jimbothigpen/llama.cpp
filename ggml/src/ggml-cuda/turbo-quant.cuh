@@ -17,6 +17,29 @@
 #define QR_TURBOQ3 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 #define QR_TURBOQ4 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 
+// ---- Phase 5b-1a: ik_llama IQK base weight quant types ----
+#define QR_IQ4_K 1   // ik_llama IQ4_K (256-element superblock, 4.50 bpw)
+#define QR_IQ3_K 1   // ik_llama IQ3_K (256-element superblock, 3.44 bpw)
+#define QR_IQ2_K 1   // ik_llama IQ2_K (256-element superblock, 2.375 bpw)
+
+// IQ4_K centroid table — first 16 are standard iq4nl values, second 16 are "shifted" variant
+static __constant__ int8_t iq4k_values[32] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117,
+};
+
+// IQ3_K centroid table — 8 standard + 8 shifted values
+static __constant__ int8_t iq3nl_values_dev[16] = {
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51,
+};
+
+// IQ2_K centroid table — 4 standard + 4 shifted values
+static __constant__ int8_t iq2nl_values_dev[8] = {
+    -31, -13,  1, 17,
+    -26,  -8,  6, 22,
+};
+
 // ---- 2-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
 static __constant__ float TURBO_CENTROIDS_2BIT[4] = {

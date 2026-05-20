@@ -1,0 +1,61 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ3_K — ik_llama.cpp 3-bit imatrix (3.4375 bpw).  256-element block.
+// 8 ib32 sub-blocks of 32 (2 halves of 16).  Per half_idx: 4-bit magnitude
+// (from scales_l) used as (2m+1) odd, sign bit from scales_h, codebook
+// shift bit from extra.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq3_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq3nl_values_const[16] = int[16](
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51
+);
+
+void main() {
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= p.nel / 256) return;
+
+    const float d     = float(data_a[ib_global].d);
+    const uint  extra = uint(data_a[ib_global].extra);
+    const uint  sh    = uint(data_a[ib_global].scales_h);
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k          = tid * 4 + r;
+        const uint ib32       = k >> 5;
+        const uint jel        = k & 0x1f;
+        const uint half_idx       = jel >> 4;
+        const uint j_in_half  = jel & 0xf;
+
+        const uint shift_l    = (ib32 & 3) << 1;
+        const uint shift_h    = ib32;
+        const uint qs_byte_idx = (ib32 >> 2) * 32 + half_idx * 16 + j_in_half;
+        const uint qh_byte_idx = half_idx * 16 + j_in_half;
+
+        const uint qs_byte = uint(data_a[ib_global].qs[qs_byte_idx]);
+        const uint qh_byte = uint(data_a[ib_global].qh[qh_byte_idx]);
+        const uint val_idx = ((qs_byte >> shift_l) & 3) | (((qh_byte >> shift_h) & 1) << 2);
+
+        const uint sl_byte   = uint(data_a[ib_global].scales_l[ib32]);
+        const int  magnitude = int((sl_byte >> (4 * half_idx)) & 0xf);
+        const int  sh_bit    = int((sh >> (2 * ib32 + half_idx)) & 1);
+        const int  ls        = (2 * magnitude + 1) * (sh_bit != 0 ? -1 : 1);
+        const float dl = d * float(ls);
+
+        const uint codebook_off = ((extra >> (2 * ib32 + half_idx)) & 1) << 3;
+        const int  val = iq3nl_values_const[codebook_off + val_idx];
+
+        data_b[ib_global * 256 + k] = D_TYPE(dl * float(val));
+    }
+}

@@ -1920,6 +1920,101 @@ struct block_wht3_0
 #define A_TYPE block_wht3_0
 #endif
 
+// IQ2_K — ik_llama.cpp 2-bit imatrix (2.375 bpw, no row_meta).
+// Per block (76 bytes): float16 d | uint16 extra | uint8[8] scales | uint8[64] qs.
+// 8 sub-blocks of 32 elements (2 halves of 16 each); per-half 4-bit scale
+// (signed-offset by -8) and 1-bit codebook shift in `extra`.
+#define QUANT_K_IQ2_K 256
+#define QUANT_R_IQ2_K 1
+
+struct block_iq2_k {
+    float16_t d;
+    uint16_t  extra;
+    uint8_t   scales[8];
+    uint8_t   qs[64];
+};
+
+struct block_iq2_k_packed16 {
+    float16_t d;
+    uint16_t  extra;
+    uint16_t  scales[4];
+    uint16_t  qs[32];
+};
+
+#if defined(DATA_A_IQ2_K)
+#define QUANT_K QUANT_K_IQ2_K
+#define QUANT_R QUANT_R_IQ2_K
+#define A_TYPE block_iq2_k
+#define A_TYPE_PACKED16 block_iq2_k_packed16
+#define DATA_A_QUANT_K
+#endif
+
+// IQ3_K — ik_llama.cpp 3-bit imatrix (3.4375 bpw, no row_meta).
+// Per block (110 bytes): float16 d | uint16 extra | uint16 scales_h |
+// uint8[8] scales_l | uint8[64] qs | uint8[32] qh.
+// 8 sub-blocks of 32 elements.  Per ib32: 4-bit magnitude per half (×2+1 odd),
+// sign bit from scales_h; 1-bit codebook shift per half from extra.
+#define QUANT_K_IQ3_K 256
+#define QUANT_R_IQ3_K 1
+
+struct block_iq3_k {
+    float16_t d;
+    uint16_t  extra;
+    uint16_t  scales_h;
+    uint8_t   scales_l[8];
+    uint8_t   qs[64];
+    uint8_t   qh[32];
+};
+
+struct block_iq3_k_packed16 {
+    float16_t d;
+    uint16_t  extra;
+    uint16_t  scales_h;
+    uint16_t  scales_l[4];
+    uint16_t  qs[32];
+    uint16_t  qh[16];
+};
+
+#if defined(DATA_A_IQ3_K)
+#define QUANT_K QUANT_K_IQ3_K
+#define QUANT_R QUANT_R_IQ3_K
+#define A_TYPE block_iq3_k
+#define A_TYPE_PACKED16 block_iq3_k_packed16
+#define DATA_A_QUANT_K
+#endif
+
+// IQ4_K — ik_llama.cpp 4-bit imatrix (4.50 bpw, no row_meta).
+// Per block (144 bytes): float16 d | uint16 extra | uint8[4] scales_h |
+// uint8[8] scales_l | uint8[128] qs.
+// 8 ib sub-blocks × 2 halves of 16 elements; 6-bit signed scale per half
+// (4 low from scales_l, 2 high from scales_h, biased by -32).
+#define QUANT_K_IQ4_K 256
+#define QUANT_R_IQ4_K 1
+
+struct block_iq4_k {
+    float16_t d;
+    uint16_t  extra;
+    uint8_t   scales_h[4];
+    uint8_t   scales_l[8];
+    uint8_t   qs[128];
+};
+
+struct block_iq4_k_packed16 {
+    float16_t d;
+    uint16_t  extra;
+    uint16_t  scales_h[2];
+    uint16_t  scales_l[4];
+    uint16_t  qs[64];
+};
+
+#if defined(DATA_A_IQ4_K)
+#define QUANT_K QUANT_K_IQ4_K
+#define QUANT_R QUANT_R_IQ4_K
+#define A_TYPE block_iq4_k
+#define A_TYPE_PACKED16 block_iq4_k_packed16
+#define DATA_A_QUANT_K
+#endif
+
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
