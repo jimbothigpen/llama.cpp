@@ -5587,6 +5587,11 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             // WHT-rotated / TurboQuant types: just validate scales are not NaN/Inf
             // TODO: add more thorough validation if needed
             break;
+        case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ3_K:
+        case GGML_TYPE_IQ4_K:
+            // IQK base weight quant types: skip deep validation (non-standard block layout)
+            break;
         default:
             {
                 fprintf(stderr, "%s: invalid type %d\n", __func__, type);
