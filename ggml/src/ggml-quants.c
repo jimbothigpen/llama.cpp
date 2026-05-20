@@ -5240,9 +5240,15 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         return false;
     }
 
-    if (nbytes % ggml_type_size(type) != 0) {
-        fprintf(stderr, "%s: invalid size %zu for type %s (type size = %zu)\n", __func__, nbytes, ggml_type_name(type), ggml_type_size(type));
-        return false;
+    // Types with a per-row metadata preamble (row_meta_size > 0) have a total row
+    // size of row_meta_size + n_blocks*type_size, which is not a multiple of type_size.
+    // Skip the block-size divisibility check for those types; their per-type cases below
+    // perform the appropriate validation (or explicitly skip it).
+    if (ggml_get_type_traits(type)->row_meta_size == 0) {
+        if (nbytes % ggml_type_size(type) != 0) {
+            fprintf(stderr, "%s: invalid size %zu for type %s (type size = %zu)\n", __func__, nbytes, ggml_type_name(type), ggml_type_size(type));
+            return false;
+        }
     }
 
     const size_t nb = nbytes/ggml_type_size(type);
