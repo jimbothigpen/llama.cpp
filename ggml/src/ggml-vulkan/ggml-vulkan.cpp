@@ -4658,10 +4658,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_IQ1_S][i], "mul_mat_vec_iq1_s_q8_1_f32", arr_dmmv_iq1_s_q8_1_f32_len[reduc], arr_dmmv_iq1_s_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_iq_int(i), 1, 1}, {wg_size_subgroup_int, 1*rm_iq_int(i), i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_IQ1_M][i], "mul_mat_vec_iq1_m_q8_1_f32", arr_dmmv_iq1_m_q8_1_f32_len[reduc], arr_dmmv_iq1_m_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_iq_int(i), 1, 1}, {wg_size_subgroup_int, 1*rm_iq_int(i), i+1}, 1, true, use_subgroups, subgroup_size_int);
-                // IQ2_K / IQ3_K / IQ4_K — Q8_1 integer-dot matvec paths.
-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_IQ2_K][i],   "mul_mat_vec_iq2_k_q8_1_f32",   arr_dmmv_iq2_k_q8_1_f32_len[reduc],   arr_dmmv_iq2_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_IQ3_K][i],   "mul_mat_vec_iq3_k_q8_1_f32",   arr_dmmv_iq3_k_q8_1_f32_len[reduc],   arr_dmmv_iq3_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_IQ4_K][i],   "mul_mat_vec_iq4_k_q8_1_f32",   arr_dmmv_iq4_k_q8_1_f32_len[reduc],   arr_dmmv_iq4_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+                // IQ2_K / IQ3_K / IQ4_K do not have Q8_1 integer-dot matvec shaders;
+                // they use standalone per-type f32/f16 shaders instead.
 
             }
 #endif // GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT
@@ -4717,9 +4715,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_IQ1_S], "mul_mat_vec_id_iq1_s_q8_1_f32", arr_dmmv_id_iq1_s_q8_1_f32_len[reduc], arr_dmmv_id_iq1_s_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_iq_int(0), 1, 1}, {wg_size_subgroup_int, 1*rm_iq_int(0)}, 1, true, use_subgroups, subgroup_size_int);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_IQ1_M], "mul_mat_vec_id_iq1_m_q8_1_f32", arr_dmmv_id_iq1_m_q8_1_f32_len[reduc], arr_dmmv_id_iq1_m_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_iq_int(0), 1, 1}, {wg_size_subgroup_int, 1*rm_iq_int(0)}, 1, true, use_subgroups, subgroup_size_int);
-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_IQ2_K],   "mul_mat_vec_id_iq2_k_q8_1_f32",   arr_dmmv_id_iq2_k_q8_1_f32_len[reduc],   arr_dmmv_id_iq2_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_IQ3_K],   "mul_mat_vec_id_iq3_k_q8_1_f32",   arr_dmmv_id_iq3_k_q8_1_f32_len[reduc],   arr_dmmv_id_iq3_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_IQ4_K],   "mul_mat_vec_id_iq4_k_q8_1_f32",   arr_dmmv_id_iq4_k_q8_1_f32_len[reduc],   arr_dmmv_id_iq4_k_q8_1_f32_data[reduc],   "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_kq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_kq_int}, 1, true, use_subgroups, subgroup_size_int);
+            // IQ2_K / IQ3_K / IQ4_K: no Q8_1 integer-dot id-matvec shaders; use f32 path only.
         }
 #endif // GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT
     }
@@ -6833,9 +6829,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
             case GGML_TYPE_Q6_K:
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_IQ2_K:
-            case GGML_TYPE_IQ3_K:
-            case GGML_TYPE_IQ4_K:
+                // IQ2_K / IQ3_K / IQ4_K: no Q8_1 matvec shaders; fall through to f32/f16 path.
                 break;
             default:
                 return nullptr;
@@ -7010,9 +7004,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
             case GGML_TYPE_Q6_K:
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_IQ2_K:
-            case GGML_TYPE_IQ3_K:
-            case GGML_TYPE_IQ4_K:
+                // IQ2_K / IQ3_K / IQ4_K: no Q8_1 id-matvec shaders; fall through to f32 path.
                 break;
             default:
                 return nullptr;
