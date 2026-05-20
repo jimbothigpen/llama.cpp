@@ -1,0 +1,158 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ3_KS — see dequant_iq3_ks.comp for layout. The buffer at binding 0 is the
+// raw row-major IQ3_KS data: [ggml_half d_row][block_0 (102B)]...[block_{nb-1}]
+// per row.  data_a[] is bound as uint16_t[] (A_TYPE in types.glsl).
+//
+// Threading:
+//   - 64 threads per WG (subgroup-sized on RADV PHOENIX)
+//   - 8 threads cooperate per A super-block (1 thread per sub-block)
+//   - 8 blocks of A loaded into shared memory cooperatively per outer iter
+//     (eliminates ~10× redundant per-thread global reads of qs/qh)
+
+#define BLOCKS_PER_WG 8
+#define U16_PER_BLOCK 51
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+const int iq3nl_values_const[16] = int[16](
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51
+);
+
+// Pack 2 u16 per uint.  Each block uses 26 uints (51 u16 + 1 padding).
+// Total: 8 * 26 = 208 uints = 832 bytes shared memory.
+shared uint shmem_a[BLOCKS_PER_WG * 26];
+
+uint shmem_u16(uint block_idx, uint u16_idx) {
+    const uint uint_idx = block_idx * 26 + (u16_idx >> 1);
+    return (shmem_a[uint_idx] >> ((u16_idx & 1) << 4)) & 0xffff;
+}
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+    const uint row_size_u16       = 1 + num_blocks_per_row * U16_PER_BLOCK;
+
+    const uint tid  = gl_LocalInvocationID.x;
+    const uint itid = tid & 7;
+    const uint ix   = tid >> 3;
+    const uint i128 = itid >> 2;
+    const uint ib   = itid & 3;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row     = first_row + n;
+        const uint row_u16 = row * row_size_u16;
+        const float d_row  = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            // Cooperative load of up to BLOCKS_PER_WG blocks into shmem.
+            // Each block = 26 uints (= 52 u16 incl. 1 padding).  64 threads load
+            // 208 uints total → 3.25 uints/thread; we load 4 with bounds check.
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG),
+                                              num_blocks_per_row - i_base);
+            const uint uints_to_load = blocks_this_iter * 26;
+
+            barrier();
+            [[unroll]] for (uint pi = 0; pi < 4; ++pi) {
+                const uint shmem_idx = tid + pi * 64;
+                if (shmem_idx < uints_to_load) {
+                    const uint local_block  = shmem_idx / 26;
+                    const uint u16_pair_idx = shmem_idx - local_block * 26;
+                    const uint global_block = i_base + local_block;
+                    const uint block_u16    = row_u16 + 1 + global_block * U16_PER_BLOCK;
+
+                    const uint u16_low_idx = u16_pair_idx << 1;
+                    const uint v0 = uint(data_a[block_u16 + u16_low_idx]);
+                    // Last u16 of each block is padding (idx 51); don't read OOB.
+                    const uint v1 = (u16_low_idx + 1 < U16_PER_BLOCK)
+                                  ? uint(data_a[block_u16 + u16_low_idx + 1])
+                                  : 0u;
+                    shmem_a[shmem_idx] = v0 | (v1 << 16);
+                }
+            }
+            barrier();
+
+            // Each 8-thread group computes its block's contribution from shmem.
+            const uint local_block_idx = ix;
+            const uint global_block = i_base + local_block_idx;
+            if (global_block < num_blocks_per_row) {
+                const uint extra = shmem_u16(local_block_idx, 0);
+                const uint sc01  = shmem_u16(local_block_idx, 1);
+                const uint sc23  = shmem_u16(local_block_idx, 2);
+
+                const uint sc_byte = ib < 2
+                    ? (sc01 >> ((ib & 1) * 8))
+                    : (sc23 >> ((ib & 1) * 8));
+                const int  ls = int(sc_byte >> (4 * i128)) & 0xf
+                              | (int((extra >> (4 * i128 + ib)) & 1) << 4);
+                const float dl = d_row * float(ls - 16);
+
+                const uint shift      = (extra >> (8 + 4 * i128 + ib)) & 1;
+                const uint values_off = shift << 3;
+
+                // qs: 16 u16 starting at u16_idx 3 + i128*16
+                // qh: 16 u16 starting at u16_idx 35
+                const uint qs_u16_off = 3 + i128 * 16;
+                const uint qh_u16_off = 35;
+
+                const uint y_base = global_block * 256 + i128 * 128 + ib * 32;
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    FLOAT_TYPE sum = FLOAT_TYPE(0.0);
+                    for (uint q = 0; q < 16; ++q) {
+                        const uint qs_pair = shmem_u16(local_block_idx, qs_u16_off + q);
+                        const uint qh_pair = shmem_u16(local_block_idx, qh_u16_off + q);
+
+                        const uint qs0 = qs_pair & 0xff;
+                        const uint qs1 = (qs_pair >> 8) & 0xff;
+                        const uint qh0 = qh_pair & 0xff;
+                        const uint qh1 = (qh_pair >> 8) & 0xff;
+
+                        const uint idx0 = ((qs0 >> (2 * ib)) & 3) | (((qh0 >> (4 * i128 + ib)) & 1) << 2);
+                        const uint idx1 = ((qs1 >> (2 * ib)) & 3) | (((qh1 >> (4 * i128 + ib)) & 1) << 2);
+
+                        const float v0 = float(iq3nl_values_const[values_off + idx0]);
+                        const float v1 = float(iq3nl_values_const[values_off + idx1]);
+
+                        const vec2 b = vec2(data_b_v2[(j * p.batch_stride_b + b_offset + y_base) / 2 + q]);
+
+                        sum = fma(FLOAT_TYPE(b.x), FLOAT_TYPE(v0),
+                              fma(FLOAT_TYPE(b.y), FLOAT_TYPE(v1), sum));
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(dl), sum, temp[j][n]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

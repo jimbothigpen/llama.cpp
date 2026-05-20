@@ -1,0 +1,78 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ4_KS — ik_llama.cpp 4-bit small (4.25 bpw, row_meta=4)
+// Row layout: [float d_row][block_0 (136B)][block_1]...[block_{nb-1}]
+//
+// Per block (136 bytes = 34 u32):
+//   uint8_t  scales[8]  (offset 0)   — encodes (signed_scale << 1) | codebook_shift
+//   uint8_t  qs[128]    (offset 8)   — 4-bit indices, 2 per byte
+//
+// Buffer is bound as uint32_t[] (clean alignment: 136B = 34 u32, row stride
+// 4 + nb*136 is always 4-aligned).  Row scale is read with uintBitsToFloat.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq4k_values_const[32] = int[32](
+    -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+);
+
+void main() {
+    const uint nb           = p.K / 256;
+    const uint row_size_u32 = 1 + nb * 34;          // 1 (d_row) + nb*34 (blocks)
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const uint block_u32 = row_u32 + 1 + ib_in_row * 34;
+
+    const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+    // Scales: 8 bytes packed into 2 u32.  u32[0]=scales[0..3], u32[1]=scales[4..7].
+    const uint sc04 = data_a[block_u32 + 0];
+    const uint sc48 = data_a[block_u32 + 1];
+
+    // Per sub-block (8 of them, 32 elements each):
+    //   scales[ib] & 254 - 127  → 7-bit signed scale (even values, range [-127, 127])
+    //   scales[ib] & 1          → codebook shift (0 = iq4k_values[0..15], 1 = +16)
+    float dl[8];
+    uint  codebook_off[8];
+    [[unroll]] for (uint ib = 0; ib < 8; ++ib) {
+        const uint sc_word = (ib < 4) ? sc04 : sc48;
+        const uint sc_byte = (sc_word >> ((ib & 3) * 8)) & 0xff;
+        dl[ib]           = d_row * float(int(sc_byte & 254) - 127);
+        codebook_off[ib] = (sc_byte & 1) << 4;
+    }
+
+    // 64 threads × 4 elements = 256 elements.  Thread t writes y[4t..4t+3].
+    // For element k:  ib = k>>5,  jel = k&31
+    //   jel < 16: low nibble of qs[ib*16 + jel]
+    //   jel >= 16: high nibble of qs[ib*16 + (jel-16)]
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k   = tid * 4 + r;
+        const uint ib  = k >> 5;
+        const uint jel = k & 31;
+        const uint qs_byte_idx = ib * 16 + (jel & 15);
+        const uint qs_u32 = data_a[block_u32 + 2 + (qs_byte_idx >> 2)];
+        const uint qs_byte = (qs_u32 >> ((qs_byte_idx & 3) * 8)) & 0xff;
+        const uint nibble = (jel < 16) ? (qs_byte & 0xf) : (qs_byte >> 4);
+        const int  val = iq4k_values_const[codebook_off[ib] + nibble];
+        data_b[ib_global * 256 + k] = D_TYPE(dl[ib] * float(val));
+    }
+}

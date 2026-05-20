@@ -1727,11 +1727,22 @@ static void ggml_cuda_op_mul_mat_cublas(
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
         ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));
         if (src0->type != GGML_TYPE_F16) {
-            const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(src0->type);
-            GGML_ASSERT(to_fp16_cuda != nullptr);
             size_t ne = row_diff*ne00;
             src0_as_f16.alloc(ne);
-            to_fp16_cuda(src0_dd_i, src0_as_f16.get(), ne, stream);
+            // Row-meta-aware dequant for IQK-S types (Phase 5b-1b): per-row scale prepended.
+            if (src0->type == GGML_TYPE_IQ4_KS) {
+                ggml_dequantize_iq4_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ3_KS) {
+                ggml_dequantize_iq3_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ4_KSS) {
+                ggml_dequantize_iq4_kss_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ4_KT) {
+                ggml_dequantize_iq4_kt_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else {
+                const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(src0->type);
+                GGML_ASSERT(to_fp16_cuda != nullptr);
+                to_fp16_cuda(src0_dd_i, src0_as_f16.get(), ne, stream);
+            }
         }
         const half * src0_ptr = src0->type == GGML_TYPE_F16 ? (const half *) src0_dd_i : src0_as_f16.get();
 
@@ -1787,10 +1798,21 @@ static void ggml_cuda_op_mul_mat_cublas(
         ggml_cuda_pool_alloc<float> src1_ddq_as_f32(ctx.pool(id));
 
         if (src0->type != GGML_TYPE_F32) {
-            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
-            GGML_ASSERT(to_fp32_cuda != nullptr);
             src0_ddq_as_f32.alloc(row_diff*ne00);
-            to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff*ne00, stream);
+            // Row-meta-aware dequant for IQK-S types (Phase 5b-1b): per-row scale prepended.
+            if (src0->type == GGML_TYPE_IQ4_KS) {
+                ggml_dequantize_iq4_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ3_KS) {
+                ggml_dequantize_iq3_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ4_KSS) {
+                ggml_dequantize_iq4_kss_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ4_KT) {
+                ggml_dequantize_iq4_kt_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else {
+                const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+                GGML_ASSERT(to_fp32_cuda != nullptr);
+                to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff*ne00, stream);
+            }
         }
         if (src1->type != GGML_TYPE_F32) {
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src1->type);
@@ -5247,6 +5269,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ2_K:
+                    // Phase 5b-1b: row-meta KS family
+                    case GGML_TYPE_IQ4_KS:
+                    case GGML_TYPE_IQ3_KS:
+                    case GGML_TYPE_IQ4_KSS:
+                    case GGML_TYPE_IQ4_KT:
                         return true;
                     default:
                         return false;

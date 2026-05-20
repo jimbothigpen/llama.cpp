@@ -2015,6 +2015,58 @@ struct block_iq4_k_packed16 {
 #define DATA_A_QUANT_K
 #endif
 
+// Phase 5b-1b: row-meta KS family (IQ4_KS, IQ3_KS, IQ4_KSS, IQ4_KT)
+// These types have per-row metadata (float or half scale) before the block array.
+
+// IQ4_KT — ik_llama.cpp trellis-coded 4-bit (4.0 bpw, row_meta=4 = float row scale).
+// Block: 32 u32 = 128 bytes. No struct; bound as raw uint32_t[].
+#define QUANT_K_IQ4_KT 256
+#define QUANT_R_IQ4_KT 1
+
+#if defined(DATA_A_IQ4_KT)
+#define QUANT_K QUANT_K_IQ4_KT
+#define QUANT_R QUANT_R_IQ4_KT
+#define QUANT_AUXF 1
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
+// IQ3_KS — ik_llama.cpp 3-bit small (3.1875 bpw, row_meta=2 = ggml_half row scale).
+// Per block: uint16 extra | uint8[4] scales | uint8[64] qs | uint8[32] qh. Bound as uint16_t[].
+#define QUANT_K_IQ3_KS 256
+#define QUANT_R_IQ3_KS 1
+
+#if defined(DATA_A_IQ3_KS)
+#define QUANT_K QUANT_K_IQ3_KS
+#define QUANT_R QUANT_R_IQ3_KS
+#define A_TYPE uint16_t
+#define DATA_A_QUANT_K
+#endif
+
+// IQ4_KS — ik_llama.cpp 4-bit small (4.25 bpw, row_meta=4 = float row scale).
+// Per block: uint8[8] scales | uint8[128] qs. Bound as uint32_t[].
+#define QUANT_K_IQ4_KS 256
+#define QUANT_R_IQ4_KS 1
+
+#if defined(DATA_A_IQ4_KS)
+#define QUANT_K QUANT_K_IQ4_KS
+#define QUANT_R QUANT_R_IQ4_KS
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
+// IQ4_KSS — ik_llama.cpp 4-bit super-small (4.0 bpw, row_meta=4 = float row scale).
+// Per block: 32 uint32_t = 128 bytes. Bound as uint32_t[].
+#define QUANT_K_IQ4_KSS 256
+#define QUANT_R_IQ4_KSS 1
+
+#if defined(DATA_A_IQ4_KSS)
+#define QUANT_K QUANT_K_IQ4_KSS
+#define QUANT_R QUANT_R_IQ4_KSS
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {

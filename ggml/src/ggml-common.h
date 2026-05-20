@@ -477,6 +477,46 @@ typedef struct {
 } block_iq2_k;
 static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
 
+// IQ4_KS: ik_llama.cpp 4-bit small (4.25 bpw)
+// Row layout: 4-byte float row scale prepended (row_meta_size=4), then blocks below.
+// Per-block: 8 scale bytes (1 codebook-shift bit + 7-bit signed-offset scale)
+//          + 128 qs bytes (4-bit indices, 2 per byte).
+typedef struct {
+    uint8_t scales[QK_K/32];     // 8 bytes
+    uint8_t qs[QK_K/2];          // 128 bytes: 4-bit indices, 2 per byte
+} block_iq4_ks;
+static_assert(sizeof(block_iq4_ks) == QK_K/32 + QK_K/2, "wrong iq4_ks block size/padding");
+
+// IQ4_KT: ik_llama.cpp trellis-coded 4-bit (4.0 bpw, per-row float scale)
+// Row layout: [float row_scale][block_iq4_kt blocks].  Block format:
+//   shb[0..7]  (32 B) = scale + use-codebook-B + 24 high bits per sub-block
+//   ql[0..63]  (64 B) = 8 low bits per group (kNumGroups=64 groups per superblock)
+//   qh[0..15]  (16 B) = 4 mid bits per group, two groups packed per byte
+// Only 80 of 128 bytes are used; remainder is reserved padding.
+typedef struct {
+    uint32_t qs[QK_K/8];          // 32 uint32_t = 128 bytes
+} block_iq4_kt;
+static_assert(sizeof(block_iq4_kt) == QK_K/2, "wrong iq4_kt block size/padding");
+
+// IQ4_KSS: ik_llama.cpp 4-bit super-small (4.0 bpw)
+// Row layout: 4-byte float row scale prepended (row_meta_size=4), then blocks below.
+// Per-block: 32 uint32_t = 128 bytes.
+typedef struct {
+    uint32_t qs[QK_K/8];          // 32 uint32_t = 128 bytes
+} block_iq4_kss;
+static_assert(sizeof(block_iq4_kss) == QK_K/8*sizeof(uint32_t), "wrong iq4_kss block size/padding");
+
+// IQ3_KS: ik_llama.cpp 3-bit small (3.1875 bpw)
+// Row layout: 2-byte ggml_half row scale prepended (row_meta_size=2), then blocks below.
+// Per-block: 16-bit extra + 4 bytes scales + 64 qs bytes + 32 qh bytes
+typedef struct {
+    uint16_t extra;
+    uint8_t  scales[QK_K/64];     // 4 bytes
+    uint8_t  qs[QK_K/4];          // 64 bytes
+    uint8_t  qh[QK_K/8];          // 32 bytes
+} block_iq3_ks;
+static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
+
 //
 // Super-block quantization structures
 //

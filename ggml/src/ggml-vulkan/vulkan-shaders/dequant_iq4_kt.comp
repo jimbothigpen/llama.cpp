@@ -1,0 +1,92 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ4_KT — ik_llama.cpp trellis-coded 4-bit (4.0 bpw, row_meta=4 = float row scale).
+// Row layout: [float d_row][block_iq4_kt blocks].  Block is 128 bytes = 32 u32:
+//   shb[0..7]   : 8 u32  (32 B) — bit0 = use codebook B, bit1..7 = scale (biased -64),
+//                                  bits 8..30 = 24 high bits split as 3 per group × 8 groups
+//   ql[0..63]   : 16 u32 (64 B) — 8 low bits per group, 64 groups per super-block
+//   qh[0..15]   : 4  u32 (16 B) — 4 mid bits per group, 2 groups packed per byte
+//   padding     : 4  u32 (16 B) reserved
+//
+// Each group of 4 elements is reconstructed via a deterministic PRNG codebook
+// generator (multiplicative LCG with constant 0xCBAC1FED), seeded by
+// idx = ql_byte | (qh_nibble << 8) | (shb_3bits << 12), plus a per-codebook
+// offset (4096 for codebook A, 4096+32768 for codebook B).
+//
+// Dispatch: 1 WG per super-block (256 elements), 64 threads × 1 group each.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const uint IQ4KT_KA       = 0xCBAC1FEDu;
+const uint IQ4KT_OffsetA  = 4096u;
+const uint IQ4KT_OffsetB  = 4096u + 32768u;
+
+void iq4kt_gen_group(uint idx, uint offset, out float result[4]) {
+    uint x = idx + offset;
+    [[unroll]] for (int k = 0; k < 4; k++) {
+        x = IQ4KT_KA * x;
+        const uint s = x & 0x3f3f3f3fu;
+        const int sum =  int(s         & 0xffu)
+                       + int((s >>  8) & 0xffu)
+                       + int((s >> 16) & 0xffu)
+                       + int((s >> 24) & 0xffu);
+        result[k] = float(sum - 126);
+    }
+}
+
+void main() {
+    const uint nb           = p.K / 256u;
+    const uint row_size_u32 = 1u + nb * 32u;
+    const uint total_blocks = p.nel / 256u;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const float d        = uintBitsToFloat(uint(data_a[row_u32]));
+    const uint block_u32 = row_u32 + 1u + ib_in_row * 32u;
+
+    const uint tid = gl_LocalInvocationID.x;       // 0..63
+    const uint ib  = tid >> 3;                      // sub-block 0..7
+    const uint g   = tid & 7u;                      // group within sub-block 0..7
+    const uint jj  = tid;                           // linear group 0..63
+
+    const uint shb        = uint(data_a[block_u32 + ib]);
+    const uint offset     = ((shb & 1u) != 0u) ? IQ4KT_OffsetB : IQ4KT_OffsetA;
+    const int  ls         = int((shb & 0xffu) >> 1) - 64;
+    const float sl        = d * float(ls);
+
+    // ql region starts at block_u32 + 8 (32 u32 - 8 shb = 24 remaining; first 16 are ql)
+    const uint ql_word    = uint(data_a[block_u32 + 8u + (jj >> 2)]);
+    const uint ql_byte    = (ql_word >> ((jj & 3u) * 8u)) & 0xffu;
+
+    // qh region starts at block_u32 + 24 (after shb 0..7 + ql 8..23)
+    const uint qh_byte_idx = jj & 31u;        // 0..31 (16 bytes × 2 nibbles)
+    const uint qh_nibble   = jj >> 5;          // 0..1
+    const uint qh_word     = uint(data_a[block_u32 + 24u + (qh_byte_idx >> 2)]);
+    const uint qh_byte_val = (qh_word >> ((qh_byte_idx & 3u) * 8u)) & 0xffu;
+    const uint qh_nib_val  = (qh_byte_val >> (4u * qh_nibble)) & 0xfu;
+
+    const uint shb_3bits = (shb >> (8u + 3u * g)) & 7u;
+    const uint idx       = ql_byte | (qh_nib_val << 8u) | (shb_3bits << 12u);
+
+    float gv[4];
+    iq4kt_gen_group(idx, offset, gv);
+
+    const uint y_base = ib_global * 256u + ib * 32u + g * 4u;
+    [[unroll]] for (uint i = 0u; i < 4u; i++) {
+        data_b[y_base + i] = D_TYPE(gv[i] * sl);
+    }
+}
