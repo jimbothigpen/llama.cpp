@@ -7,7 +7,7 @@
 // throughput where the input is small (one token) and memory bandwidth on the
 // dequantize step would otherwise dominate.
 //
-// Implements IQ4_K (137), IQ3_K (138), IQ2_K (139).
+// Implements IQ2_K (137), IQ3_K (138), IQ4_K (139).
 // Other types continue to use the cuBLAS-dequant fallback.
 //
 // Design: one warp per output row, 4 warps per CUDA block.  Each lane (thread)
@@ -15,7 +15,7 @@
 // via dp4a, then a warp-level reduction emits one output value per warp.
 //
 // Lifted from frankenturbo2/feature/turboquant-kv-cache (mmvq-iqk.cu),
-// stripped to IQ4_K/IQ3_K/IQ2_K only.
+// stripped to IQ2_K/IQ3_K/IQ4_K only.
 
 #include "mmvq-iqk.cuh"
 #include "convert.cuh"

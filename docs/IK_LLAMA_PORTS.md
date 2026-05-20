@@ -24,7 +24,7 @@ The companion type-ID contract lives at [TYPE_ASSIGNMENTS.md](TYPE_ASSIGNMENTS.m
 
 | Subsystem | ik_llama refs | Status | Notes |
 |---|---|---|---|
-| IK "K" family (IQ2_K, IQ3_K, IQ4_K) | ygg canonical IDs: IQ4_K=137, IQ3_K=138, IQ2_K=139; ft2 IDs 58/59/60 (must renumber) | **recon-additive** (2026-05-22, ik-quant-lift) | CPU: ft2 `ggml-iqk-quants.c` (1741 LOC) has scalar implementations for all 3. Vulkan: ft2 has dequant + mul_mat_vec + Q8_1-mmvq shaders — PPL bit-exact confirmed vs CPU. No row_meta; standard `ggml_type_size`-only layout. Lift classification: **LIFT-WITH-GLUE** (type ID renumber 58→137/59→138/60→139; GGML_TYPE_COUNT expansion from 82 to 157+; ggml.h enum slots; ggml.c type_traits rows; llama.h ftype entries; Vulkan shader registration in ggml-vulkan.cpp + type_names in vulkan-shaders-gen.cpp). IQ5_K, IQ6_K (IDs 140, 141) present in ik_llama but ft2 lacks Vulkan — pending separate recon. |
+| IK "K" family (IQ2_K, IQ3_K, IQ4_K) | ygg canonical IDs: IQ2_K=137, IQ3_K=138, IQ4_K=139; ft2 IDs 58/59/60 (must renumber) | **recon-additive** (2026-05-22, ik-quant-lift) | CPU: ft2 `ggml-iqk-quants.c` (1741 LOC) has scalar implementations for all 3. Vulkan: ft2 has dequant + mul_mat_vec + Q8_1-mmvq shaders — PPL bit-exact confirmed vs CPU. No row_meta; standard `ggml_type_size`-only layout. Lift classification: **LIFT-WITH-GLUE** (type ID renumber 60→137/59→138/58→139; GGML_TYPE_COUNT expansion from 82 to 157+; ggml.h enum slots; ggml.c type_traits rows; llama.h ftype entries; Vulkan shader registration in ggml-vulkan.cpp + type_names in vulkan-shaders-gen.cpp). IQ5_K, IQ6_K (IDs 140, 141) present in ik_llama but ft2 lacks Vulkan — pending separate recon. |
 | IK "KS" row-meta family (IQ3_KS, IQ4_KS, IQ4_KSS) | ygg canonical IDs: IQ4_KS=144, IQ4_KSS=146, IQ3_KS=156; ft2 IDs 61/63/62 | **recon-additive** (2026-05-22, ik-quant-lift) | STRUCTURAL PREREQUISITE: ft2 added `row_meta_size` field to `struct ggml_type_traits` and extended `ggml_row_size()` to add it. ygg does NOT have this field — `ggml_type_traits` in ygg's `ggml.h` has no `row_meta_size`. The entire row-meta family CANNOT land until this infra commit lands first. Once the prereq lands: CPU scalar impls in ft2 ggml-iqk-quants.c, Vulkan shaders complete. Lift classification: **LIFT-WITH-GLUE** (same checklist as K family PLUS row_meta_size infra commit must precede). Row-meta sizes: IQ3_KS=2 bytes (uint16_t half-row-scale), IQ4_KS=4 bytes (float row-scale), IQ4_KSS=4 bytes, IQ4_KT=4 bytes. |
 | IK trellis weight quant (IQ4_KT) | ygg canonical ID: IQ4_KT=155; ft2 ID 64 | **recon-additive** (2026-05-22, ik-quant-lift) | ft2 has full Vulkan: dequant + mul_mat_vec + get_rows fix; HIP kernel in mmvq-iqk.cu. Validated PPL bit-exact vs CPU on ai01. Depends on row_meta_size infra (same prereq as KS family). IQ4_KT note: IK trellis differs from buun TCQ — IQ4_KT is a weight quant; buun TCQ is a KV-cache quant. The ik_llama trellis BRANCHES (IQ2_KT, IQ3_KT, IQ1_KT) remain **dormant** (ik_llama itself shelved them). |
 | IK "K" extended (IQ5_K, IQ6_K) | ygg canonical IDs: IQ5_K=140, IQ6_K=141 | **pending-recon** | ft2 has CPU implementations in ggml-iqk-quants.c but no ft2 Vulkan shaders confirmed for these. Defer to Phase 5b-2 recon once base K family is landed. |
@@ -42,9 +42,9 @@ Prereq commit (must land first, ~1 session):
   P0: row_meta_size infra — add field to ggml_type_traits struct + extend ggml_row_size()
 
 Phase 5b-1a — Base K family (no row_meta, simplest):
-  IQ4_K (ft2 58→ygg 137) — LIFT-WITH-GLUE
+  IQ2_K (ft2 60→ygg 137) — LIFT-WITH-GLUE
   IQ3_K (ft2 59→ygg 138) — LIFT-WITH-GLUE
-  IQ2_K (ft2 60→ygg 139) — LIFT-WITH-GLUE
+  IQ4_K (ft2 58→ygg 139) — LIFT-WITH-GLUE
   Source files: ggml-iqk-quants.c, ggml-iqk-kt.cpp (CPU); 6 .comp shaders + types.glsl + ggml-vulkan.cpp wiring
   HIP: convert.cu + mmvq-iqk.cu (IQ2_K/IQ3_K/IQ4_K sections)
 
@@ -60,9 +60,9 @@ Phase 5b-1b — Row-meta KS family + IQ4_KT (requires P0 first):
 Type ID renumber map (ft2 ID → ygg canonical ID):
 | ft2 slot | ft2 name | ygg canonical ID | ygg name |
 |---|---|---|---|
-| 58 | IQ4_K | 137 | GGML_TYPE_IQ4_K |
+| 58 | IQ4_K | 139 | GGML_TYPE_IQ4_K |
 | 59 | IQ3_K | 138 | GGML_TYPE_IQ3_K |
-| 60 | IQ2_K | 139 | GGML_TYPE_IQ2_K |
+| 60 | IQ2_K | 137 | GGML_TYPE_IQ2_K |
 | 61 | IQ4_KS | 144 | GGML_TYPE_IQ4_KS |
 | 62 | IQ3_KS | 156 | GGML_TYPE_IQ3_KS |
 | 63 | IQ4_KSS | 146 | GGML_TYPE_IQ4_KSS |

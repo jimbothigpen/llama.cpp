@@ -450,9 +450,10 @@ extern "C" {
         // slots 82–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)
-        GGML_TYPE_IQ4_K   = 137, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
+        // IDs match ik_llama's enum order (ascending) to preserve existing ik_llama GGUF compat.
+        GGML_TYPE_IQ2_K   = 137, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
         GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: frankenturbo2 ID 59
-        GGML_TYPE_IQ2_K   = 139, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
+        GGML_TYPE_IQ4_K   = 139, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
         // slots 140–143 reserved for IK compat zone extensions (Phase 5b-1b prereq gaps)
         // Phase 5b-1b row-meta family will occupy: 144 (IQ4_KS), 146 (IQ4_KSS), 155 (IQ4_KT), 156 (IQ3_KS)
         GGML_TYPE_COUNT   = 160, // covers full IK compat zone through slot 159; expanded for Phase 5b-1b prereq
