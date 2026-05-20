@@ -1,0 +1,207 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ3_K — see dequant_iq3_k.comp.  Block is 110 B (NOT 4-aligned), so we
+// bind a uint16_t[] view at binding 0 (alongside iface's typed view) and
+// pack 2 u16 per u32 in shmem (with 1 u16 padding per block: 56 u16 = 28 u32).
+//
+// Per-block byte layout:
+//   byte 0..1   d (float16)
+//   byte 2..3   extra (uint16)
+//   byte 4..5   scales_h (uint16)
+//   byte 6..13  scales_l[0..7]  (8 bytes)
+//   byte 14..77 qs[0..63]       (64 bytes)
+//   byte 78..109 qh[0..31]      (32 bytes)
+// Shmem stores these as 28 u32 (= 56 u16, with 1 u16 of trailing padding).
+
+#define BLOCKS_PER_WG 8
+#define U16_PER_BLOCK 55
+#define U32_PER_BLOCK 28
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer A_RAW {uint16_t data_a_u16[];};
+
+const int iq3nl_values_const[16] = int[16](
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51
+);
+
+shared uint shmem_a[BLOCKS_PER_WG * U32_PER_BLOCK];
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+// Read a byte from the shmem block at the given byte offset (within the block).
+uint shmem_byte(uint shmem_base, uint byte_offset) {
+    const uint u32_idx = byte_offset >> 2;
+    const uint shift   = (byte_offset & 3) * 8;
+    return (shmem_a[shmem_base + u32_idx] >> shift) & 0xff;
+}
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+
+    const uint tid = gl_LocalInvocationID.x;
+    const uint sb  = tid & 7;       // 0..7 — sub-block ib32
+    const uint ix  = tid >> 3;      // 0..7 — block-in-WG
+    const uint shift_l = (sb & 3) << 1;
+    const uint shift_h = sb;
+    const uint qs_byte_base_local = (sb >> 2) * 32;     // 0 or 32
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row = first_row + n;
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG),
+                                              num_blocks_per_row - i_base);
+            const uint u32_to_load = blocks_this_iter * U32_PER_BLOCK;
+
+            barrier();
+            // 8 blocks × 28 u32 = 224 u32.  64 threads × 4 (bounds-checked).
+            [[unroll]] for (uint pi = 0; pi < 4; ++pi) {
+                const uint shmem_idx = tid + pi * 64;
+                if (shmem_idx < u32_to_load) {
+                    const uint local_block = shmem_idx / U32_PER_BLOCK;
+                    const uint u32_in_block = shmem_idx - local_block * U32_PER_BLOCK;
+                    const uint global_block = (row * num_blocks_per_row) + i_base + local_block;
+                    const uint global_u16_low  = global_block * U16_PER_BLOCK + u32_in_block * 2;
+                    const uint v0 = uint(data_a_u16[global_u16_low]);
+                    const uint v1 = (u32_in_block * 2 + 1 < U16_PER_BLOCK)
+                                  ? uint(data_a_u16[global_u16_low + 1])
+                                  : 0u;
+                    shmem_a[shmem_idx] = v0 | (v1 << 16);
+                }
+            }
+            barrier();
+
+            const uint local_block_idx = ix;
+            const uint global_block = i_base + local_block_idx;
+            if (local_block_idx < blocks_this_iter) {
+                const uint shmem_base = local_block_idx * U32_PER_BLOCK;
+
+                // d at byte 0..1, extra at byte 2..3
+                const uint d_extra = shmem_a[shmem_base + 0];
+                const float d = float(unpackHalf2x16(d_extra).x);
+                const uint  extra = (d_extra >> 16) & 0xffff;
+
+                // scales_h at byte 4..5 (low 16 of u32[1])
+                const uint sh = shmem_a[shmem_base + 1] & 0xffff;
+
+                // scales_l[sb] at byte (6+sb)
+                const uint sl_byte = shmem_byte(shmem_base, 6 + sb);
+
+                const int magnitude = int(sl_byte & 0xf);
+                const int magnitude_hi = int(sl_byte >> 4);
+                const int sh_lo_bit = int((sh >> (2 * sb + 0)) & 1);
+                const int sh_hi_bit = int((sh >> (2 * sb + 1)) & 1);
+                const int ls_lo = (2 * magnitude    + 1) * (sh_lo_bit != 0 ? -1 : 1);
+                const int ls_hi = (2 * magnitude_hi + 1) * (sh_hi_bit != 0 ? -1 : 1);
+                const float dl_lo = d * float(ls_lo);
+                const float dl_hi = d * float(ls_hi);
+
+                const uint codebook_lo = ((extra >> (2 * sb + 0)) & 1) << 3;
+                const uint codebook_hi = ((extra >> (2 * sb + 1)) & 1) << 3;
+
+                // qs base byte: 14 + qs_byte_base_local (0 for sb<4, 32 for sb≥4)
+                const uint qs_byte_base = 14 + qs_byte_base_local;
+                // qh base byte: 14 + 64 = 78
+                const uint qh_byte_base = 78;
+
+                const uint y_base = global_block * 256 + sb * 32;
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    // Low half (16 elements): y_base + 0..15
+                    FLOAT_TYPE sum_lo = FLOAT_TYPE(0.0);
+                    [[unroll]] for (uint l = 0; l < 4; ++l) {
+                        // 4 elements per l iter; read 4 qs bytes + 4 qh bytes
+                        const uint qs0 = shmem_byte(shmem_base, qs_byte_base + l*4 + 0);
+                        const uint qs1 = shmem_byte(shmem_base, qs_byte_base + l*4 + 1);
+                        const uint qs2 = shmem_byte(shmem_base, qs_byte_base + l*4 + 2);
+                        const uint qs3 = shmem_byte(shmem_base, qs_byte_base + l*4 + 3);
+                        const uint qh0 = shmem_byte(shmem_base, qh_byte_base + l*4 + 0);
+                        const uint qh1 = shmem_byte(shmem_base, qh_byte_base + l*4 + 1);
+                        const uint qh2 = shmem_byte(shmem_base, qh_byte_base + l*4 + 2);
+                        const uint qh3 = shmem_byte(shmem_base, qh_byte_base + l*4 + 3);
+
+                        const uint i0 = ((qs0 >> shift_l) & 3) | (((qh0 >> shift_h) & 1) << 2);
+                        const uint i1 = ((qs1 >> shift_l) & 3) | (((qh1 >> shift_h) & 1) << 2);
+                        const uint i2 = ((qs2 >> shift_l) & 3) | (((qh2 >> shift_h) & 1) << 2);
+                        const uint i3 = ((qs3 >> shift_l) & 3) | (((qh3 >> shift_h) & 1) << 2);
+
+                        const float v0 = float(iq3nl_values_const[codebook_lo + i0]);
+                        const float v1 = float(iq3nl_values_const[codebook_lo + i1]);
+                        const float v2 = float(iq3nl_values_const[codebook_lo + i2]);
+                        const float v3 = float(iq3nl_values_const[codebook_lo + i3]);
+
+                        const vec4 b = vec4(data_b_v4[(j * p.batch_stride_b + b_offset + y_base) / 4 + l]);
+
+                        sum_lo = fma(FLOAT_TYPE(b.x), FLOAT_TYPE(v0),
+                                 fma(FLOAT_TYPE(b.y), FLOAT_TYPE(v1),
+                                 fma(FLOAT_TYPE(b.z), FLOAT_TYPE(v2),
+                                 fma(FLOAT_TYPE(b.w), FLOAT_TYPE(v3), sum_lo))));
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(dl_lo), sum_lo, temp[j][n]);
+
+                    // High half (16 elements): y_base + 16..31
+                    FLOAT_TYPE sum_hi = FLOAT_TYPE(0.0);
+                    [[unroll]] for (uint l = 0; l < 4; ++l) {
+                        const uint qs0 = shmem_byte(shmem_base, qs_byte_base + 16 + l*4 + 0);
+                        const uint qs1 = shmem_byte(shmem_base, qs_byte_base + 16 + l*4 + 1);
+                        const uint qs2 = shmem_byte(shmem_base, qs_byte_base + 16 + l*4 + 2);
+                        const uint qs3 = shmem_byte(shmem_base, qs_byte_base + 16 + l*4 + 3);
+                        const uint qh0 = shmem_byte(shmem_base, qh_byte_base + 16 + l*4 + 0);
+                        const uint qh1 = shmem_byte(shmem_base, qh_byte_base + 16 + l*4 + 1);
+                        const uint qh2 = shmem_byte(shmem_base, qh_byte_base + 16 + l*4 + 2);
+                        const uint qh3 = shmem_byte(shmem_base, qh_byte_base + 16 + l*4 + 3);
+
+                        const uint i0 = ((qs0 >> shift_l) & 3) | (((qh0 >> shift_h) & 1) << 2);
+                        const uint i1 = ((qs1 >> shift_l) & 3) | (((qh1 >> shift_h) & 1) << 2);
+                        const uint i2 = ((qs2 >> shift_l) & 3) | (((qh2 >> shift_h) & 1) << 2);
+                        const uint i3 = ((qs3 >> shift_l) & 3) | (((qh3 >> shift_h) & 1) << 2);
+
+                        const float v0 = float(iq3nl_values_const[codebook_hi + i0]);
+                        const float v1 = float(iq3nl_values_const[codebook_hi + i1]);
+                        const float v2 = float(iq3nl_values_const[codebook_hi + i2]);
+                        const float v3 = float(iq3nl_values_const[codebook_hi + i3]);
+
+                        const vec4 b = vec4(data_b_v4[(j * p.batch_stride_b + b_offset + y_base + 16) / 4 + l]);
+
+                        sum_hi = fma(FLOAT_TYPE(b.x), FLOAT_TYPE(v0),
+                                 fma(FLOAT_TYPE(b.y), FLOAT_TYPE(v1),
+                                 fma(FLOAT_TYPE(b.z), FLOAT_TYPE(v2),
+                                 fma(FLOAT_TYPE(b.w), FLOAT_TYPE(v3), sum_hi))));
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(dl_hi), sum_hi, temp[j][n]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

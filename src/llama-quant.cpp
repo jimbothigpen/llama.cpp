@@ -781,6 +781,11 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
             // The WLS scale optimization in quantize_block_wht{3,4}_0 uses
             // per-element importance weights for substantial PPL gain.
             return true;
+        case GGML_TYPE_IQ4_K:
+        case GGML_TYPE_IQ3_K:
+        case GGML_TYPE_IQ2_K:
+            // ik_llama IQK quants are imatrix-aware; imatrix improves PPL.
+            return true;
         case GGML_TYPE_Q2_K:
             // as a general rule, the k-type quantizations don't require imatrix data.
             // the only exception is Q2_K tensors that are part of a Q2_K_S file.
@@ -824,6 +829,9 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
         case LLAMA_FTYPE_MOSTLY_WHT3_0:  return GGML_TYPE_WHT3_0;
         case LLAMA_FTYPE_MOSTLY_WHT4_0:  return GGML_TYPE_WHT4_0;
+        case LLAMA_FTYPE_MOSTLY_IQ4_K:   return GGML_TYPE_IQ4_K;
+        case LLAMA_FTYPE_MOSTLY_IQ3_K:   return GGML_TYPE_IQ3_K;
+        case LLAMA_FTYPE_MOSTLY_IQ2_K:   return GGML_TYPE_IQ2_K;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_XS;

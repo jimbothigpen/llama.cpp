@@ -1,0 +1,56 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ4_K — ik_llama.cpp 4-bit imatrix (4.50 bpw).  256-element block.
+// 8 ib sub-blocks of 32 (2 halves of 16); 6-bit signed scale per half_idx
+// (4 low from scales_l + 2 high from scales_h, biased −32).  Codebook
+// shift bit per half_idx from `extra`.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq4_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq4k_values_const[32] = int[32](
+    -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+);
+
+void main() {
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= p.nel / 256) return;
+
+    const float d     = float(data_a[ib_global].d);
+    const uint  extra = uint(data_a[ib_global].extra);
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k         = tid * 4 + r;
+        const uint ib        = k >> 5;
+        const uint jel       = k & 0x1f;
+        const uint half_idx      = jel >> 4;
+        const uint j_in_half = jel & 0xf;
+
+        const uint qs_byte_idx = ib * 16 + j_in_half;
+        const uint qs_byte = uint(data_a[ib_global].qs[qs_byte_idx]);
+        const uint nibble  = (qs_byte >> (4 * half_idx)) & 0xf;
+
+        const uint sh = (uint(data_a[ib_global].scales_h[ib >> 1]) >> (4 * (ib & 1))) & 0xf;
+        const uint sl = uint(data_a[ib_global].scales_l[ib]);
+        const uint scale_low  = (half_idx == 0) ? (sl & 0xf) : (sl >> 4);
+        const uint scale_high = (half_idx == 0) ? ((sh << 4) & 0x30) : ((sh << 2) & 0x30);
+        const int  ls = int(scale_low | scale_high) - 32;
+        const float dl = d * float(ls);
+
+        const uint codebook_off = ((extra >> (2 * ib + half_idx)) & 1) << 4;
+        const int  val = iq4k_values_const[codebook_off + nibble];
+
+        data_b[ib_global * 256 + k] = D_TYPE(dl * float(val));
+    }
+}
