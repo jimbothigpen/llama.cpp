@@ -1,0 +1,101 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ4_KSS — ik_llama.cpp 4-bit super-small (4.0 bpw, row_meta=4).
+// Row layout: [float d_row][block_0 (128B)]...[block_{nb-1}].
+// Per block (32 u32):
+//   8 sub-blocks × 4 u32 each.  Each sub-block's 4 u32 = 8 u16.
+//   Per u16: bit 0 = 1 of 8 bits of per-sub-block scale byte;
+//            bits 1..15 = scrambled even-parity 4-bit indices,
+//            descrambled via Gray-code self-inverse: aux = A ^ (A >> 1)
+//            where A = u16 & 0xfffe.
+// Scale ls assembled from bit-0 of all 8 u16; bit 0 of ls = codebook
+// shift, bits 1-7 of ls = 7-bit signed scale (offset −127, even-spaced).
+//
+// Buffer bound as uint32_t[] (clean 4-aligned: 128B/block, row stride
+// 4 + nb*128 always 4-aligned).  d_row read via uintBitsToFloat.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq4k_values_const[32] = int[32](
+    -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+);
+
+void main() {
+    const uint nb           = p.K / 256;
+    const uint row_size_u32 = 1 + nb * 32;
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const uint block_u32 = row_u32 + 1 + ib_in_row * 32;
+
+    const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+    // 64 threads.  Per sub-block ib (= tid/8): 8 inner threads × 4 elements.
+    const uint tid     = gl_LocalInvocationID.x;
+    const uint ib      = tid >> 3;
+    const uint inner   = tid & 7;
+    const uint half_idx = inner >> 2;       // 0 = low (elements 0..15), 1 = high (16..31)
+    const uint quarter = inner & 3;         // 0..3 — within-half quarter (4 elements)
+
+    // Read all 4 u32 of this sub-block.  Cache absorbs the 8× redundancy.
+    const uint qs_u32_base = block_u32 + ib * 4;
+    const uint qs0 = data_a[qs_u32_base + 0];
+    const uint qs1 = data_a[qs_u32_base + 1];
+    const uint qs2 = data_a[qs_u32_base + 2];
+    const uint qs3 = data_a[qs_u32_base + 3];
+
+    // Assemble ls from bit-0 of each u16.
+    const int ls = int(
+        ( qs0        & 1u)        |
+        ((qs0 >> 16) & 1u) <<  1  |
+        ( qs1        & 1u) <<  2  |
+        ((qs1 >> 16) & 1u) <<  3  |
+        ( qs2        & 1u) <<  4  |
+        ((qs2 >> 16) & 1u) <<  5  |
+        ( qs3        & 1u) <<  6  |
+        ((qs3 >> 16) & 1u) <<  7);
+
+    const float dl          = d_row * float((ls & 254) - 127);
+    const uint  codebook_off = uint(ls & 1) << 4;
+
+    // Descramble the u32 needed for this thread's quarter.
+    const uint qs_my = (quarter == 0) ? qs0
+                     : (quarter == 1) ? qs1
+                     : (quarter == 2) ? qs2 : qs3;
+    const uint mask = 0xfffefffeu;
+    const uint a32  = qs_my & mask;
+    const uint aux32 = a32 ^ (a32 >> 1);
+
+    const uint a0 =  aux32        & 0xff;
+    const uint a1 = (aux32 >>  8) & 0xff;
+    const uint a2 = (aux32 >> 16) & 0xff;
+    const uint a3 = (aux32 >> 24) & 0xff;
+
+    const uint nibble_shift = half_idx * 4;
+    const uint n0 = (a0 >> nibble_shift) & 0xf;
+    const uint n1 = (a1 >> nibble_shift) & 0xf;
+    const uint n2 = (a2 >> nibble_shift) & 0xf;
+    const uint n3 = (a3 >> nibble_shift) & 0xf;
+
+    const uint y_base = ib_global * 256 + ib * 32 + half_idx * 16 + quarter * 4;
+    data_b[y_base + 0] = D_TYPE(dl * float(iq4k_values_const[codebook_off + n0]));
+    data_b[y_base + 1] = D_TYPE(dl * float(iq4k_values_const[codebook_off + n1]));
+    data_b[y_base + 2] = D_TYPE(dl * float(iq4k_values_const[codebook_off + n2]));
+    data_b[y_base + 3] = D_TYPE(dl * float(iq4k_values_const[codebook_off + n3]));
+}

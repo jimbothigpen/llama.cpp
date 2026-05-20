@@ -454,9 +454,15 @@ extern "C" {
         GGML_TYPE_IQ2_K   = 137, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
         GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: frankenturbo2 ID 59
         GGML_TYPE_IQ4_K   = 139, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
-        // slots 140–143 reserved for IK compat zone extensions (Phase 5b-1b prereq gaps)
-        // Phase 5b-1b row-meta family will occupy: 144 (IQ4_KS), 146 (IQ4_KSS), 155 (IQ4_KT), 156 (IQ3_KS)
-        GGML_TYPE_COUNT   = 160, // covers full IK compat zone through slot 159; expanded for Phase 5b-1b prereq
+        // slots 140–143 reserved for IK compat zone extensions (IQ5_K=140, IQ6_K=141, etc.)
+        // Phase 5b-1b: row-meta KS family (requires row_meta_size infra)
+        GGML_TYPE_IQ4_KS  = 144, // ik_llama IQK 4-bit small (4.25 bpw, row_meta=4) — source: frankenturbo2 ID 61
+        // slot 145 reserved (IQ2_KS in ik_llama compat zone)
+        GGML_TYPE_IQ4_KSS = 146, // ik_llama IQK 4-bit super-small (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 63
+        // slots 147–154 reserved (Q8 K-block variants + IQ2_KT/IQ3_KT per TYPE_ASSIGNMENTS.md)
+        GGML_TYPE_IQ4_KT  = 155, // ik_llama IQK trellis 4-bit (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 64
+        GGML_TYPE_IQ3_KS  = 156, // ik_llama IQK 3-bit small (3.1875 bpw, row_meta=2) — source: frankenturbo2 ID 62
+        GGML_TYPE_COUNT   = 160, // covers full IK compat zone through slot 159
     };
 
     // precision

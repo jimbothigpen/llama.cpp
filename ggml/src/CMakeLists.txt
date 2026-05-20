@@ -209,6 +209,7 @@ add_library(ggml-base
             ggml-turbo-quant.c
             ggml-roto-quant.c
             ggml-iqk-quants.c
+            ggml-iqk-kt.cpp
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
