@@ -147,7 +147,10 @@ existing ik_llama-quantized GGUFs. The full list of preserved assignments:
 | 134 | `IQ1_BN` | BitNet 1-bit |
 | 135 | `IQ2_BN` | BitNet 2-bit |
 | 136 | `Q8_K64` | K-quant with 64-element blocks |
-| 137–141 | `IQ2_K`, `IQ3_K`, `IQ4_K`, `IQ5_K`, `IQ6_K` | "K" family |
+| 137 | `IQ4_K` | IQK 4-bit imatrix-aware weight quant (4.50 bpw) — **Phase 5b-1a; ygg canonical** |
+| 138 | `IQ3_K` | IQK 3-bit imatrix-aware weight quant (3.44 bpw) — **Phase 5b-1a; ygg canonical** |
+| 139 | `IQ2_K` | IQK 2-bit imatrix-aware weight quant (2.375 bpw) — **Phase 5b-1a; ygg canonical** |
+| 140–141 | `IQ5_K`, `IQ6_K` | "K" family (ik_llama IDs preserved for future port) |
 | 144 | `IQ4_KS` | IK-quant small |
 | 145 | `IQ2_KS` | |
 | 146 | `IQ4_KSS` | IK-quant small-small |

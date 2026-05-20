@@ -447,7 +447,15 @@ extern "C" {
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
-        GGML_TYPE_COUNT   = 82,
+        // slots 82–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
+        // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
+        // Phase 5b-1a: base IK weight quant family (no row_meta required)
+        GGML_TYPE_IQ4_K   = 137, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
+        GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: frankenturbo2 ID 59
+        GGML_TYPE_IQ2_K   = 139, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
+        // slots 140–143 reserved for IK compat zone extensions (Phase 5b-1b prereq gaps)
+        // Phase 5b-1b row-meta family will occupy: 144 (IQ4_KS), 146 (IQ4_KSS), 155 (IQ4_KT), 156 (IQ3_KS)
+        GGML_TYPE_COUNT   = 160, // covers full IK compat zone through slot 159; expanded for Phase 5b-1b prereq
     };
 
     // precision

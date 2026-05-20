@@ -441,6 +441,42 @@ typedef struct {
 } block_wht4_0;                         // 20 bytes total
 static_assert(sizeof(block_wht4_0) == 20, "wrong wht4_0 block size");
 
+// IQ4_K: ik_llama.cpp 4-bit imatrix quantization (4.50 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// 256-element superblock with per-16-element scales (6 bits each: 4 low + 2 high bits).
+// extra: 16-bit field, 1 bit per 16-element half-sub-block selects between iq4k_values and shifted iq4k_values.
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint8_t   scales_h[QK_K/64];  // 4 bytes: 2-bit high parts of 16 scales (packed)
+    uint8_t   scales_l[QK_K/32];  // 8 bytes: 4-bit low parts of 16 scales (packed)
+    uint8_t   qs[QK_K/2];         // 128 bytes: 4-bit quant indices
+} block_iq4_k;
+static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + 3*QK_K/64, "wrong iq4_k block size/padding");
+
+// IQ3_K: ik_llama.cpp 3-bit imatrix quantization (3.4375 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// 256-element block, 8 sub-blocks of 32, with per-16-element scales.
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint16_t  scales_h;            // 2 bytes: 1-bit sign per 16-element block (16 bits)
+    uint8_t   scales_l[QK_K/32];  // 8 bytes: 4-bit low magnitude per 16-element scale
+    uint8_t   qs[QK_K/4];         // 64 bytes: 2 low bits of 3-bit index
+    uint8_t   qh[QK_K/8];         // 32 bytes: 1 high bit of 3-bit index
+} block_iq3_k;
+static_assert(sizeof(block_iq3_k) == sizeof(ggml_half) + 2*sizeof(uint16_t) + QK_K/32 + QK_K/4 + QK_K/8, "wrong iq3_k block size/padding");
+
+// IQ2_K: ik_llama.cpp 2-bit imatrix quantization (2.375 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// 256-element block, 16 sub-blocks of 16. Each pair of sub-blocks (32 elements) shares
+// a packed scale byte; the 'extra' bitmap chooses standard or shifted iq2nl_values per
+// 16-element sub-block.
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;              // 16 bits: 1 codebook-shift bit per 16-element sub-block
+    uint8_t   scales[QK_K/32];    // 8 bytes: two 4-bit signed-offset-by-8 scales per 32-elem
+    uint8_t   qs[QK_K/4];         // 64 bytes: 2-bit indices, 4 sub-blocks share each 32-byte stripe via shift
+} block_iq2_k;
+static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+
 //
 // Super-block quantization structures
 //

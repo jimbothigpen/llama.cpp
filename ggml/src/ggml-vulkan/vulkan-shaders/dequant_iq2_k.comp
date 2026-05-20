@@ -1,0 +1,54 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ2_K — ik_llama.cpp 2-bit imatrix (2.375 bpw).  256-element block.
+// 8 ib32 sub-blocks of 32 elements (2 halves of 16); each half_idx has its own
+// 4-bit scale (offset −8) and 1-bit codebook shift in `extra`.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq2_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq2nl_values_const[8] = int[8](
+    -31, -13,  1, 17,
+    -26,  -8,  6, 22
+);
+
+void main() {
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= p.nel / 256) return;
+
+    const float d = float(data_a[ib_global].d);
+    const uint  extra = uint(data_a[ib_global].extra);
+
+    // 64 threads × 4 elements = 256 elements.  Thread t handles y[4t..4t+3].
+    // Within a thread, all 4 elements share ib32 (since 4 ≤ half_idx-size 16) and
+    // share `half_idx` if `4t % 16` ≤ 12.  We just compute each element fully.
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k    = tid * 4 + r;
+        const uint ib32 = k >> 5;
+        const uint jel  = k & 0x1f;
+        const uint half_idx = jel >> 4;
+        const uint shift = (ib32 & 3) << 1;
+        const uint qs_byte_idx = (ib32 >> 2) * 32 + jel;
+        const uint qs_byte = uint(data_a[ib_global].qs[qs_byte_idx]);
+        const uint nibble  = (qs_byte >> shift) & 3;
+
+        const uint sc_byte = uint(data_a[ib_global].scales[ib32]);
+        const int  sc_nib  = int((sc_byte >> (half_idx * 4)) & 0xf);
+        const float dl = d * float(sc_nib - 8);
+
+        const uint codebook_off = ((extra >> (2 * ib32 + half_idx)) & 1) << 2;
+        const int  val = iq2nl_values_const[codebook_off + nibble];
+
+        data_b[ib_global * 256 + k] = D_TYPE(dl * float(val));
+    }
+}

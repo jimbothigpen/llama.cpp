@@ -173,3 +173,104 @@ static __device__ __forceinline__ void dequantize_wht3_0(const void * vx, const 
     v.x = buf[iqs];
     v.y = buf[iqs + 1];
 }
+
+// IQ4_K: 256-element superblock, 8 sub-blocks of 32 elements.
+// Each sub-block has a 6-bit scale (split into 4 low + 2 high bits) and uses
+// either iq4k_values or shifted iq4k_values+16 based on the `extra` bitfield.
+static __device__ __forceinline__ void dequantize_iq4_k(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_iq4_k * x = (const block_iq4_k *) vx + ib;
+    const float d = __half2float(x->d);
+
+    const int sub_ib = iqs >> 5;       // sub-block index 0..7
+    const int pos    = iqs & 31;        // position within sub-block 0..30 (even)
+
+    const uint8_t sh = x->scales_h[sub_ib >> 1] >> (4 * (sub_ib & 1));
+    const int dl1_int = ((x->scales_l[sub_ib] & 0xf) | ((sh << 4) & 0x30)) - 32;
+    const int dl2_int = ((x->scales_l[sub_ib] >> 4) | ((sh << 2) & 0x30)) - 32;
+    const float dl = (pos < 16) ? d * (float)dl1_int : d * (float)dl2_int;
+
+    const int extra_bits = (int)(x->extra >> (2 * sub_ib));
+    const int extra_bit  = (pos < 16) ? (extra_bits & 1) : ((extra_bits >> 1) & 1);
+    const int8_t * values = iq4k_values + (extra_bit ? 16 : 0);
+
+    const uint8_t * qs_base = x->qs + sub_ib * 16;
+    const int qs_off = (pos < 16) ? pos : (pos - 16);
+    const uint8_t qs0 = qs_base[qs_off];
+    const uint8_t qs1 = qs_base[qs_off + 1];
+
+    if (pos < 16) {
+        v.x = dl * (float)values[qs0 & 0xf];
+        v.y = dl * (float)values[qs1 & 0xf];
+    } else {
+        v.x = dl * (float)values[qs0 >> 4];
+        v.y = dl * (float)values[qs1 >> 4];
+    }
+}
+
+// IQ3_K: 256-element block, 8 sub-blocks of 32. Per 16-element scale group with sign bit.
+static __device__ __forceinline__ void dequantize_iq3_k(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_iq3_k * x = (const block_iq3_k *) vx + ib;
+    const float d = __half2float(x->d);
+
+    const int ib32 = iqs >> 5;
+    const int pos  = iqs & 31;
+    const int half = pos >> 4;
+    const int sl = (half == 0) ? (x->scales_l[ib32] & 0xf) : (x->scales_l[ib32] >> 4);
+    const int sign_bit = (x->scales_h >> (2*ib32 + half)) & 1;
+    const int ls = (2*sl + 1) * (sign_bit ? -1 : 1);
+    const float dl = d * (float)ls;
+
+    const int extra_bit = (x->extra >> (2*ib32 + half)) & 1;
+    const int8_t * values = iq3nl_values_dev + (extra_bit ? 8 : 0);
+
+    const int qs_block_off = 32 * (ib32 / 4);
+    const int qs_base_off  = qs_block_off + (half ? 16 : 0);
+    const int qh_block_off = 32 * (ib32 / 8);
+    const int qh_base_off  = qh_block_off + (half ? 16 : 0);
+    const int j  = pos & 15;
+    const int shift_l = 2 * (ib32 & 3);
+    const int shift_h = ib32 & 7;
+
+    const uint8_t qs0 = x->qs[qs_base_off + j];
+    const uint8_t qs1 = x->qs[qs_base_off + j + 1];
+    const uint8_t qh0 = x->qh[qh_base_off + j];
+    const uint8_t qh1 = x->qh[qh_base_off + j + 1];
+
+    const int idx0 = ((qs0 >> shift_l) & 3) | (((qh0 >> shift_h) & 1) << 2);
+    const int idx1 = ((qs1 >> shift_l) & 3) | (((qh1 >> shift_h) & 1) << 2);
+
+    v.x = dl * (float)values[idx0];
+    v.y = dl * (float)values[idx1];
+}
+
+// IQ2_K: 256-element block, 8 sub-blocks of 32, two 4-bit signed-offset-by-8 scales per
+// sub-block (one per 16-element half).
+static __device__ __forceinline__ void dequantize_iq2_k(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_iq2_k * x = (const block_iq2_k *) vx + ib;
+    const float d = __half2float(x->d);
+
+    const int ib32 = iqs >> 5;
+    const int pos  = iqs & 31;
+    const int half = pos >> 4;
+
+    const int sl = half == 0 ? (x->scales[ib32] & 0xf) : (x->scales[ib32] >> 4);
+    const int ls = sl - 8;
+    const float dl = d * (float)ls;
+
+    const int extra_bit = (x->extra >> (2*ib32 + half)) & 1;
+    const int8_t * values = iq2nl_values_dev + (extra_bit ? 4 : 0);
+
+    const int qs_block_off = 32 * (ib32 / 4);
+    const int qs_base_off  = qs_block_off + (half ? 16 : 0);
+    const int j  = pos & 15;
+    const int shift = 2 * (ib32 & 3);
+
+    const uint8_t qs0 = x->qs[qs_base_off + j];
+    const uint8_t qs1 = x->qs[qs_base_off + j + 1];
+
+    const int idx0 = (qs0 >> shift) & 3;
+    const int idx1 = (qs1 >> shift) & 3;
+
+    v.x = dl * (float)values[idx0];
+    v.y = dl * (float)values[idx1];
+}
