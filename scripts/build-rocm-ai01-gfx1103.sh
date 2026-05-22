@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-cd /mnt/cephfs/0/Container/systems/ai00/users/builduser/llama-yggdrasil
+cd /mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/src/jimbothigpen/llama.cpp
 
 rm -rf build-rocm-ai01
 mkdir build-rocm-ai01

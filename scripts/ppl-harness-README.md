@@ -40,7 +40,7 @@ cd /path/to/llama.cpp
 | `--ngl N` | `99` | GPU layers; use `0` for CPU-only |
 | `--extra-flag FLAG` | (repeatable) | Verbatim passthrough to llama-perplexity |
 | `--baseline-root PATH` | cephfs `ppl-baselines/` | Override baseline output directory |
-| `--log-dir PATH` | `~/kernel-work/logs/session-*/` | Log directory |
+| `--log-dir PATH` | `/mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/kernel-work/logs/session-*/` | Log directory |
 | `--no-record` | off | Skip writing baseline JSON |
 | `--no-sha256` | off | Skip sha256 (faster, less reproducible) |
 | `--no-gpu-check` | off | Skip concurrent-process guard |

@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import Optional
 
 
-REPO_ROOT = Path("/mnt/cephfs/0/Container/systems/ai00/users/builduser/llama-yggdrasil")
+REPO_ROOT = Path("/mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/src/jimbothigpen/llama.cpp")
 WIKITEXT_PATH = Path(
-    "/mnt/cephfs/0/Container/systems/ai00/users/builduser/yggdrasil-context/"
+    "/mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/context/"
     "corpora/wikitext-2-raw-test.txt"
 )
 SSH_PORT_AI01 = "2229"
