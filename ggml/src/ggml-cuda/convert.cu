@@ -709,194 +709,240 @@ static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k,
 // the start of each row (row_meta_size = 4 bytes per row).
 template <typename dst_t>
 static __global__ void dequantize_block_iq4_ks(const void * __restrict__ vx, dst_t * __restrict__ yy,
-        int64_t n_per_row, int64_t row_size) {
-    const int row   = blockIdx.x;
-    const int block = blockIdx.y;
-    const int tid   = threadIdx.x;
-    const char * cx = (const char *)vx + (int64_t)row * row_size;
-    const float d   = *(const float *)cx;
+                                                int64_t n_per_row, int64_t row_size) {
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    const float scale = *(const float *)cx;
     const block_iq4_ks * x = (const block_iq4_ks *)(cx + sizeof(float));
-    const int kBlockSize = 32;
-    const uint8_t * qs = x[block].qs + (tid / (kBlockSize/2)) * (kBlockSize/2);
-    const int ib = tid % (kBlockSize/2);
-    const float dl = d * (float)((int)(x[block].scales[tid / (kBlockSize/2)] & 254) - 127);
-    const int8_t * vals = iq4k_values + ((x[block].scales[tid / (kBlockSize/2)] & 1) << 4);
-    yy[(int64_t)row * n_per_row + block * QK_K + (tid / (kBlockSize/2)) * kBlockSize + 2*ib + 0] = (dst_t)(dl * vals[(qs[ib] & 0x0f)]);
-    yy[(int64_t)row * n_per_row + block * QK_K + (tid / (kBlockSize/2)) * kBlockSize + 2*ib + 1] = (dst_t)(dl * vals[(qs[ib] >> 4)]);
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid / 8;        // 0..3
+    const int64_t ib  = tid % 8;        // 0..7
+    dst_t * y = yy + ii * QK_K + 32 * ib + 4 * il;
+    const uint8_t * q4 = x[i].qs + 16 * ib + 4 * il;
+    const float d = scale * (float)((int)(x[i].scales[ib] & 254) - 127);
+    const int8_t * values = iq4k_values + ((x[i].scales[ib] & 1) << 4);
+    for (int j = 0; j < 4; ++j) {
+        y[j +  0] = ggml_cuda_cast<dst_t>(d * (float)values[q4[j] & 0xf]);
+        y[j + 16] = ggml_cuda_cast<dst_t>(d * (float)values[q4[j] >>  4]);
+    }
 }
+
 template <typename dst_t>
 static void dequantize_row_iq4_ks_cuda(const void * vx, dst_t * y,
-        int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                       int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
     const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
-    const int nb = (int)(n_per_row / QK_K);
-    dim3 grid(nrows, nb);
-    dequantize_block_iq4_ks<<<grid, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq4_ks<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
 }
+
+// Public entry points for row-meta-aware dequant — called from cuBLAS dequant path
+// in ggml-cuda.cu where we know nrows and n_per_row separately (the standard
+// ggml_get_to_fp32_cuda dispatch only takes total k, which is insufficient for
+// row_meta layouts).
 void ggml_dequantize_iq4_ks_to_fp32_cuda(const void * vx, float * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_ks_cuda<float>(vx, y, nrows, n_per_row, stream);
 }
 void ggml_dequantize_iq4_ks_to_fp16_cuda(const void * vx, half * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_ks_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
 // IQ3_KS row-aware dequant (port of ik_llama.cpp's dequantize_block_iq3_ks).
-// Row layout: ggml_half row_scale + block_iq3_ks[n/QK_K].  Thread produces 2 output floats.
+// One CUDA block per QK_K elements, 32 threads each producing 8 elements.
 template <typename dst_t>
 static __global__ void dequantize_block_iq3_ks(const void * __restrict__ vx, dst_t * __restrict__ yy,
-        int64_t n_per_row, int64_t row_size) {
-    const int row   = blockIdx.x;
-    const int block = blockIdx.y;
-    const int tid   = threadIdx.x;
-    const char * cx = (const char *)vx + (int64_t)row * row_size;
-    const float d   = (float)*(const __half *)cx;
-    const block_iq3_ks * x = (const block_iq3_ks *)(cx + sizeof(__half));
-    const block_iq3_ks * bq = &x[block];
-    const int ib32   = tid / 8;   // 0..3: 32-element sub-block index (QK_K/32=8 sub-blocks per block, but 4 per warp)
-    const int jb     = tid % 8;
-    const int shift  = jb & 3;
-    const int half   = jb >> 2;
-    const int sl = (int)(bq->scales[ib32/2] >> (4*(ib32&1))) & 0x0f;
-    const int hb = (bq->extra >> ib32) & 1;
-    const int cb = (bq->extra >> (8 + ib32)) & 1;
-    const float dl = d * (float)(2*(sl + 16*hb) - 31 + 32*cb);
-    const int8_t * vals = iq3nl_values_dev + (cb ? 8 : 0);
-    const int qs_off = 32 * (ib32 / 4) + (half ? 16 : 0);
-    const uint8_t q2  = (bq->qs[qs_off + jb % 8] >> (2*shift)) & 3;
-    const uint8_t q2b = (bq->qs[qs_off + jb % 8 + 8] >> (2*shift)) & 3;
-    const int qh_off = 16 * (ib32 / 4) + (half ? 8 : 0);
-    const int q1  = q2  | (((bq->qh[qh_off + jb % 8] >> shift) & 1) << 2);
-    const int q1b = q2b | (((bq->qh[qh_off + jb % 8] >> (shift + 4)) & 1) << 2);
-    const int out_off = (int64_t)row * n_per_row + block * QK_K + ib32 * 32 + half * 16 + (jb%8)*2;
-    if (out_off + 0 < (int64_t)(row+1) * n_per_row) yy[out_off + 0] = (dst_t)(dl * vals[q1]);
-    if (out_off + 1 < (int64_t)(row+1) * n_per_row) yy[out_off + 1] = (dst_t)(dl * vals[q1b]);
+                                                int64_t n_per_row, int64_t row_size) {
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    const float scale = __half2float(*(const half *)cx);
+    const block_iq3_ks * x = (const block_iq3_ks *)(cx + sizeof(half));
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t is = tid / 16;        // 0 or 1: which half of the 256 elements
+    const int64_t il = tid % 16;        // 0..15
+    dst_t * y = yy + ii * QK_K + 128 * is + 2 * il;
+    const uint8_t * qs = x[i].qs + 32 * is + 2 * il;
+    const uint8_t * qh = x[i].qh + 2 * il;
+    uint16_t extra = x[i].extra >> 4 * is;
+    const float d0 = scale * (float)((int)(((x[i].scales[0] >> 4*is) & 0xf) | ((extra << 4) & 0x10)) - 16);
+    const float d1 = scale * (float)((int)(((x[i].scales[1] >> 4*is) & 0xf) | ((extra << 3) & 0x10)) - 16);
+    const float d2 = scale * (float)((int)(((x[i].scales[2] >> 4*is) & 0xf) | ((extra << 2) & 0x10)) - 16);
+    const float d3 = scale * (float)((int)(((x[i].scales[3] >> 4*is) & 0xf) | ((extra << 1) & 0x10)) - 16);
+    extra >>= 8;
+    const int8_t * values0 = iq3nl_values_dev + ((extra & 1) << 3);
+    const int8_t * values1 = iq3nl_values_dev + ((extra & 2) << 2);
+    const int8_t * values2 = iq3nl_values_dev + ((extra & 4) << 1);
+    const int8_t * values3 = iq3nl_values_dev + ((extra & 8) << 0);
+    for (int j = 0; j < 2; ++j) {
+        const uint8_t h = qh[j] >> 4*is;
+        y[j +  0] = ggml_cuda_cast<dst_t>(d0 * (float)values0[((qs[j] >> 0) & 3) | ((h << 2) & 4)]);
+        y[j + 32] = ggml_cuda_cast<dst_t>(d1 * (float)values1[((qs[j] >> 2) & 3) | ((h << 1) & 4)]);
+        y[j + 64] = ggml_cuda_cast<dst_t>(d2 * (float)values2[((qs[j] >> 4) & 3) | ((h >> 0) & 4)]);
+        y[j + 96] = ggml_cuda_cast<dst_t>(d3 * (float)values3[((qs[j] >> 6) & 3) | ((h >> 1) & 4)]);
+    }
 }
+
 template <typename dst_t>
 static void dequantize_row_iq3_ks_cuda(const void * vx, dst_t * y,
-        int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                       int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
     const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3_KS, n_per_row);
-    const int nb = (int)(n_per_row / QK_K);
-    dim3 grid(nrows, nb);
-    dequantize_block_iq3_ks<<<grid, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq3_ks<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
 }
+
 void ggml_dequantize_iq3_ks_to_fp32_cuda(const void * vx, float * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq3_ks_cuda<float>(vx, y, nrows, n_per_row, stream);
 }
 void ggml_dequantize_iq3_ks_to_fp16_cuda(const void * vx, half * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq3_ks_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
-// IQ4_KSS row-aware dequant.  Per-block: 32 uint32_t Gray-coded indices.
-// Row layout: float row_scale + block_iq4_kss[n/QK_K].
+// IQ4_KSS row-aware dequant (port of ik_llama.cpp's dequantize_block_iq4_kss).
+// One CUDA block per QK_K elements, 32 threads each producing 4×2 output elements.
+// Decode: scale byte is the LSBs of 8 uint16_t pairs; descramble via aux ^= (aux>>1).
 template <typename dst_t>
 static __global__ void dequantize_block_iq4_kss(const void * __restrict__ vx, dst_t * __restrict__ yy,
-        int64_t n_per_row, int64_t row_size) {
-    const int row   = blockIdx.x;
-    const int block = blockIdx.y;
-    const int tid   = threadIdx.x;
-    const char * cx = (const char *)vx + (int64_t)row * row_size;
-    const float d   = *(const float *)cx;
+                                                 int64_t n_per_row, int64_t row_size) {
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    const float scale = *(const float *)cx;
     const block_iq4_kss * x = (const block_iq4_kss *)(cx + sizeof(float));
-    // Each sub-block of 8 elements is encoded in one uint32_t.
-    // Bits 0..7: scale byte (reconstructed from the 8 uint16 bit-0s).
-    // Bits 1..15 of each uint16: Gray-coded 4-bit index.
-    const int ib = tid / 4;  // 0..7 sub-blocks per 32-thread warp
-    const int j  = tid % 4;  // position within sub-block (0..3, paired: 2 per word)
-    const uint16_t * u16 = (const uint16_t *)x[block].qs;
-    const int sub_off = ib * 8;
-    uint8_t sc = 0;
-    for (int k = 0; k < 8; ++k) sc |= (u16[sub_off + k] & 1) << k;
-    const int8_t * vals = iq4k_values + (((sc >> 7) & 1) << 4);
-    const float dl = d * (float)((int)(sc & 0x7f) - 64);
-    const uint16_t w0 = u16[sub_off + j*2 + 0];
-    const uint16_t w1 = u16[sub_off + j*2 + 1];
-    const int idx0 = (int)((w0 >> 1) & 0x0f) ^ (int)((w0 >> 2) & 0x0f);
-    const int idx1 = (int)((w0 >> 9) & 0x0f) ^ (int)((w0 >> 10) & 0x0f);
-    const int idx2 = (int)((w1 >> 1) & 0x0f) ^ (int)((w1 >> 2) & 0x0f);
-    const int idx3 = (int)((w1 >> 9) & 0x0f) ^ (int)((w1 >> 10) & 0x0f);
-    const int64_t base = (int64_t)row * n_per_row + block * QK_K + ib * 32 + j * 4;
-    yy[base + 0] = (dst_t)(dl * vals[idx0]);
-    yy[base + 1] = (dst_t)(dl * vals[idx1]);
-    yy[base + 2] = (dst_t)(dl * vals[idx2]);
-    yy[base + 3] = (dst_t)(dl * vals[idx3]);
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid / 8;     // 0..3
+    const int64_t ib  = tid % 8;     // 0..7
+    dst_t * y = yy + ii * QK_K + 32 * ib + 4 * il;
+    const uint32_t * q4 = x[i].qs + 4 * ib;
+    const uint32_t s32 = (q4[0] & 0x00010001) | ((q4[1] & 0x00010001) << 2)
+                        | ((q4[2] & 0x00010001) << 4) | ((q4[3] & 0x00010001) << 6);
+    const uint8_t ls = (uint8_t)((s32 | (s32 >> 15)) & 0xff);
+    const float d = scale * (float)((int)(ls & 254) - 127);
+    const int8_t * values = iq4k_values + ((ls & 1) << 4);
+
+    uint32_t aux32_lo = q4[il] & 0xfffefffe;
+    aux32_lo ^= (aux32_lo >> 1);
+    const uint32_t aux32_hi = (aux32_lo >> 4) & 0x0f0f0f0f;
+    aux32_lo &= 0x0f0f0f0f;
+    const uint8_t * aux_lo = (const uint8_t *)&aux32_lo;
+    const uint8_t * aux_hi = (const uint8_t *)&aux32_hi;
+    for (int j = 0; j < 4; ++j) {
+        y[j +  0] = ggml_cuda_cast<dst_t>(d * (float)values[aux_lo[j]]);
+        y[j + 16] = ggml_cuda_cast<dst_t>(d * (float)values[aux_hi[j]]);
+    }
 }
+
 template <typename dst_t>
 static void dequantize_row_iq4_kss_cuda(const void * vx, dst_t * y,
-        int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                        int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
     const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_KSS, n_per_row);
-    const int nb = (int)(n_per_row / QK_K);
-    dim3 grid(nrows, nb);
-    dequantize_block_iq4_kss<<<grid, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq4_kss<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
 }
+
 void ggml_dequantize_iq4_kss_to_fp32_cuda(const void * vx, float * y,
-                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_kss_cuda<float>(vx, y, nrows, n_per_row, stream);
 }
 void ggml_dequantize_iq4_kss_to_fp16_cuda(const void * vx, half * y,
-                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_kss_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
-// IQ4_KT row-aware dequant.  No precomputed codebook; values regenerated via
-// the same bit-mixing formula used by the CPU impl (set_values_int).
-// Row layout: float row_scale + block_iq4_kt[n/QK_K].
+// IQ4_KT row-aware dequant.  No precomputed codebook; values regenerated from a
+// 16-bit index via the deterministic `trellis_next_int` bit-mixing function.
+// Each thread handles one group of 4 elements.
+static __device__ __forceinline__ int iq4kt_trellis_next_int(uint32_t & val) {
+    constexpr uint32_t ka = 0xCBAC1FED;
+    val = ka * val;
+    // ggml_cuda_dp4a(a, b, c) = c + sum_4(int8(a[i]) * int8(b[i]))
+    // With b = 0x01010101 this sums the 4 bytes of (val & 0x3f3f3f3f), each in [0, 63].
+    return ggml_cuda_dp4a(val & 0x3f3f3f3f, 0x01010101, -126);
+}
+
 template <typename dst_t>
 static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst_t * __restrict__ yy,
-        int64_t n_per_row, int64_t row_size) {
-    const int row   = blockIdx.x;
-    const int block = blockIdx.y;
-    const int tid   = threadIdx.x;
-    const char * cx = (const char *)vx + (int64_t)row * row_size;
-    const float d   = *(const float *)cx;
-    const block_iq4_kt * x = (const block_iq4_kt *)(cx + sizeof(float));
-    const block_iq4_kt * bq = &x[block];
-    const uint32_t * shb_ptr = bq->qs;          // shb[0..7] at offsets 0..7
-    const uint8_t  * ql_ptr  = (const uint8_t *)(bq->qs + 8);   // ql[0..63]
-    const uint8_t  * qh_ptr  = ql_ptr + 64;                     // qh[0..15]
-    // Thread tid = ib*4 + ig (ib=0..7 sub-blocks, ig=0..3 groups per sub-block)
-    const int ib = tid >> 2;
-    const int ig = tid & 3;
-    const uint32_t shb = shb_ptr[ib];
-    const int use_offset2 = (int)(shb & 1);
-    const int scale_v  = (int)((shb >> 1) & 0x7f) - 64;
-    const float dl     = d * (float)scale_v;
-    const int high24   = (int)(shb >> 8);
-    const int g_off    = ib * 4 + ig;
-    const int hi6      = (high24 >> (ig * 6)) & 0x3f;
-    const uint8_t ql_v = ql_ptr[g_off];
-    const uint8_t qh_v = (qh_ptr[g_off >> 1] >> ((g_off & 1) << 2)) & 0x0f;
-    int idx = (int)ql_v | ((int)qh_v << 8) | ((int)hi6 << 12);
-    // Reconstruct codebook value via the bit-mixing function.
-    const int offset = use_offset2 ? 36864 : 4096;
-    idx += offset;
-    // Simple LCG-style hash matching set_values_int in ggml-iqk-kt.cpp
-    uint32_t state = (uint32_t)idx;
-    state = state * 1664525u + 1013904223u;
-    state = state * 1664525u + 1013904223u;
-    const float val = (float)(int32_t)state * (1.0f / (float)(1u << 31));
-    const int64_t out_off = (int64_t)row * n_per_row + block * QK_K + ib * 32 + ig * 4;
-    // Each group produces 4 output elements (group_size=4).
+                                                int64_t n_per_row, int64_t row_size) {
+    constexpr int kNumGroups = 64;   // QK_K / kGroupSize (256 / 4)
+    constexpr int kNblock    = 8;    // QK_K / kBlockSize (256 / 32)
+
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const float * dptr = (const float *)((const char *)vx + row * row_size);
+    const float scale = dptr[0];
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const int64_t tid = threadIdx.x;     // 0..31: one thread per group of 4 elements
+    const int ib32 = tid / 4;            // sub-block 0..7
+    const int ig   = tid % 4;            // group within sub-block 0..3 (group_size=4 → kNg=8 groups per 32-elem block; here we use 2 groups per thread? wait)
+
+    // Actually IQ4_KT has 8 groups per 32-element block (since group_size=4, kNg=8),
+    // and we have 64 groups per superblock.  With 32 threads, each thread handles 2 groups.
+    // Map: thread t handles groups (t*2) and (t*2 + 1).
+    const int64_t jj0 = tid * 2;          // 0, 2, 4, ..., 62
+    const int64_t jj1 = tid * 2 + 1;
+    const int ib = jj0 / 8;               // sub-block (0..7) for jj0
+    const int g0 = jj0 % 8;               // group index within sub-block for jj0
+    const int g1 = jj1 % 8;
+    (void)ib32; (void)ig;
+
+    const uint32_t * shb = x[i].qs;
+    const uint8_t  * ql  = (const uint8_t *)(shb + kNblock);
+    const uint8_t  * qh  = ql + kNumGroups;
+
+    const int offset = (shb[ib] & 1) ? (4096 + 32768) : 4096;
+    const int ls = (int)((shb[ib] & 0xff) >> 1) - 64;
+    const float dl = scale * (float)ls;
+
+    auto unpack_idx = [&](int jj, int g) -> uint32_t {
+        const int qh_byte = jj % (kNumGroups / 2);
+        const int qh_nibble = jj / (kNumGroups / 2);
+        return ((uint32_t)ql[jj]
+              | (((uint32_t)((qh[qh_byte] >> (4 * qh_nibble)) & 0xf)) << 8)
+              | (((uint32_t)((shb[ib] >> (8 + 3 * g)) & 7)) << 12))
+             + (uint32_t)offset;
+    };
+
+    uint32_t idx0 = unpack_idx(jj0, g0);
+    uint32_t idx1 = unpack_idx(jj1, g1);
+
+    dst_t * y = yy + ii * QK_K + 4 * jj0;  // jj0 covers 4 elements starting here
     for (int k = 0; k < 4; ++k) {
-        yy[out_off + k] = (dst_t)(dl * val);
+        y[k]     = ggml_cuda_cast<dst_t>(dl * (float)iq4kt_trellis_next_int(idx0));
+    }
+    for (int k = 0; k < 4; ++k) {
+        y[k + 4] = ggml_cuda_cast<dst_t>(dl * (float)iq4kt_trellis_next_int(idx1));
     }
 }
+
 template <typename dst_t>
 static void dequantize_row_iq4_kt_cuda(const void * vx, dst_t * y,
-        int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                       int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
     const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_KT, n_per_row);
-    const int nb = (int)(n_per_row / QK_K);
-    dim3 grid(nrows, nb);
-    dequantize_block_iq4_kt<<<grid, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq4_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
 }
+
 void ggml_dequantize_iq4_kt_to_fp32_cuda(const void * vx, float * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_kt_cuda<float>(vx, y, nrows, n_per_row, stream);
 }
 void ggml_dequantize_iq4_kt_to_fp16_cuda(const void * vx, half * y,
-                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq4_kt_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
