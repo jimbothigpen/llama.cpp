@@ -2,7 +2,7 @@
 """PPL regression harness for llama-yggdrasil.
 
 Runs llama-perplexity against the ROCm and/or Vulkan yggdrasil installs,
-writes structured JSON baselines to yggdrasil-context/ppl-baselines/, and
+writes structured JSON baselines to context/ppl-baselines/, and
 emits a PASS/WARN/FAIL parity verdict between backends.
 
 Usage:
@@ -32,7 +32,7 @@ from pathlib import Path
 HARNESS_VERSION = "0.1.0"
 
 CONTEXT_ROOT = Path(
-    "/mnt/cephfs/0/Container/systems/ai00/users/builduser/yggdrasil-context"
+    "/mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/context"
 )
 DEFAULT_WIKITEXT = CONTEXT_ROOT / "corpora" / "wikitext-2-raw" / "wiki.test.raw"
 DEFAULT_BASELINE_ROOT = CONTEXT_ROOT / "ppl-baselines"
@@ -437,7 +437,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-dir", type=Path, default=None, metavar="PATH",
-        help="where to write per-backend logs (default: ~/kernel-work/logs/session-<UTC>/)",
+        help="where to write per-backend logs (default: /mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/kernel-work/logs/session-<UTC>/)",
     )
     parser.add_argument(
         "--no-record", action="store_true",
@@ -499,7 +499,7 @@ def main() -> int:
     # Resolve log dir
     if args.log_dir is None:
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        args.log_dir = Path.home() / "kernel-work" / "logs" / f"session-{ts}"
+        args.log_dir = Path("/mnt/cephfs/0/Container/systems/ai00/users/builduser/projects/llama.cpp/kernel-work") / "logs" / f"session-{ts}"
     args.log_dir.mkdir(parents=True, exist_ok=True)
 
     # Git info
