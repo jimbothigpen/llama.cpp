@@ -9,7 +9,7 @@
 # Compile-tolerant jobs (llama-perplexity, llama-quantize, llama-imatrix)
 # do NOT need this wrapper.
 #
-# Convention: yggdrasil-context/conventions/bench-compile-mutex.md
+# Convention: context/conventions/bench-compile-mutex.md
 #
 # Usage:
 #   with-bench-mutex.sh <command> [args...]
