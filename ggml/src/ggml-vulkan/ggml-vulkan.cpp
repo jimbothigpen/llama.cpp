@@ -6825,14 +6825,28 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
             return nullptr;
     }
 
+    vk_matmul_pipeline pipeline;
     if (ctx->device->coopmat2) {
         assert(src1_type == GGML_TYPE_F16);
-        return prec == GGML_PREC_DEFAULT ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f32acc;
+        pipeline = prec == GGML_PREC_DEFAULT ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f32acc;
+    } else if (ctx->device->coopmat_support) {
+        pipeline = (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
+    } else {
+        pipeline = (ctx->device->fp16 && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
     }
-    if (ctx->device->coopmat_support) {
-        return (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
+
+    // Weight-only quant types — the K family (IQ2_K/IQ3_K/IQ4_K) and the row-meta KS
+    // family (IQ3_KS/IQ4_KS/IQ4_KSS/IQ4_KT) — are wired with per-type standalone
+    // matvec + dequant shaders only; they have no generic mul_mm tile shader, so their
+    // pipeline_dequant_mul_mat_mat entry is empty. Return nullptr here so the caller
+    // (ggml_vk_mul_mat_q_f16) takes the qx_needs_dequant fallback — dequant src0 to f16
+    // via pipeline_dequant[type] then a generic f16 mul_mat — instead of null-derefing
+    // an empty tile pipeline in ggml_vk_guess_matmul_pipeline (SEGV on the batch>1 path).
+    // Mirrors the is_empty() guard already applied to the MMQ/q8_1 branch above.
+    if (!pipeline || pipeline->is_empty()) {
+        return nullptr;
     }
-    return (ctx->device->fp16 && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
+    return pipeline;
 }
 
 static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * ctx, ggml_type a_type, ggml_type b_type, uint32_t num_cols, uint32_t m, uint32_t k) {
@@ -16690,17 +16704,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:
+                    // Phase 5b-1b KS family: IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT
+                    // row-meta weight quants. MUL_MAT runs the batched path via
+                    // ggml_vk_mul_mat_q_f16's dequant-to-f16 fallback (no generic
+                    // mul_mm tile shader); MUL_MAT_ID likewise dequant-falls-back.
+                    case GGML_TYPE_IQ3_KS:
+                    case GGML_TYPE_IQ4_KS:
+                    case GGML_TYPE_IQ4_KSS:
+                    case GGML_TYPE_IQ4_KT:
                         break;
-                    // Phase 5b-1b: IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT row-meta
-                    // weight quants are intentionally NOT claimed for Vulkan
-                    // MUL_MAT/MUL_MAT_ID. Their Vulkan port wired only the
-                    // mul_mat_vec + standalone-dequant pipelines; the batched
-                    // mul_mat_mat pipeline is unregistered, so ggml_vk_mul_mat_q_f16
-                    // null-derefs (SEGV) on the prompt-processing path. Returning
-                    // false here routes KS-type matmuls to the CPU backend
-                    // (correct, slower). The ROCm/HIP KS path is fully working.
-                    // Completing the Vulkan KS batched-matmul path is tracked in
-                    // escalation-phase-5b-1b-ks-nan-fix-2026-05-22.md.
                     default:
                         return false;
                 }
