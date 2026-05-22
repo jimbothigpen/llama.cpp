@@ -16690,11 +16690,17 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:
-                    case GGML_TYPE_IQ3_KS:
-                    case GGML_TYPE_IQ4_KS:
-                    case GGML_TYPE_IQ4_KSS:
-                    case GGML_TYPE_IQ4_KT:
                         break;
+                    // Phase 5b-1b: IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT row-meta
+                    // weight quants are intentionally NOT claimed for Vulkan
+                    // MUL_MAT/MUL_MAT_ID. Their Vulkan port wired only the
+                    // mul_mat_vec + standalone-dequant pipelines; the batched
+                    // mul_mat_mat pipeline is unregistered, so ggml_vk_mul_mat_q_f16
+                    // null-derefs (SEGV) on the prompt-processing path. Returning
+                    // false here routes KS-type matmuls to the CPU backend
+                    // (correct, slower). The ROCm/HIP KS path is fully working.
+                    // Completing the Vulkan KS batched-matmul path is tracked in
+                    // escalation-phase-5b-1b-ks-nan-fix-2026-05-22.md.
                     default:
                         return false;
                 }
