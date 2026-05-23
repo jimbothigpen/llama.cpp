@@ -55,3 +55,38 @@ void diffusion_generate(llama_context *          ctx,
                         int32_t                  n_input,
                         const diffusion_params & params,
                         int32_t &                n_generated);
+
+struct diffusion_block_params {
+    llama_token mask_token_id    = LLAMA_TOKEN_NULL;
+    int32_t     seed             = 0;
+    float       temperature      = 0.0f;
+    int32_t     block_length     = 32;
+    int32_t     steps_per_block  = 32;
+    int32_t     max_new_tokens   = 256;
+    float       threshold        = 0.0f;
+    bool        shift_logits     = false;
+    diffusion_algorithm algorithm = DIFFUSION_ALGORITHM_CONFIDENCE_BASED;
+    float       top_p            = 0.0f;
+    int32_t     top_k            = 0;
+};
+
+int32_t diffusion_generate_blocks(llama_context *               ctx,
+                                  const llama_token *           input_tokens,
+                                  int32_t                       n_input,
+                                  llama_token *                 output_tokens,
+                                  int32_t                       max_output,
+                                  const diffusion_block_params & params);
+
+struct diffusion_self_spec_params {
+    llama_token mask_token_id  = LLAMA_TOKEN_NULL;
+    int32_t     seed           = 0;
+    int32_t     draft_length   = 16;
+    int32_t     max_new_tokens = 256;
+};
+
+int32_t diffusion_self_spec_generate(llama_context *                    ctx,
+                                     const llama_token *                input_tokens,
+                                     int32_t                            n_input,
+                                     llama_token *                      output_tokens,
+                                     int32_t                            max_output,
+                                     const diffusion_self_spec_params & params);

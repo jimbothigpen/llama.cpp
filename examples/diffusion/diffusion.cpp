@@ -406,3 +406,402 @@ void diffusion_generate(llama_context *          ctx,
 
     n_generated = params.max_length;
 }
+
+int32_t diffusion_generate_blocks(llama_context *               ctx,
+                                  const llama_token *           input_tokens,
+                                  int32_t                       n_input,
+                                  llama_token *                 output_tokens,
+                                  int32_t                       max_output,
+                                  const diffusion_block_params & params) {
+    if (!ctx || !input_tokens || !output_tokens || n_input <= 0 || max_output <= 0) {
+        return 0;
+    }
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    llama_memory_t      mem   = llama_get_memory(ctx);
+    int32_t             n_vocab = llama_vocab_n_tokens(vocab);
+    llama_token         eos     = llama_vocab_eos(vocab);
+
+    std::mt19937 rng(params.seed);
+
+    struct llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (params.top_k > 0) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(params.top_k));
+    }
+    if (params.top_p > 0.0f && params.top_p < 1.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(params.top_p, 1));
+    }
+    if (params.temperature > 0.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(params.temperature));
+    }
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(params.seed));
+
+    std::vector<llama_token_data> candidates(n_vocab);
+
+    llama_memory_clear(mem, true);
+
+    // Phase 1: Causal prefill — populate KV cache with input
+    llama_set_causal_attn(ctx, true);
+    {
+        llama_batch batch = llama_batch_init(n_input, 0, 1);
+        batch.n_tokens = n_input;
+        for (int32_t i = 0; i < n_input; i++) {
+            batch.token[i]     = input_tokens[i];
+            batch.pos[i]       = i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = 0;
+        }
+        batch.logits[n_input - 1] = 1;
+
+        int ret = llama_decode(ctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("diffusion_generate_blocks: prefill failed (%d)\n", ret);
+            llama_sampler_free(sampler);
+            return 0;
+        }
+    }
+
+    int32_t committed   = n_input;
+    int32_t n_generated = 0;
+
+    while (n_generated < max_output) {
+        int32_t block_len = std::min(params.block_length, max_output - n_generated);
+        if (block_len <= 0) break;
+
+        std::vector<llama_token> block_tokens(block_len, params.mask_token_id);
+
+        int32_t steps = std::min(params.steps_per_block, block_len);
+
+        // Pre-compute even transfer schedule (Nvidia dLM style)
+        std::vector<int32_t> transfer_schedule = get_num_transfer_tokens(block_len, steps);
+
+        // Phase 2: Bidirectional denoising of the block
+        llama_set_causal_attn(ctx, false);
+
+        for (int32_t step = 0; step < steps; step++) {
+            std::vector<int32_t> mask_positions;
+            for (int32_t i = 0; i < block_len; i++) {
+                if (block_tokens[i] == params.mask_token_id) {
+                    mask_positions.push_back(i);
+                }
+            }
+            if (mask_positions.empty()) break;
+
+            llama_batch batch = llama_batch_init(block_len, 0, 1);
+            batch.n_tokens = block_len;
+            for (int32_t i = 0; i < block_len; i++) {
+                batch.token[i]     = block_tokens[i];
+                batch.pos[i]       = committed + i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 1;
+            }
+
+            int ret = llama_decode(ctx, batch);
+            llama_batch_free(batch);
+            if (ret != 0) {
+                LOG_ERR("diffusion_generate_blocks: decode failed at step %d (%d)\n", step, ret);
+                llama_sampler_free(sampler);
+                return n_generated;
+            }
+
+            float * logits = llama_get_logits(ctx);
+
+            // Sample all mask positions and compute confidences
+            std::vector<std::pair<float, int32_t>> confidences;
+            std::vector<llama_token>               sampled(mask_positions.size());
+
+            for (size_t mi = 0; mi < mask_positions.size(); mi++) {
+                int32_t pos = mask_positions[mi];
+                const float * pos_logits = logits + pos * n_vocab;
+
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    candidates[v].id    = v;
+                    candidates[v].logit = pos_logits[v];
+                    candidates[v].p     = 0.0f;
+                }
+
+                llama_token_data_array cur_p = { candidates.data(), (size_t) n_vocab, -1, false };
+                llama_sampler_apply(sampler, &cur_p);
+
+                sampled[mi] = cur_p.data[cur_p.selected].id;
+                confidences.emplace_back(cur_p.data[cur_p.selected].p, (int32_t) mi);
+            }
+
+            int32_t n_unmask = (step < steps - 1) ? transfer_schedule[step] : (int32_t) mask_positions.size();
+            n_unmask = std::min(n_unmask, (int32_t) mask_positions.size());
+            if (n_unmask <= 0) n_unmask = 1;
+
+            // Sort by confidence, unmask the top-N (with optional threshold filter)
+            std::partial_sort(confidences.begin(),
+                              confidences.begin() + std::min(n_unmask, (int32_t) confidences.size()),
+                              confidences.end(),
+                              [](const auto & a, const auto & b) { return a.first > b.first; });
+
+            for (int32_t i = 0; i < std::min(n_unmask, (int32_t) confidences.size()); i++) {
+                // Nvidia dLM: always commit most confident token, threshold filters rest
+                if (i > 0 && params.threshold > 0.0f && confidences[i].first < params.threshold) {
+                    break;
+                }
+                int32_t mi  = confidences[i].second;
+                int32_t pos = mask_positions[mi];
+                block_tokens[pos] = sampled[mi];
+            }
+
+            // Clear block K/V from cache before next step
+            llama_memory_seq_rm(mem, 0, committed, committed + block_len);
+        }
+
+        // Check for EOS and copy to output
+        bool found_eos = false;
+        for (int32_t i = 0; i < block_len; i++) {
+            if (block_tokens[i] == eos) {
+                block_len = i;
+                found_eos = true;
+                break;
+            }
+            output_tokens[n_generated + i] = block_tokens[i];
+        }
+        n_generated += block_len;
+
+        // Phase 3: Causal commit — add block to KV cache
+        llama_set_causal_attn(ctx, true);
+        {
+            llama_batch batch = llama_batch_init(block_len, 0, 1);
+            batch.n_tokens = block_len;
+            for (int32_t i = 0; i < block_len; i++) {
+                batch.token[i]     = block_tokens[i];
+                batch.pos[i]       = committed + i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 0;
+            }
+
+            int ret = llama_decode(ctx, batch);
+            llama_batch_free(batch);
+            if (ret != 0) {
+                LOG_ERR("diffusion_generate_blocks: commit failed (%d)\n", ret);
+                break;
+            }
+        }
+
+        committed += block_len;
+        if (found_eos) break;
+    }
+
+    llama_sampler_free(sampler);
+    return n_generated;
+}
+
+static llama_token argmax_logits(const float * logits, int32_t n_vocab) {
+    llama_token best = 0;
+    float best_val = logits[0];
+    for (int32_t v = 1; v < n_vocab; v++) {
+        if (logits[v] > best_val) {
+            best_val = logits[v];
+            best = v;
+        }
+    }
+    return best;
+}
+
+int32_t diffusion_self_spec_generate(llama_context *                    ctx,
+                                     const llama_token *                input_tokens,
+                                     int32_t                            n_input,
+                                     llama_token *                      output_tokens,
+                                     int32_t                            max_output,
+                                     const diffusion_self_spec_params & params) {
+    if (!ctx || !input_tokens || !output_tokens || n_input <= 0 || max_output <= 0) {
+        return 0;
+    }
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    llama_memory_t      mem   = llama_get_memory(ctx);
+    int32_t             n_vocab = llama_vocab_n_tokens(vocab);
+    llama_token         eos     = llama_vocab_eos(vocab);
+
+    llama_memory_clear(mem, true);
+
+    // Phase 1: Causal prefill
+    llama_set_causal_attn(ctx, true);
+    {
+        llama_batch batch = llama_batch_init(n_input, 0, 1);
+        batch.n_tokens = n_input;
+        for (int32_t i = 0; i < n_input; i++) {
+            batch.token[i]     = input_tokens[i];
+            batch.pos[i]       = i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = 0;
+        }
+        batch.logits[n_input - 1] = 1;
+
+        int ret = llama_decode(ctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("self_spec: prefill failed (%d)\n", ret);
+            return 0;
+        }
+    }
+
+    // prev_logits: causal logits from the last committed position, predicts next token
+    std::vector<float> prev_logits(n_vocab);
+    std::memcpy(prev_logits.data(), llama_get_logits(ctx), n_vocab * sizeof(float));
+
+    int32_t committed   = n_input;
+    int32_t n_generated = 0;
+    int32_t k           = params.draft_length;
+
+    int64_t total_accepted = 0;
+    int64_t total_drafted  = 0;
+    int64_t total_cycles   = 0;
+
+    std::vector<llama_token> draft(k);
+
+    while (n_generated < max_output) {
+        int32_t draft_len = std::min(k, max_output - n_generated);
+        if (draft_len <= 0) break;
+
+        total_cycles++;
+        total_drafted += draft_len;
+
+        // DRAFT: bidirectional — single forward pass, all masks denoised in parallel
+        llama_set_causal_attn(ctx, false);
+        {
+            llama_batch batch = llama_batch_init(draft_len, 0, 1);
+            batch.n_tokens = draft_len;
+            for (int32_t i = 0; i < draft_len; i++) {
+                batch.token[i]     = params.mask_token_id;
+                batch.pos[i]       = committed + i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 1;
+            }
+
+            int ret = llama_decode(ctx, batch);
+            llama_batch_free(batch);
+            if (ret != 0) {
+                LOG_ERR("self_spec: draft decode failed (%d)\n", ret);
+                break;
+            }
+        }
+
+        // Sample draft tokens (greedy argmax — bidirectional predicts AT position)
+        {
+            float * logits = llama_get_logits(ctx);
+            for (int32_t i = 0; i < draft_len; i++) {
+                draft[i] = argmax_logits(logits + i * n_vocab, n_vocab);
+            }
+        }
+
+        // Clear bidirectional KV entries (not valid for causal verify)
+        llama_memory_seq_rm(mem, 0, committed, committed + draft_len);
+
+        // VERIFY: causal — single forward pass with draft tokens
+        llama_set_causal_attn(ctx, true);
+        {
+            llama_batch batch = llama_batch_init(draft_len, 0, 1);
+            batch.n_tokens = draft_len;
+            for (int32_t i = 0; i < draft_len; i++) {
+                batch.token[i]     = draft[i];
+                batch.pos[i]       = committed + i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 1;
+            }
+
+            int ret = llama_decode(ctx, batch);
+            llama_batch_free(batch);
+            if (ret != 0) {
+                LOG_ERR("self_spec: verify decode failed (%d)\n", ret);
+                break;
+            }
+        }
+
+        float * verify_logits = llama_get_logits(ctx);
+
+        // ACCEPT: longest contiguous prefix where AR agrees with draft
+        // prev_logits (causal, from last committed pos) predicts draft[0]
+        // verify_logits[j] (causal, at committed+j) predicts draft[j+1]
+        int32_t n_accept = 0;
+
+        if (argmax_logits(prev_logits.data(), n_vocab) == draft[0]) {
+            n_accept = 1;
+            for (int32_t j = 0; j < draft_len - 1; j++) {
+                if (argmax_logits(verify_logits + j * n_vocab, n_vocab) == draft[j + 1]) {
+                    n_accept++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Bonus token from the AR logits at the rejection point
+        llama_token bonus;
+        if (n_accept == 0) {
+            bonus = argmax_logits(prev_logits.data(), n_vocab);
+        } else {
+            bonus = argmax_logits(verify_logits + (n_accept - 1) * n_vocab, n_vocab);
+        }
+
+        // Clear rejected KV positions (keep 0..committed+n_accept-1)
+        if (n_accept < draft_len) {
+            llama_memory_seq_rm(mem, 0, committed + n_accept, committed + draft_len);
+        }
+
+        // Decode bonus token — updates KV cache and produces new prev_logits
+        {
+            llama_batch batch = llama_batch_init(1, 0, 1);
+            batch.n_tokens     = 1;
+            batch.token[0]     = bonus;
+            batch.pos[0]       = committed + n_accept;
+            batch.n_seq_id[0]  = 1;
+            batch.seq_id[0][0] = 0;
+            batch.logits[0]    = 1;
+
+            int ret = llama_decode(ctx, batch);
+            llama_batch_free(batch);
+            if (ret != 0) {
+                LOG_ERR("self_spec: bonus decode failed (%d)\n", ret);
+                break;
+            }
+
+            std::memcpy(prev_logits.data(), llama_get_logits(ctx), n_vocab * sizeof(float));
+        }
+
+        // Output accepted draft tokens + bonus
+        bool found_eos = false;
+        for (int32_t i = 0; i < n_accept && n_generated < max_output; i++) {
+            if (draft[i] == eos) {
+                found_eos = true;
+                break;
+            }
+            output_tokens[n_generated++] = draft[i];
+        }
+        if (!found_eos && n_generated < max_output) {
+            if (bonus == eos) {
+                found_eos = true;
+            } else {
+                output_tokens[n_generated++] = bonus;
+            }
+        }
+
+        total_accepted += n_accept + 1;
+        committed += n_accept + 1;
+
+        if (found_eos) break;
+    }
+
+    if (total_cycles > 0) {
+        LOG_INF("self_spec: %lld cycles, avg %.1f tokens/cycle, %.1f%% draft accept rate\n",
+                (long long) total_cycles,
+                (double) total_accepted / total_cycles,
+                total_drafted > 0 ? (double) (total_accepted - total_cycles) / total_drafted * 100.0 : 0.0);
+    }
+
+    return n_generated;
+}

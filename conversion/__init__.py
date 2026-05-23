@@ -149,6 +149,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ModernBertModel": "bert",
     "NemotronForCausalLM": "nemotron",
     "NemotronHForCausalLM": "nemotron",
+    "NemotronLabsDiffusionModel": "nemotron_labs_diffusion",
     "NeoBERT": "bert",
     "NeoBERTForSequenceClassification": "bert",
     "NeoBERTLMHead": "bert",
