@@ -690,6 +690,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     {
         const int n_chain = 2;
         const int64_t last_off = (int64_t)(n_tokens - 1);
+        // inp_out_ids narrows t_logits to n_outputs rows; chain must index the last output row
+        const int64_t last_out = (int64_t)(res->t_logits->ne[1] - 1);
 
         auto inp_chain = std::make_unique<llm_graph_input_pos_mtp_chain>(n_chain, 1);
         inp_chain->chain_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_chain * 4);
@@ -712,7 +714,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         ggml_tensor * chain_logits = ggml_cont(ctx0,
             ggml_view_2d(ctx0, res->t_logits, res->t_logits->ne[0], 1,
                 res->t_logits->nb[1],
-                last_off * ggml_element_size(res->t_logits) * res->t_logits->ne[0]));
+                last_out * ggml_element_size(res->t_logits) * res->t_logits->ne[0]));
 
         for (int ck = 0; ck < n_chain; ++ck) {
             ggml_tensor * ck_greedy = ggml_argmax(ctx0, chain_logits);
