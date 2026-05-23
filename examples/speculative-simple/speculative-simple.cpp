@@ -270,8 +270,14 @@ int main(int argc, char ** argv) {
             // Safe/no-op for standard-RoPE models.
             llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
 
-            // TODO: extend to support MTP, Eagle, etc. See server code for reference
-            llama_decode(ctx_dft.get(), batch_tgt);
+            // update the draft model with the target's hidden states (required for MTP).
+            // Mirrors the server's main loop (tools/server/server-context.cpp). Without this
+            // call, common_speculative_state_draft_mtp::process() never runs → pending_h stays
+            // zero across iterations, the MTP head reads garbage h_input, and draft acceptance
+            // collapses by ~33pp on Qwen3.5 (38% vs 71% mainline anchor).
+            if (!common_speculative_process(spec, batch_tgt)) {
+                LOG_ERR("%s", "failed to process speculative batch\n");
+            }
         }
 
         // only save the sampler sampler state if we use checkpoints
