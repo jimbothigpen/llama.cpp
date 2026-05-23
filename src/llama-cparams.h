@@ -29,7 +29,7 @@ struct llama_cparams {
 
     bool embeddings;
     bool embeddings_pre_norm;        // also extract the hidden state before the final output norm
-    bool embeddings_pre_norm_masked; // when true, only extract for output rows; stub until Phase C+E
+    bool embeddings_pre_norm_masked; // when true, defer the inp_out_ids filter past h_pre_norm capture so t_h_pre_norm stays [n_embd x n_tokens] for MTP head read-back
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
