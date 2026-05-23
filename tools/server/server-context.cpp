@@ -19,9 +19,11 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <cinttypes>
 #include <exception>
 #include <memory>
+#include <random>
 #include <filesystem>
 #include <utility>
 
@@ -67,6 +69,15 @@ struct server_slot {
 
     // multimodal
     mtmd_context * mctx = nullptr;
+
+    // diffusion self-speculation
+    bool                 diff_self_spec     = false;
+    int32_t              diff_draft_length  = 4;
+    llama_token          diff_mask_token_id = LLAMA_TOKEN_NULL;
+    llama_token          diff_think_open_id = LLAMA_TOKEN_NULL;
+    llama_token          diff_think_close_id = LLAMA_TOKEN_NULL;
+    std::vector<float>   diff_prev_logits;
+    std::vector<llama_token> diff_prev_assistant_tokens;
 
     // speculative decoding
     common_speculative * spec;
@@ -682,6 +693,7 @@ private:
     common_speculative_ptr spec;
 
     bool add_bos_token = true;
+    bool is_diffusion  = false;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -892,6 +904,12 @@ private:
 
         vocab = llama_model_get_vocab(model_tgt);
 
+        is_diffusion = llama_model_is_diffusion(model_tgt);
+
+        if (is_diffusion) {
+            SRV_INF("%s", "diffusion model detected — enabling self-speculation\n");
+        }
+
         n_ctx = llama_n_ctx(ctx_tgt);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
@@ -1090,6 +1108,18 @@ private:
                 if (mtp_ctx != nullptr) {
                     llama_set_mtp_target_seq_id(mtp_ctx, slot.id);
                 }
+            }
+
+            if (is_diffusion) {
+                slot.diff_self_spec = true;
+                slot.diff_mask_token_id = llama_vocab_mask(vocab);
+                slot.diff_draft_length = 4;
+                auto think_open  = common_tokenize(vocab, "<think>",  false, true);
+                auto think_close = common_tokenize(vocab, "</think>", false, true);
+                if (think_open.size()  == 1) slot.diff_think_open_id  = think_open[0];
+                if (think_close.size() == 1) slot.diff_think_close_id = think_close[0];
+                SLT_INF(slot, "diffusion self-spec enabled, mask_id=%d, draft_length=%d, think_suppress=%d/%d\n",
+                        slot.diff_mask_token_id, slot.diff_draft_length, slot.diff_think_open_id, slot.diff_think_close_id);
             }
 
             slot.mctx                   = mctx;
@@ -1518,6 +1548,9 @@ private:
             // TODO: speculative decoding requires multiple samples per batch - not supported yet
             backend_sampling &= !(slot.can_speculate());
 
+            // diffusion self-spec needs raw logits for acceptance checking
+            backend_sampling &= !slot.diff_self_spec;
+
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             backend_sampling &= !need_pre_sample_logits;
 
@@ -1547,6 +1580,126 @@ private:
                     orig_len, task.n_tokens(),
                     100.0f * task.n_tokens() / orig_len);
             }
+        }
+
+        if (slot.diff_self_spec && task.tokens.size() > 0) {
+            // Work at the token level to avoid detokenize→retokenize roundtrip issues.
+            llama_tokens toks(task.tokens.get_tokens());
+            const llama_token think_open  = slot.diff_think_open_id;
+            const llama_token think_close = slot.diff_think_close_id;
+            auto nl_vec = common_tokenize(vocab, "\n", false, false);
+            const llama_token nl_tok = nl_vec.empty() ? LLAMA_TOKEN_NULL : nl_vec[0];
+
+            // Strip ALL closed <think>...</think> blocks (compact or newlined).
+            // The Jinja template injects them into every assistant message but they
+            // cause verbatim repetition in multi-turn. We re-add the correct form at the end.
+            if (think_open != LLAMA_TOKEN_NULL && think_close != LLAMA_TOKEN_NULL) {
+                llama_tokens fixed;
+                fixed.reserve(toks.size());
+                for (size_t ti = 0; ti < toks.size(); ti++) {
+                    if (toks[ti] == think_open) {
+                        size_t end = ti + 1;
+                        if (end < toks.size() && nl_tok != LLAMA_TOKEN_NULL && toks[end] == nl_tok) end++;
+                        if (end < toks.size() && toks[end] == think_close) {
+                            end++;
+                            if (end < toks.size() && nl_tok != LLAMA_TOKEN_NULL && toks[end] == nl_tok) end++;
+                            ti = end - 1; // skip the entire closed think block
+                            continue;
+                        }
+                    }
+                    fixed.push_back(toks[ti]);
+                }
+                toks = std::move(fixed);
+            }
+
+            // Truncate looped content from previous assistant responses in history.
+            // Once a response loops, the contaminated text poisons all future turns.
+            {
+                const llama_token im_start = 10, im_end = 11;
+                const llama_token tok_ass = 1503, tok_ist = 19464;
+
+                // Find all completed assistant blocks (not the final generation block)
+                std::vector<std::pair<int,int>> asst_ranges; // (content_start, im_end_pos)
+                for (int i = 0; i + 3 < (int)toks.size(); i++) {
+                    if (toks[i] == im_start && toks[i+1] == tok_ass && toks[i+2] == tok_ist) {
+                        int content_start = i + 4; // skip: im_start, ass, istant, \n
+                        if (content_start >= (int)toks.size()) break;
+                        int end_pos = content_start;
+                        while (end_pos < (int)toks.size() && toks[end_pos] != im_end) end_pos++;
+                        if (end_pos < (int)toks.size()) { // only completed blocks (have im_end)
+                            asst_ranges.push_back({content_start, end_pos});
+                        }
+                    }
+                }
+
+                int total_removed = 0;
+                for (auto it = asst_ranges.rbegin(); it != asst_ranges.rend(); ++it) {
+                    auto [cs, ep] = *it;
+                    int len = ep - cs;
+                    if (len < 16) continue;
+
+                    int truncate_at = -1;
+                    for (int pos = cs + 16; pos <= ep; pos++) {
+                        int n = pos - cs;
+                        for (int period = 4; period <= std::min(32, n/2); period++) {
+                            bool match = true;
+                            for (int j = 0; j < period; j++) {
+                                if (toks[pos - 1 - j] != toks[pos - 1 - j - period]) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) {
+                                truncate_at = pos - 2 * period;
+                                goto found_loop;
+                            }
+                        }
+                    }
+                    found_loop:
+                    if (truncate_at > cs && truncate_at < ep) {
+                        int remove_count = ep - truncate_at;
+                        toks.erase(toks.begin() + truncate_at, toks.begin() + ep);
+                        total_removed += remove_count;
+                    }
+                }
+                if (total_removed > 0) {
+                    SLT_INF(slot, "diff: stripped %d looped tokens from %d assistant blocks in prompt\n",
+                            total_removed, (int)asst_ranges.size());
+                }
+            }
+
+            // Strip trailing open <think> not followed by </think>
+            {
+                int think_pos = -1;
+                for (int ti = (int)toks.size() - 1; ti >= 0; ti--) {
+                    if (toks[ti] == think_open) { think_pos = ti; break; }
+                }
+                if (think_pos >= 0) {
+                    bool has_close = false;
+                    for (int ti = think_pos + 1; ti < (int)toks.size(); ti++) {
+                        if (toks[ti] == think_close) { has_close = true; break; }
+                    }
+                    if (!has_close) {
+                        toks.resize(think_pos);
+                    }
+                }
+            }
+
+            // Ensure prompt ends with <think>\n</think>\n
+            {
+                int n = (int)toks.size();
+                bool has_think_block = (n >= 4 && nl_tok != LLAMA_TOKEN_NULL &&
+                    toks[n-4] == think_open && toks[n-3] == nl_tok &&
+                    toks[n-2] == think_close && toks[n-1] == nl_tok);
+                if (!has_think_block && nl_tok != LLAMA_TOKEN_NULL) {
+                    toks.push_back(think_open);
+                    toks.push_back(nl_tok);
+                    toks.push_back(think_close);
+                    toks.push_back(nl_tok);
+                }
+            }
+
+            task.tokens = server_tokens(toks, task.tokens.has_mtmd);
         }
 
         slot.task = std::make_unique<const server_task>(std::move(task));
@@ -2462,6 +2615,10 @@ private:
                 continue;
             }
 
+            if (slot.diff_self_spec) {
+                continue; // diffusion slots handled separately after main decode
+            }
+
             // check if we can batch this slot with the previous one
             if (!slot_batched) {
                 slot_batched = &slot;
@@ -3142,10 +3299,13 @@ private:
         }
 
         if (batch.n_tokens == 0) {
-            SRV_WRN("%s", "no tokens to decode\n");
-
-            if (++n_empty_consecutive > 3) {
-                GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+            const bool has_diff_gen = std::any_of(slots.begin(), slots.end(),
+                [](const server_slot & s) { return s.diff_self_spec && s.state == SLOT_STATE_GENERATING; });
+            if (!has_diff_gen) {
+                SRV_WRN("%s", "no tokens to decode\n");
+                if (++n_empty_consecutive > 3) {
+                    GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+                }
             }
         } else {
             n_empty_consecutive = 0;
@@ -3167,6 +3327,8 @@ private:
                 batch.logits   + i,
             };
 
+            // Ensure causal attention is on for prompt eval (diffusion draft toggles it off)
+            llama_set_causal_attn(ctx_tgt, true);
             const int ret = llama_decode(ctx_tgt, batch_view);
 
             metrics.on_decoded(slots);
@@ -3333,6 +3495,56 @@ private:
 
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
+
+                    if (slot.diff_self_spec) {
+                        float * logits = llama_get_logits(ctx_tgt);
+                        int32_t nv = llama_vocab_n_tokens(vocab);
+                        slot.diff_prev_logits.resize(nv);
+                        std::memcpy(slot.diff_prev_logits.data(), logits, nv * sizeof(float));
+
+                        // Extract previous assistant response tokens for repetition penalty.
+                        // Find all <|im_start|>assistant blocks, take the second-to-last
+                        // (the last is the current generation position).
+                        slot.diff_prev_assistant_tokens.clear();
+                        {
+                            const auto & toks = slot.prompt.tokens.get_text_tokens();
+                            const llama_token im_start = 10;  // <|im_start|>
+                            const llama_token im_end   = 11;  // <|im_end|>
+                            const llama_token tok_ass  = 1503; // "ass"
+                            const llama_token tok_ist  = 19464; // "istant"
+                            int n = (int)toks.size();
+
+                            // Find all assistant block start positions
+                            std::vector<int> asst_starts;
+                            for (int j = 0; j + 2 < n; j++) {
+                                if (toks[j] == im_start && toks[j+1] == tok_ass && toks[j+2] == tok_ist) {
+                                    asst_starts.push_back(j);
+                                }
+                            }
+
+                            // If there are 2+ assistant blocks, the second-to-last has
+                            // the previous response
+                            if (asst_starts.size() >= 2) {
+                                int prev_start = asst_starts[asst_starts.size() - 2];
+                                int content_start = prev_start + 4; // <|im_start|> ass istant \n
+                                // Find <|im_end|> after content
+                                int end = content_start;
+                                while (end < n && toks[end] != im_end) end++;
+                                for (int j = content_start; j < end; j++) {
+                                    slot.diff_prev_assistant_tokens.push_back(toks[j]);
+                                }
+                            }
+                        }
+
+                        SLT_DBG(slot, "diff prefill: n_prompt=%d, prev_asst_tokens=%d\n",
+                                slot.prompt.n_tokens(), (int)slot.diff_prev_assistant_tokens.size());
+                        slot.t_start_generation = ggml_time_us();
+                        slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
+                        metrics.on_prompt_eval(slot);
+
+                        slot.i_batch = -1;
+                        continue;
+                    }
 
                     if (slot.can_speculate()) {
                         common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
@@ -3526,6 +3738,379 @@ private:
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
+        }
+
+        // diffusion self-speculation — runs independently of the main batch
+        for (auto & slot : slots) {
+            if (!slot.diff_self_spec || slot.state != SLOT_STATE_GENERATING) {
+                continue;
+            }
+
+            const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+            llama_memory_t mem = llama_get_memory(ctx_tgt);
+            const int32_t k = slot.diff_draft_length;
+
+            const float temperature = slot.task->params.sampling.temp;
+            std::mt19937 rng(slot.task->params.sampling.seed != LLAMA_DEFAULT_SEED
+                ? slot.task->params.sampling.seed : std::random_device{}());
+            std::uniform_real_distribution<float> uniform01(0.0f, 1.0f);
+
+            auto argmax = [&](const float * l) -> llama_token {
+                return (llama_token)(std::max_element(l, l + n_vocab) - l);
+            };
+
+            auto suppress_think = [&](float * l) {
+                if (slot.diff_think_open_id  != LLAMA_TOKEN_NULL) l[slot.diff_think_open_id]  = -INFINITY;
+                if (slot.diff_think_close_id != LLAMA_TOKEN_NULL) l[slot.diff_think_close_id] = -INFINITY;
+            };
+
+            // Temperature sampling: softmax(logits/T) → categorical sample
+            auto sample_temp = [&](const float * logits) -> llama_token {
+                float max_val = *std::max_element(logits, logits + n_vocab);
+                float sum = 0;
+                std::vector<float> probs(n_vocab);
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    probs[v] = std::exp((logits[v] - max_val) / temperature);
+                    sum += probs[v];
+                }
+                float r = uniform01(rng) * sum;
+                float cumsum = 0;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    cumsum += probs[v];
+                    if (r <= cumsum) return (llama_token)v;
+                }
+                return (llama_token)(n_vocab - 1);
+            };
+
+            auto sample_adjusted = [&](const float * p_logits, const float * q_logits) -> llama_token {
+                float p_max = *std::max_element(p_logits, p_logits + n_vocab);
+                float q_max = *std::max_element(q_logits, q_logits + n_vocab);
+                float p_sum = 0, q_sum = 0;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    p_sum += std::exp((p_logits[v] - p_max) / temperature);
+                    q_sum += std::exp((q_logits[v] - q_max) / temperature);
+                }
+                std::vector<float> adj(n_vocab);
+                float sum = 0;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    float pv = std::exp((p_logits[v] - p_max) / temperature) / p_sum;
+                    float qv = std::exp((q_logits[v] - q_max) / temperature) / q_sum;
+                    adj[v] = std::max(0.0f, pv - qv);
+                    sum += adj[v];
+                }
+                if (sum <= 0) return sample_temp(p_logits);
+                float r = uniform01(rng) * sum;
+                float cumsum = 0;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    cumsum += adj[v];
+                    if (r <= cumsum) return (llama_token)v;
+                }
+                return (llama_token)(n_vocab - 1);
+            };
+
+            // Acceptance probability: min(1, p(x)/q(x)) where p=target, q=draft
+            auto accept_prob = [&](const float * p_logits, const float * q_logits, llama_token tok) -> float {
+                float p_max = *std::max_element(p_logits, p_logits + n_vocab);
+                float q_max = *std::max_element(q_logits, q_logits + n_vocab);
+                float p_sum = 0, q_sum = 0;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    p_sum += std::exp((p_logits[v] - p_max) / temperature);
+                    q_sum += std::exp((q_logits[v] - q_max) / temperature);
+                }
+                float p_tok = std::exp((p_logits[tok] - p_max) / temperature) / p_sum;
+                float q_tok = std::exp((q_logits[tok] - q_max) / temperature) / q_sum;
+                return std::min(1.0f, p_tok / std::max(1e-10f, q_tok));
+            };
+
+            // Cross-turn: penalize tokens from previous assistant response
+            std::unordered_map<llama_token, int> prev_asst_freq;
+            for (auto tok : slot.diff_prev_assistant_tokens) {
+                prev_asst_freq[tok]++;
+            }
+            std::vector<llama_token> gen_history;
+
+            const float rep_penalty = 1.3f;
+            auto apply_rep_penalty = [&](float * l) {
+                for (const auto & [tok, freq] : prev_asst_freq) {
+                    if (l[tok] > 0) l[tok] /= rep_penalty;
+                    else             l[tok] *= rep_penalty;
+                }
+            };
+            auto detect_loop = [&]() -> bool {
+                int n = (int)gen_history.size();
+
+                // Short-period exact match (periods 4-32)
+                if (n >= 16) {
+                    for (int period = 4; period <= std::min(32, n/2); period++) {
+                        bool match = true;
+                        for (int i = 0; i < period; i++) {
+                            if (gen_history[n - 1 - i] != gen_history[n - 1 - i - period]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            SLT_INF(slot, "diff loop detected (period=%d), stopping generation\n", period);
+                            return true;
+                        }
+                    }
+                }
+
+                // Long-period structural loop: any 6-gram appearing 6+ times in last 300 tokens
+                const int struct_window = std::min(n, 300);
+                if (struct_window >= 60) {
+                    int start = n - struct_window;
+                    std::unordered_map<uint64_t, int> ng6_freq;
+                    for (int i = start; i <= n - 6; i++) {
+                        uint64_t h = 0;
+                        for (int j = 0; j < 6; j++) {
+                            h = h * 100003ULL + (uint64_t)gen_history[i + j];
+                        }
+                        ng6_freq[h]++;
+                    }
+                    for (const auto & [h, freq] : ng6_freq) {
+                        if (freq >= 6) {
+                            SLT_INF(slot, "diff structural loop detected (6-gram freq=%d), stopping generation\n", freq);
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            std::vector<llama_token> draft(k);
+            const bool use_temp = temperature > 0;
+            std::vector<float> saved_draft_logits;
+            if (use_temp) {
+                saved_draft_logits.resize(k * n_vocab);
+            }
+            bool stopped = false;
+            int64_t t_draft_us = 0, t_verify_us = 0, t_bonus_us = 0, t_loop_us = 0, n_cycles = 0;
+
+            while (!stopped) {
+                const int64_t t_loop_start = ggml_time_us();
+                const int32_t committed = slot.prompt.n_tokens();
+                const int32_t draft_len = std::min(k, (int32_t)(slot.n_ctx - committed - 1));
+                if (draft_len <= 0) {
+                    slot.truncated      = true;
+                    slot.stop           = STOP_TYPE_LIMIT;
+                    slot.has_next_token = false;
+                    slot.print_timings();
+                    send_final_response(slot);
+                    metrics.on_prediction(slot);
+                    slot.release();
+                    break;
+                }
+
+                // DRAFT: bidirectional — single pass, all masks denoised in parallel
+                llama_set_causal_attn(ctx_tgt, false);
+                {
+                    llama_batch bd = llama_batch_init(draft_len, 0, 1);
+                    bd.n_tokens = draft_len;
+                    for (int32_t j = 0; j < draft_len; j++) {
+                        bd.token[j]     = slot.diff_mask_token_id;
+                        bd.pos[j]       = committed + j;
+                        bd.n_seq_id[j]  = 1;
+                        bd.seq_id[j][0] = slot.id;
+                        bd.logits[j]    = 1;
+                    }
+                    int64_t t0 = ggml_time_us();
+                    int ret = llama_decode(ctx_tgt, bd);
+                    t_draft_us += ggml_time_us() - t0;
+                    llama_batch_free(bd);
+                    if (ret != 0) {
+                        SRV_ERR("diffusion draft decode failed, ret = %d\n", ret);
+                        stopped = true;
+                        break;
+                    }
+                }
+
+                {
+                    float * logits = llama_get_logits(ctx_tgt);
+                    for (int32_t j = 0; j < draft_len; j++) {
+                        suppress_think(logits + j * n_vocab);
+                        apply_rep_penalty(logits + j * n_vocab);
+                    }
+                    if (use_temp) {
+                        std::memcpy(saved_draft_logits.data(), logits, draft_len * n_vocab * sizeof(float));
+                        for (int32_t j = 0; j < draft_len; j++) {
+                            draft[j] = sample_temp(logits + j * n_vocab);
+                        }
+                    } else {
+                        for (int32_t j = 0; j < draft_len; j++) {
+                            draft[j] = argmax(logits + j * n_vocab);
+                        }
+                    }
+                }
+
+                llama_memory_seq_rm(mem, slot.id, committed, committed + draft_len);
+
+                // VERIFY: causal — single pass with draft tokens
+                llama_set_causal_attn(ctx_tgt, true);
+                {
+                    llama_batch bv = llama_batch_init(draft_len, 0, 1);
+                    bv.n_tokens = draft_len;
+                    for (int32_t j = 0; j < draft_len; j++) {
+                        bv.token[j]     = draft[j];
+                        bv.pos[j]       = committed + j;
+                        bv.n_seq_id[j]  = 1;
+                        bv.seq_id[j][0] = slot.id;
+                        bv.logits[j]    = 1;
+                    }
+                    int64_t t1 = ggml_time_us();
+                    int ret = llama_decode(ctx_tgt, bv);
+                    t_verify_us += ggml_time_us() - t1;
+                    llama_batch_free(bv);
+                    if (ret != 0) {
+                        SRV_ERR("diffusion verify decode failed, ret = %d\n", ret);
+                        stopped = true;
+                        break;
+                    }
+                }
+
+                float * verify_logits = llama_get_logits(ctx_tgt);
+                suppress_think(slot.diff_prev_logits.data());
+                apply_rep_penalty(slot.diff_prev_logits.data());
+                for (int32_t j = 0; j < draft_len; j++) {
+                    suppress_think(verify_logits + j * n_vocab);
+                    apply_rep_penalty(verify_logits + j * n_vocab);
+                }
+
+                int32_t n_accept = 0;
+                llama_token bonus;
+
+                if (use_temp) {
+                    // Rejection sampling: accept draft[j] with prob min(1, p(d)/q(d))
+                    float ap = accept_prob(slot.diff_prev_logits.data(), saved_draft_logits.data(), draft[0]);
+                    if (uniform01(rng) < ap) {
+                        n_accept = 1;
+                        for (int32_t j = 0; j < draft_len - 1; j++) {
+                            ap = accept_prob(verify_logits + j * n_vocab,
+                                           saved_draft_logits.data() + (j + 1) * n_vocab, draft[j + 1]);
+                            if (uniform01(rng) < ap) {
+                                n_accept++;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if (n_accept == draft_len) {
+                        bonus = sample_temp(verify_logits + (draft_len - 1) * n_vocab);
+                    } else if (n_accept == 0) {
+                        bonus = sample_adjusted(slot.diff_prev_logits.data(), saved_draft_logits.data());
+                    } else {
+                        bonus = sample_adjusted(verify_logits + (n_accept - 1) * n_vocab,
+                                              saved_draft_logits.data() + n_accept * n_vocab);
+                    }
+                } else {
+                    if (argmax(slot.diff_prev_logits.data()) == draft[0]) {
+                        n_accept = 1;
+                        for (int32_t j = 0; j < draft_len - 1; j++) {
+                            if (argmax(verify_logits + j * n_vocab) == draft[j + 1]) {
+                                n_accept++;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    bonus = (n_accept == 0)
+                        ? argmax(slot.diff_prev_logits.data())
+                        : argmax(verify_logits + (n_accept - 1) * n_vocab);
+                }
+
+                if (n_accept < draft_len) {
+                    llama_memory_seq_rm(mem, slot.id, committed + n_accept, committed + draft_len);
+                }
+
+                // BONUS: decode one token — produces new prev_logits for next cycle
+                {
+                    llama_batch bb = llama_batch_init(1, 0, 1);
+                    bb.n_tokens     = 1;
+                    bb.token[0]     = bonus;
+                    bb.pos[0]       = committed + n_accept;
+                    bb.n_seq_id[0]  = 1;
+                    bb.seq_id[0][0] = slot.id;
+                    bb.logits[0]    = 1;
+                    int64_t t2 = ggml_time_us();
+                    int ret = llama_decode(ctx_tgt, bb);
+                    t_bonus_us += ggml_time_us() - t2;
+                    llama_batch_free(bb);
+                    if (ret != 0) {
+                        SRV_ERR("diffusion bonus decode failed, ret = %d\n", ret);
+                        stopped = true;
+                        break;
+                    }
+                    std::memcpy(slot.diff_prev_logits.data(), llama_get_logits(ctx_tgt), n_vocab * sizeof(float));
+                    suppress_think(slot.diff_prev_logits.data());
+                }
+
+                n_cycles++;
+
+                // output accepted draft tokens + bonus
+                for (int32_t j = 0; j < n_accept && !stopped; j++) {
+                    completion_token_output result;
+                    result.tok          = draft[j];
+                    result.text_to_send = common_token_to_piece(ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                    result.prob         = 1.0f;
+                    slot.n_decoded += 1;
+                    slot.prompt.tokens.push_back(draft[j]);
+                    if (!process_token(result, slot)) {
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+                        stopped = true;
+                    }
+                }
+                if (!stopped) {
+                    completion_token_output result;
+                    result.tok          = bonus;
+                    result.text_to_send = common_token_to_piece(ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                    result.prob         = 1.0f;
+                    slot.n_decoded += 1;
+                    slot.prompt.tokens.push_back(bonus);
+                    if (!process_token(result, slot)) {
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+                        stopped = true;
+                    }
+                }
+
+                if (!stopped) {
+                    for (int32_t j = 0; j < n_accept; j++) {
+                        gen_history.push_back(draft[j]);
+                    }
+                    gen_history.push_back(bonus);
+                    if (detect_loop()) {
+                        slot.stop           = STOP_TYPE_LIMIT;
+                        slot.has_next_token = false;
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+                        stopped = true;
+                    }
+
+                    slot.n_draft_accepted += n_accept;
+                    slot.t_token_generation = std::max<int64_t>(1, ggml_time_us() - slot.t_start_generation) / 1e3;
+                    t_loop_us += ggml_time_us() - t_loop_start;
+                    SLT_DBG(slot, "diff cycle %lld: %d/%d accepted, bonus=%d, pos=%d\n",
+                            (long long)n_cycles, n_accept, draft_len, bonus, slot.prompt.n_tokens());
+                }
+            }
+
+            if (n_cycles > 0) {
+                int64_t t_decode_us = t_draft_us + t_verify_us + t_bonus_us;
+                int64_t t_overhead_us = t_loop_us - t_decode_us;
+                SLT_INF(slot, "diff stats: %lld cycles, draft=%.1fms verify=%.1fms bonus=%.1fms overhead=%.1fms (%.1f/%.1f/%.1f/%.1f ms/cycle)\n",
+                        (long long)n_cycles,
+                        t_draft_us/1e3, t_verify_us/1e3, t_bonus_us/1e3, t_overhead_us/1e3,
+                        t_draft_us/1e3/n_cycles, t_verify_us/1e3/n_cycles, t_bonus_us/1e3/n_cycles, t_overhead_us/1e3/n_cycles);
+            }
+
+            llama_set_causal_attn(ctx_tgt, true);
         }
 
         SRV_DBG("%s", "run slots completed\n");
