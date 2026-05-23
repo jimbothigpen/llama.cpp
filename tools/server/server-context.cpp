@@ -945,30 +945,17 @@ private:
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
         } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
                              COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
-            // MTP head lives in the *target* GGUF — load it as a sibling model
-            // with override_arch and feed it through the existing ctx_dft slot.
+            // Bundled-MTP: the MTP head lives in the target GGUF; create a second
+            // context on the same model with ctx_type=MTP. No separate model load needed.
+            // Mirrors the common/speculative-simple --mtp path (LLAMA_CONTEXT_TYPE_MTP on model_tgt).
             char trunk_arch[64] = {0};
             llama_model_meta_val_str(model_tgt, "general.architecture", trunk_arch, sizeof(trunk_arch));
 
-            const char * mtp_arch = nullptr;
-            if (std::string(trunk_arch) == "qwen35") {
-                mtp_arch = "qwen35_mtp";
-            } else if (std::string(trunk_arch) == "qwen35moe") {
-                mtp_arch = "qwen35moe_mtp";
-            } else {
+            const bool is_mtp_capable =
+                std::string(trunk_arch) == "qwen35" ||
+                std::string(trunk_arch) == "qwen35moe";
+            if (!is_mtp_capable) {
                 SRV_ERR("MTP not supported for trunk architecture '%s'\n", trunk_arch);
-                return false;
-            }
-
-            SRV_INF("loading MTP head from '%s' (override_arch=%s)\n",
-                    params_base.model.path.c_str(), mtp_arch);
-
-            auto mparams_mtp = common_model_params_to_llama(params_base);
-            mparams_mtp.override_arch = mtp_arch;
-
-            model_dft.reset(llama_model_load_from_file(params_base.model.path.c_str(), mparams_mtp));
-            if (model_dft == nullptr) {
-                SRV_ERR("failed to load MTP head from '%s'\n", params_base.model.path.c_str());
                 return false;
             }
 
@@ -978,9 +965,11 @@ private:
             cparams_mtp.type_v   = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq = 0;
 
-            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
+            SRV_INF("%s", "creating MTP draft context (ctx_type=MTP, same model as target)\n");
+
+            ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
-                SRV_ERR("%s", "failed to create MTP context\n");
+                SRV_ERR("%s", "failed to create MTP draft context\n");
                 return false;
             }
 
