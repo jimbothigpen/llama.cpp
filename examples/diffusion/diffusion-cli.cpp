@@ -5,72 +5,10 @@
 #include "llama.h"
 #include "log.h"
 
-#include <limits.h>
-
 #include <clocale>
 #include <cstring>
 #include <string>
 #include <vector>
-
-struct callback_data {
-    diffusion_params *  diff_params;
-    const llama_vocab * vocab;
-    int32_t             n_input;
-};
-
-static bool diffusion_step_callback(int32_t             step,
-                                    int32_t             total_steps,
-                                    const llama_token * tokens,
-                                    int32_t             n_tokens,
-                                    void *              user_data) {
-    (void) user_data;
-
-    callback_data * data = static_cast<callback_data *>(user_data);
-
-    auto print_progress_bar = [](int32_t step, int32_t total_steps) {
-        int progress_percent = (step * 100) / total_steps;
-        int progress_bars    = (step * 50) / total_steps;
-        LOG_INF("\rdiffusion step: %d/%d [%s%s] %d%%",
-                step,
-                total_steps,
-                std::string(progress_bars, '=').c_str(),
-                std::string(50 - progress_bars, ' ').c_str(),
-                progress_percent);
-    };
-
-    if (data->diff_params->visual_mode) {
-        // Visual mode: clear
-        LOG_INF("\033[2J\033[H");  // Clear screen and move cursor to top-left
-
-        print_progress_bar(step, total_steps);
-
-        LOG_INF("\n");
-
-        std::string current_text = " ";
-
-        for (int32_t i = data->n_input; i < n_tokens; i++) {
-            std::string token_str;
-            if (tokens[i] != llama_vocab_mask(data->vocab)) {
-                char piece[256];
-                int  n_chars = llama_token_to_piece(data->vocab, tokens[i], piece, sizeof(piece), 0, false);
-                if (n_chars > 0) {
-                    piece[n_chars] = '\0';
-                    token_str      = piece;
-                }
-            } else {
-                token_str = " ";
-            }
-
-            current_text += token_str;
-        }
-
-        LOG_INF("%s\n", current_text.c_str());
-    } else {
-        print_progress_bar(step, total_steps);
-    }
-
-    return true;
-}
 
 static std::string format_input_text(const std::string & prompt, const std::string & system_prompt, bool use_chat_template, llama_model * model) {
     if (!use_chat_template) {
@@ -154,7 +92,21 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab            = llama_model_get_vocab(model);
 
-    std::string         formatted_prompt = format_input_text(params.prompt, params.system_prompt, params.enable_chat_template, model);
+    bool use_chat_template = params.enable_chat_template && params.prompt.find("<|im_start|>") == std::string::npos;
+    std::string formatted_prompt = format_input_text(params.prompt, params.system_prompt, use_chat_template, model);
+
+    // Close open <think> tag from jinja template. Self-spec needs newlines for AR mode;
+    // block diffusion uses compact form since masks fill content directly.
+    {
+        auto pos = formatted_prompt.rfind("<think>");
+        if (pos != std::string::npos && formatted_prompt.find("</think>", pos) == std::string::npos) {
+            if (params.diffusion.self_spec) {
+                formatted_prompt = formatted_prompt.substr(0, pos) + "<think>\n</think>\n";
+            } else {
+                formatted_prompt = formatted_prompt.substr(0, pos) + "<think></think>";
+            }
+        }
+    }
 
     std::vector<llama_token> input_tokens = common_tokenize(vocab,
                                                             formatted_prompt,
@@ -174,91 +126,77 @@ int main(int argc, char ** argv) {
 
     GGML_ASSERT(mask_token_id != LLAMA_TOKEN_NULL);
 
-    bool visual_mode = params.diffusion.visual_mode;
-
-    int32_t                  n_generated = 0;
-    std::vector<llama_token> output_tokens(params.n_ubatch);
-
-    struct diffusion_params diff_params;
-
+    bool shift_logits = false;
     char shift_logits_str[8];
     if (llama_model_meta_val_str(model, "diffusion.shift_logits", shift_logits_str, sizeof(shift_logits_str)) >= 0) {
-        diff_params.shift_logits = (strcmp(shift_logits_str, "true") == 0);
+        shift_logits = (strcmp(shift_logits_str, "true") == 0);
+    }
+
+    int32_t max_new_tokens  = params.n_predict > 0 ? params.n_predict : 256;
+
+    std::vector<llama_token> output_tokens(max_new_tokens);
+    int32_t n_generated = 0;
+
+    int64_t t0 = ggml_time_us();
+
+    if (params.diffusion.self_spec) {
+        diffusion_self_spec_params ss_params;
+        ss_params.mask_token_id  = mask_token_id;
+        ss_params.seed           = params.sampling.seed;
+        ss_params.draft_length   = params.diffusion.draft_length > 0 ? params.diffusion.draft_length : 16;
+        ss_params.max_new_tokens = max_new_tokens;
+
+        LOG_INF("diffusion: self-spec mode, draft_length = %d, max_new_tokens = %d\n",
+                ss_params.draft_length, max_new_tokens);
+        LOG_INF("\n");
+
+        n_generated = diffusion_self_spec_generate(ctx,
+                                                    input_tokens.data(),
+                                                    n_input,
+                                                    output_tokens.data(),
+                                                    max_new_tokens,
+                                                    ss_params);
     } else {
-        diff_params.shift_logits = true;
+        int32_t block_length    = params.diffusion.block_length > 0 ? params.diffusion.block_length : 32;
+        int32_t steps_per_block = params.diffusion.steps > 0 ? params.diffusion.steps : block_length;
+
+        diffusion_block_params block_params;
+        block_params.mask_token_id   = mask_token_id;
+        block_params.seed            = params.sampling.seed;
+        block_params.temperature     = params.sampling.temp;
+        block_params.block_length    = block_length;
+        block_params.steps_per_block = steps_per_block;
+        block_params.max_new_tokens  = max_new_tokens;
+        block_params.shift_logits    = shift_logits;
+        block_params.algorithm       = static_cast<diffusion_algorithm>(params.diffusion.algorithm);
+        block_params.top_p           = params.sampling.top_p;
+        block_params.top_k           = params.sampling.top_k;
+        block_params.threshold       = params.diffusion.threshold;
+
+        LOG_INF("diffusion: block mode, shift_logits = %s\n", shift_logits ? "true" : "false");
+        LOG_INF("diffusion: block_length = %d, steps_per_block = %d, max_new_tokens = %d\n",
+                block_length, steps_per_block, max_new_tokens);
+        LOG_INF("diffusion: algorithm = %d, temperature = %.3f, threshold = %.3f\n",
+                (int)block_params.algorithm, block_params.temperature, block_params.threshold);
+        LOG_INF("\n");
+
+        n_generated = diffusion_generate_blocks(ctx,
+                                                 input_tokens.data(),
+                                                 n_input,
+                                                 output_tokens.data(),
+                                                 max_new_tokens,
+                                                 block_params);
     }
 
-    //Use either eps or block length, but not both
-    GGML_ASSERT((params.diffusion.eps == 0) ^ (params.diffusion.block_length == 0));
+    int64_t t1 = ggml_time_us();
+    double elapsed_ms = (t1 - t0) / 1000.0;
 
-    if (params.diffusion.eps) {
-        diff_params.schedule = DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED;
-        diff_params.eps      = params.diffusion.eps;
-    } else if (params.diffusion.block_length) {
-        diff_params.schedule     = DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED;
-        diff_params.block_length = params.diffusion.block_length;
-    }
+    std::string output_text = common_detokenize(vocab,
+        std::vector<llama_token>(output_tokens.begin(), output_tokens.begin() + n_generated), false);
+    LOG_INF("%s", output_text.c_str());
 
-    diff_params.mask_token_id    = mask_token_id;
-    diff_params.seed             = params.sampling.seed;
-    diff_params.temperature      = params.sampling.temp;
-    diff_params.steps            = params.diffusion.steps;
-    diff_params.algorithm        = static_cast<diffusion_algorithm>(params.diffusion.algorithm);
-    diff_params.max_length       = params.n_ubatch;
-    diff_params.top_p            = params.sampling.top_p;
-    diff_params.top_k            = params.sampling.top_k;
-    diff_params.visual_mode      = params.diffusion.visual_mode;
-    diff_params.add_gumbel_noise = params.diffusion.add_gumbel_noise;
-
-    diff_params.step_callback           = diffusion_step_callback;
-    callback_data cb_data               = { &diff_params, vocab, n_input };
-    diff_params.step_callback_user_data = &cb_data;
-
-    const char * alg_names[]   = {
-        "DIFFUSION_ALGORITHM_ORIGIN",
-        "DIFFUSION_ALGORITHM_ENTROPY_BASED",
-        "DIFFUSION_ALGORITHM_MARGIN_BASED",
-        "DIFFUSION_ALGORITHM_RANDOM",
-        "DIFFUSION_ALGORITHM_CONFIDENCE_BASED",
-    };
-    const char * sched_names[] = {
-        "DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED",
-        "DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED",
-    };
-    const char * alg_name =
-        (diff_params.algorithm >= 0 && diff_params.algorithm <= 4) ? alg_names[diff_params.algorithm] : "UNKNOWN";
-    const char * sched_name =
-        (diff_params.schedule >= 0 && diff_params.schedule <= 1) ? sched_names[diff_params.schedule] : "UNKNOWN";
-
-    LOG_INF("diffusion_params: - %-25s llama_token      = %d\n", "mask_token_id", mask_token_id);
-    LOG_INF("diffusion_params: - %-25s u32              = %d\n", "steps", diff_params.steps);
-    LOG_INF("diffusion_params: - %-25s u32              = %d\n", "max_length", diff_params.max_length);
-    LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "algorithm", diff_params.algorithm, alg_name);
-    LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "schedule", diff_params.schedule, sched_name);
-    LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "temperature", diff_params.temperature);
-    if (diff_params.schedule == DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED) {
-        LOG_INF("diffusion_params: - %-25s f32              = %.6f\n", "eps", diff_params.eps);
-        LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "alg_temp", diff_params.alg_temp);
-    }
-    if (diff_params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) {
-        LOG_INF("diffusion_params: - %-25s u32              = %d\n", "block_length", diff_params.block_length);
-        LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "cfg_scale", diff_params.cfg_scale);
-    }
-
-    diffusion_generate(ctx, input_tokens.data(), output_tokens.data(), n_input, diff_params, n_generated);
-
-    if (n_generated > 0) {
-        if (visual_mode) {
-            //clear screen and move cursor to top-left
-            LOG_INF("\033[2J\033[H");
-        }
-
-        output_tokens.erase(output_tokens.begin(), output_tokens.begin() + n_input);
-        std::string output_data = common_detokenize(vocab, output_tokens, false);
-        LOG_INF("\n%s\n", output_data.c_str());
-    } else {
-        LOG_INF("Error: diffusion generation failed\n");
-    }
+    LOG_INF("\n\n[%d tokens in %.1fms, %.1f t/s]\n",
+            n_generated, elapsed_ms, n_generated / (elapsed_ms / 1000.0));
 
     llama_free(ctx);
     llama_model_free(model);

@@ -1966,6 +1966,22 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_DREAM:
+            {
+                res = new llama_kv_cache(
+                        *this,
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        1,
+                        hparams.n_swa,
+                        hparams.swa_type,
+                        nullptr,
+                        nullptr);
+            } break;
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:

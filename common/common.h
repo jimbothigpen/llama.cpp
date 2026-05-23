@@ -389,7 +389,11 @@ struct common_params_diffusion {
     float   alg_temp      = 0.0f;     // algorithm temperature
 
     float   cfg_scale     = 0;        // classifier-free guidance scale
+    float   threshold     = 0;        // confidence threshold for token commitment (0 = disabled)
     bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
+
+    bool    self_spec     = false;    // use linear self-speculation (bidirectional draft + causal verify)
+    int32_t draft_length  = 16;       // number of tokens to draft per self-spec cycle
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

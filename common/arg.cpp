@@ -3976,9 +3976,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--diffusion-threshold"}, "F",
+        string_format("confidence threshold for token commitment; 0 = disabled (default: %.3f)", (double) params.diffusion.threshold),
+        [](common_params & params, const std::string & value) { params.diffusion.threshold = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-add-gumbel-noise"}, "F",
         string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
         [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-self-spec"},
+        string_format("use linear self-speculation: bidirectional draft + causal verify (default: %s)", params.diffusion.self_spec ? "true" : "false"),
+        [](common_params & params) { params.diffusion.self_spec = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-draft-length"}, "N",
+        string_format("number of tokens to draft per self-spec cycle (default: %d)", params.diffusion.draft_length),
+        [](common_params & params, int value) { params.diffusion.draft_length = value; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         { "-lr", "--learning-rate" }, "ALPHA",
