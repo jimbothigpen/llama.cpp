@@ -8,7 +8,7 @@
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "ngram-mod.h"
-// #include "phantom.h"  — deferred to Phase 2: interface mismatch between carlosfundora and ygg
+#include "phantom.h"
 #include "sampling.h"
 
 #include <algorithm>
@@ -1732,9 +1732,57 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 };
 
-// PHANTOM speculative_impl_phantom deferred to Phase 2: phantom.h uses carlosfundora-style interface
-// which is incompatible with ygg's common_speculative_impl interface. Requires interface adapter wrapper.
-// struct common_speculative_impl_phantom : public common_speculative_impl { ... };
+struct common_speculative_impl_phantom : public common_speculative_impl {
+    common_params_speculative params;
+    common_ngram_mod mod;
+
+    // one phantom instance per seq (phantom is inherently single-seq per instance)
+    std::vector<std::unique_ptr<common_speculative_state_phantom>> phantoms;
+
+    common_speculative_impl_phantom(const common_params_speculative & p, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_PHANTOM, n_seq)
+        , params(p)
+        , mod(p.ngram_mod.n_match, 4*1024*1024)
+    {
+        phantoms.reserve(n_seq);
+        for (uint32_t i = 0; i < n_seq; ++i) {
+            phantoms.push_back(std::make_unique<common_speculative_state_phantom>(
+                mod,
+                p.phantom_bloom_bits,
+                p.phantom_buffers,
+                /*ghost_cap=*/ 64,
+                p.ngram_mod.n_min,
+                p.ngram_mod.n_max));
+        }
+        LOG_INF("%s: phantom n_seq=%u bloom_bits=%d ghost_buffers=%d ngram_n_match=%d\n",
+                __func__, n_seq, p.phantom_bloom_bits, p.phantom_buffers,
+                p.ngram_mod.n_match);
+    }
+
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        if (seq_id >= 0 && seq_id < (llama_seq_id)phantoms.size()) {
+            phantoms[seq_id]->begin(prompt);
+        }
+    }
+
+    bool process(const llama_batch &) override { return true; }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id)n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+            phantoms[seq_id]->draft(*dp.prompt, dp.id_last, *dp.result);
+        }
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+        if (seq_id >= 0 && seq_id < (llama_seq_id)phantoms.size()) {
+            phantoms[seq_id]->accept(n_accepted);
+        }
+    }
+};
 
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
@@ -1892,10 +1940,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
-        // PHANTOM deferred to Phase 2: API mismatch between carlosfundora-style and ygg-style speculative state
-        // if (has_phantom) {
-        //     configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_PHANTOM, params));
-        // }
+        if (has_phantom) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_PHANTOM, params));
+        }
         // the gemma4-assistant draft GGUF is an external-MTP foreign-KV drafter — it
         // has no own KV cache and cannot run as a standalone 'draft-simple' model, so
         // never auto-enable draft-simple for it (mtp is the only valid type).
@@ -1995,11 +2042,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
                 break;
             }
-            // PHANTOM factory dispatch deferred: requires interface adapter between phantom.h and ygg
-            // case COMMON_SPECULATIVE_TYPE_PHANTOM: {
-            //     impls.push_back(std::make_unique<common_speculative_impl_phantom>(config.params, n_seq));
-            //     break;
-            // }
+            case COMMON_SPECULATIVE_TYPE_PHANTOM: {
+                impls.push_back(std::make_unique<common_speculative_impl_phantom>(config.params, n_seq));
+                break;
+            }
             default:
                 break;
         }
