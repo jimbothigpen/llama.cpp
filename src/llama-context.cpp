@@ -5,11 +5,15 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
 #include "llama.h"
+#include "llama-triattention.h"
+#include "triattention-runtime.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -301,6 +305,24 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
+
+        // TriAttention capture buffer init (Phase A)
+        if (memory && g_tria_rt) {
+            llama_kv_cache * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+            if (!kv) {
+                auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
+                if (hybrid) kv = hybrid->get_mem_attn();
+            }
+            if (kv) {
+                llama_tria_capture_alloc(
+                    kv, backend_cpu, (int) model.hparams.n_layer,
+                    tria_capture, &tria_capture_ctx, &tria_capture_buf);
+                if (!tria_capture.empty()) {
+                    g_tria_capture   = tria_capture.data();
+                    g_tria_capture_n = tria_capture.size();
+                }
+            }
+        }
     }
 
     // init backends
@@ -404,6 +426,13 @@ llama_context::~llama_context() {
         }
     }
     ggml_opt_free(opt_ctx);
+
+    // TriAttention capture buffer cleanup
+    if (g_tria_capture == tria_capture.data()) {
+        g_tria_capture   = nullptr;
+        g_tria_capture_n = 0;
+    }
+    llama_tria_capture_free(tria_capture_ctx, tria_capture_buf);
 }
 
 void llama_context::sched_reserve() {
@@ -4127,6 +4156,13 @@ int32_t llama_decode(
     const int ret = ctx->decode(batch);
     if (ret != 0 && ret != 1) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
+    }
+
+    // TriAttention decode hook: fire only on single-token AR decode, not MTP passes
+    if (ret == 0 && g_tria_rt &&
+            ctx->get_cparams().mtp_op_type == MTP_OP_NONE &&
+            batch.n_tokens == 1) {
+        tria_maybe_score(g_tria_rt, ctx);
     }
 
     return ret;
