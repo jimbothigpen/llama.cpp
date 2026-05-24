@@ -204,6 +204,23 @@ struct block_q1_0
 #define A_TYPE block_q1_0
 #endif
 
+// Q1_0_G128: identical block layout to Q1_0 (128-element, 1bpw); registered under GGUF type ID 43.
+#define QUANT_K_Q1_0_G128 128
+#define QUANT_R_Q1_0_G128 1
+
+struct block_q1_0_g128
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_Q1_0_G128 / 8];
+};
+
+#if defined(DATA_A_Q1_0_G128)
+#define QUANT_K QUANT_K_Q1_0_G128
+#define QUANT_R QUANT_R_Q1_0_G128
+#define QUANT_AUXF 1
+#define A_TYPE block_q1_0_g128
+#endif
+
 // TurboQuant 2-bit PolarQuant KV cache (yggdrasil Phase 1).
 // Block layout matches ggml-common.h block_turboq2_0: 2-byte norm + 32-byte
 // 2-bit indices = 34 bytes per 128 values.
