@@ -847,6 +847,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
+            // Deliberate: with `ad277572` backend sampling pre-filtering to top-10 and bundled-MTP weight-sharing, top_k=1 yields argmax draft that closely tracks target greedy. Do NOT raise to 10 without re-running Smoke B.
             sparams.top_k    = 1;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
