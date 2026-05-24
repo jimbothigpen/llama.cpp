@@ -1,4 +1,4 @@
-# GGUF type-ID contract — v1
+# GGUF type-ID contract — v2
 
 Authoritative assignments for `enum ggml_type` and `enum llama_ftype` in
 this fork. Every cherry-pick from a contributing fork MUST renumber to
@@ -150,14 +150,15 @@ existing ik_llama-quantized GGUFs. The full list of preserved assignments:
 | 137 | `IQ2_K` | IQK 2-bit imatrix-aware weight quant (2.375 bpw) — **Phase 5b-1a; ygg canonical** |
 | 138 | `IQ3_K` | IQK 3-bit imatrix-aware weight quant (3.44 bpw) — **Phase 5b-1a; ygg canonical** |
 | 139 | `IQ4_K` | IQK 4-bit imatrix-aware weight quant (4.50 bpw) — **Phase 5b-1a; ygg canonical** |
-| 140–141 | `IQ5_K`, `IQ6_K` | "K" family (ik_llama IDs preserved for future port) |
-| 144 | `IQ4_KS` | IK-quant small |
+| 140–141 | `IQ5_K`, `IQ6_K` | "K" family (ik_llama IDs preserved; Phase 5b-2 recon in-flight 2026-05-24) |
+| 144 | `IQ4_KS` | IK-quant small; row_meta=4 bytes (float row-scale) — **Phase 5b-1b; ygg canonical** |
 | 145 | `IQ2_KS` | |
-| 146 | `IQ4_KSS` | IK-quant small-small |
+| 146 | `IQ4_KSS` | IK-quant small-small; row_meta=4 bytes — **Phase 5b-1b; ygg canonical** |
 | 147–151 | `Q8_K16`, `Q8_K32`, `Q8_KR8`, `Q8_K128`, `Q8_KV` | Q8 K-block variants |
 | 152 | `IQ5_KS` | |
-| 153–155 | `IQ2_KT`, `IQ3_KT`, `IQ4_KT` | trellis family (dormant; preserve IDs anyway) |
-| 156 | `IQ3_KS` | |
+| 153–154 | `IQ2_KT`, `IQ3_KT` | trellis weight quants (dormant; preserve IDs) |
+| 155 | `IQ4_KT` | IK trellis 4-bit weight quant; row_meta=4 bytes — **Phase 5b-1b; ygg canonical** (differs from buun TCQ: IQ4_KT is a weight quant, TCQ is a KV-cache quant) |
+| 156 | `IQ3_KS` | IK-quant small 3-bit; row_meta=2 bytes (uint16_t half-row-scale) — **Phase 5b-1b; ygg canonical** |
 | 157 | `IQ2_KL` | |
 | 158 | `IQ1_KT` | trellis 1-bit (dormant) |
 
@@ -274,3 +275,8 @@ invented):
 
 - **v1** (2026-05-12) — initial contract. Authored before any cherry-picks
   land. Authoritative for Phase 0+.
+- **v2** (2026-05-22 to 2026-05-24) — Phase 5b-1a landed: IQ2_K=137, IQ3_K=138,
+  IQ4_K=139 annotated with ygg canonical + Phase 5b-1a tag. Phase 5b-1b landed:
+  IQ4_KS=144, IQ4_KSS=146, IQ4_KT=155, IQ3_KS=156 annotated with Phase 5b-1b tag +
+  row_meta byte sizes. IQ4_KT separated from dormant IQ2/IQ3_KT in table entry.
+  IQ5_K/IQ6_K noted as Phase 5b-2 recon in-flight.
