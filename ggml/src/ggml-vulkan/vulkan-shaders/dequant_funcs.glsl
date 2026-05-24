@@ -143,6 +143,24 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+// Q1_0_G128: identical block layout to Q1_0; dequant functions are the same.
+#if defined(DATA_A_Q1_0_G128)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 8u]) >> (iqs % 8u);
+    return vec2(
+        (bits & 1u) != 0u ? 1.0f : -1.0f,
+        (bits & 2u) != 0u ? 1.0f : -1.0f);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 8u]) >> (iqs % 8u);
+    return vec4(
+        (bits & 1u) != 0u ? 1.0f : -1.0f,
+        (bits & 2u) != 0u ? 1.0f : -1.0f,
+        (bits & 4u) != 0u ? 1.0f : -1.0f,
+        (bits & 8u) != 0u ? 1.0f : -1.0f);
+}
+#endif
+
 #if defined(DATA_A_IQ1_S)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint ib32 = iqs / 32;
@@ -530,6 +548,13 @@ vec2 get_dm(uint ib, uint a_offset) {
 #endif
 
 #if defined(DATA_A_Q1_0)
+vec2 get_dm(uint ib, uint a_offset) {
+    const float d = float(data_a[a_offset + ib].d);
+    return vec2(d, 0);
+}
+#endif
+
+#if defined(DATA_A_Q1_0_G128)
 vec2 get_dm(uint ib, uint a_offset) {
     const float d = float(data_a[a_offset + ib].d);
     return vec2(d, 0);

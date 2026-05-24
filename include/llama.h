@@ -166,6 +166,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 47, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 48, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KT        = 49, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q1_0_G128     = 50, // except 1d tensors (Bonsai 128-element blocks, GGUF type ID 43)
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
