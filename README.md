@@ -29,9 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, and 7b COMPLETE — **HEAD `30067d81b`** on
-`main`. Phases 3a (TCQ KV ROCm/CUDA), 3c (TCQ KV Vulkan), 3d (InnerQ KV
-types), 4a (RotorQuant KV), 5b-1a (IQ2_K/IQ3_K/IQ4_K weight quants, parity-verified), X-2a/X-2b-s1 (asymmetric K/V expansion), and 7b (PFlash prompt compression) are merged to `main`. Phase 7b shipped with HIP-optimized scorer, 4c LRU cache, Vulkan GPU scorer fix (NEW-D), and on-disk persistence (NEW-E). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 7b, MTP Migration 0-3, NLD COMPLETE — **HEAD `fd9bf51f8`** on
+`main`. Recent ships (2026-05-22 to 2026-05-24): Phase 5b-1b row-meta IK weight quants (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) + Vulkan KS batched-mul_mat fix; MTP Migration phases 0-3 (mainline-aligned speculative driver + loader split + graph convergence); V-J spec-decode accept-rate gap closed 38% → 70% (TODO 81); Nemotron-Labs Diffusion CLI + server self-spec port (TODO 80/86); top_k=1 deliberate-choice comment (TODO 84). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -84,13 +83,13 @@ cross-backend PPL matches within tolerance. See
 | 0.5 | ik_llama architectural recon + EAGLE3 recon | this project | **complete** |
 | 0.7 | Sidecar plugin engine (~355 LoC, backend-agnostic) — runtime adapters at residual-stream / MoE-expert / post-logits / weight-delta hook points; out-of-tree `.so` plugins | this project | **complete** |
 | 1 | TurboQuant KV foundation (TURBOQ2/3/4_0 + WHT3/4_0 + layer-adaptive + Boundary V) | TheTom `feature/turboquant-kv-cache` | **complete (milestone `phase-1-turboquant-kv-foundation`)** |
-| 2 | MTP spec-decode — mainline-aligned driver layer; internal Qwen3.5/MoE NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP | mainline PR #22673 + mainline `#22738` (gemma4-assistant) | **complete (milestone `phase-2-gemma4-mtp`)** |
+| 2 | MTP spec-decode — mainline-aligned driver layer; internal Qwen3.5/MoE NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP; MTP Migration 0-3 (mainline-convergent speculative driver, loader split, graph embed-norm masked) | mainline PR #22673 + mainline `#22738` (gemma4-assistant); migration to mainline b9246 arch | **complete — V-J accept-rate gap closed `705ffccb8` (38% → 70.28%); Migration phases 0-3 complete through `4a9977f49`** |
 | 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
 | 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
 | 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **shipped 34/34 pairs (HEAD `88afd0b5a`); iso3-K cross-V hang (4 pairs) remains open per TODO 68; HIP kernel Cat 2/3 bugs surface ppl-gate failures** |
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
-| 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **pending** |
+| 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`aed6d2965`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`5fe804bcd`); 5b-2 (IQ5_K/IQ6_K) recon in-flight; MLA declined** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
 | 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`); NEW-D Vulkan GPU scorer fix shipped (`276508aaa`) — IGPU fallback enables ~0.20s GPU scoring on Strix Halo Vulkan (was 3-5s CPU fallback)** |
@@ -103,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `30067d81b`**, the following features are on `main`.
+As of **HEAD `fd9bf51f8`**, the following features are on `main`.
 
 ---
 
@@ -293,16 +292,42 @@ Ported IQ-family weight quantization types from ik_llama.cpp. All three types ar
 
 | Type | Bits | Block | Backends | Notes |
 |---|---|---|---|---|
-| `IQ2_K` (slot 77) | ~2 | 256 | CPU + CUDA/HIP + Vulkan | 2-bit with 128-entry codebook |
-| `IQ3_K` (slot 78) | ~3 | 256 | CPU + CUDA/HIP + Vulkan | 3-bit with 256-entry codebook |
-| `IQ4_K` (slot 79) | ~4 | 256 | CPU + CUDA/HIP + Vulkan | 4-bit with 512-entry codebook |
+| `IQ2_K` (slot 137) | 2.375 bpw | 256 | CPU + CUDA/HIP + Vulkan | 2-bit with 128-entry codebook |
+| `IQ3_K` (slot 138) | 3.44 bpw | 256 | CPU + CUDA/HIP + Vulkan | 3-bit with 256-entry codebook |
+| `IQ4_K` (slot 139) | 4.50 bpw | 256 | CPU + CUDA/HIP + Vulkan | 4-bit with 512-entry codebook |
 
 Example:
 ```bash
 llama-quantize Qwen3.5-9B-F16.gguf Qwen3.5-9B-IQ3_K.gguf IQ3_K
 ```
 
-Calibration-free, no imatrix required. PPL parity verified GREEN vs mainline ik_llama reference across multiple quant/model pairs.
+Calibration-free, no imatrix required. PPL parity Δ < 0.0045 vs frankenturbo2 (the ik_llama reference) across multiple quant/model pairs. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
+
+---
+
+### ik_llama row-meta weight quants (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) — Phase 5b-1b
+
+Row-meta IK-family weight quantization types requiring a `row_meta_size` infrastructure
+prerequisite (`d91059253`). Vulkan batched `mul_mat` SEGV fixed via `is_empty()` guard
+(`5fe804bcd`) — all 4 types work on both ROCm and Vulkan.
+
+| Type | Slot | Block | Backends | Notes |
+|---|---|---|---|---|
+| `IQ4_KS` | 144 | 256 | CPU + CUDA/HIP + Vulkan | 4-bit row-meta small; float row-scale |
+| `IQ4_KSS` | 146 | 256 | CPU + CUDA/HIP + Vulkan | 4-bit row-meta small-small |
+| `IQ3_KS` | 156 | 256 | CPU + CUDA/HIP + Vulkan | 3-bit row-meta small; uint16_t half-row-scale |
+| `IQ4_KT` | 155 | 256 | CPU + CUDA/HIP + Vulkan | 4-bit IK trellis weight quant |
+
+PPL gate (Qwen3.5-9B, 20 chunks, c=4096, wikitext-2-raw-test):
+
+| Type | Vulkan PPL | ROCm anchor | Δ |
+|---|---|---|---|
+| IQ4_KS | 6.4131 | 6.4390 | −0.026 |
+| IQ3_KS | 6.7325 | 6.7488 | −0.016 |
+| IQ4_KSS | 6.5773 | 6.6202 | −0.043 |
+| IQ4_KT | 6.5364 | 6.5701 | −0.034 |
+
+Slots are ik_llama compatibility zone IDs (preserved verbatim). Row-meta types store per-row scale metadata alongside the quantized block; `ggml_nbytes` must be used for buffer sizing (not `type_size × ne`).
 
 ---
 
@@ -364,6 +389,47 @@ verified by output coherence plus accept rate.
 666 LoC) has no mainline equivalent and is kept as a deliberate divergence per
 `conventions/port-fidelity-to-mainline-llamacpp.md §D1`.
 
+**MTP Migration (phases 0-3, 2026-05-23):** The fork's MTP speculative driver, Qwen3.5/MoE
+loader, and graph-builder have been migrated to align with mainline b9246 architecture:
+Phase 0 (preflight recon), Phase 1 (arch constants + server loader to LLAMA_CONTEXT_TYPE_MTP),
+Phase 2 (loader split into `load_block_trunk` + `load_block_mtp` lambdas),
+Phase 3 (graph convergence to `embeddings_pre_norm_masked`). The fork's bundled-MTP
+semantics are preserved with inverted polarity as documented in the Phase 3 brief.
+
+**V-J accept-rate gap closed (2026-05-23, `705ffccb8`):** `llama-speculative-simple` was
+missing the `common_speculative_process(spec, batch_tgt)` call after target decode —
+the server already had it but the standalone binary did not. Without it, the MTP head's
+`pending_h` stayed zeroed and drafts were garbage. Adding the call lifted acceptance on
+Qwen3.5-35B-A3B-MTP from 38% → 70.28% (mainline anchor: 71.3%). Throughput: +45% e2e.
+
+---
+
+### Nemotron-Labs Diffusion (NLD) — CLI + server self-spec
+
+Nemotron-Labs Diffusion 14B (`LLM_ARCH_DREAM`) — a masked diffusion LLM that
+generates tokens by iterative block-wise refinement (fill-in-the-blank at masked
+positions). Ported from buun `f339dbebe` (TODO 80: CLI Tier-B port, `49f88e18a`;
+TODO 86: server self-spec loop, `1cb8c4218`).
+
+```bash
+# Block-mode generation (32-step decode)
+llama-diffusion-cli -m nemotron-diffusion-14b-Q8_0.gguf \
+    -ngl 99 --no-mmap -fa on \
+    -p "Write a function to compute fibonacci numbers." \
+    -n 256 --diffusion-block-length 32 --diffusion-steps 32
+
+# Self-speculative decoding (3.7× speedup, 68% draft acceptance)
+llama-diffusion-cli -m nemotron-diffusion-14b-Q8_0.gguf \
+    -ngl 99 --no-mmap -fa on \
+    -p "Write a python function for fibonacci." \
+    -n 128 --diffusion-self-spec --diffusion-draft-length 8
+```
+
+The NLD server auto-detects diffusion models via `llama_model_is_diffusion()` and
+activates the self-spec rejection-sampling loop automatically — no `--spec-type` flag.
+Server self-spec measured at 4.49 t/s (128 tokens); CLI self-spec at 7.0 t/s.
+MTP regression gate confirmed clean (84.6% accept on Qwen3.5-35B-A3B-MTP after NLD port).
+
 ---
 
 ### Novel model architectures — in-tree ports
@@ -421,9 +487,11 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| Phase 5b-1b (row-meta KS family, ik_llama subsystem) | — | staged; Phase 5b-1a shipped (`09c0d1d6c`) |
+| Phase 5b-2 (IQ5_K / IQ6_K recon) | — | recon in-flight 2026-05-24 (ft2 has CPU impls; Vulkan shaders absent) |
 | X-3-s2, X-3-s3 (remaining asymmetric pairs) | — | starters exist, not yet spawned |
-| Mainline forward-sync rebase | — | pending (merge base `5d44db600` = tag b9133, 2026-05-13; ~80 commits upstream drift) |
+| Mainline forward-sync rebase | — | fork synced to b9246 (`871b0b70f`); next sync pending |
+| iso3-K cross-V hang fix (TODO 68) | — | fix worker in-flight 2026-05-24 |
+| EAGLE3 port recon | — | recon in-flight 2026-05-24 |
 
 ## Blocked / awaiting decision
 
