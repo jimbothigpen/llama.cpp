@@ -78,7 +78,7 @@ Status updated per layer landing. Initial state derived from
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | Boundary V / `TURBO_LAYER_ADAPTIVE` | 1 | **RELEASED** | **RELEASED** | n/a (default-off; backend-agnostic plumbing) |
 | MTP spec-decode spine + Migration 0-3 | 2 | **RELEASED** (speculative driver + loader + graph converged to b9246; V-J gap closed `705ffccb8`) | no novel GPU kernels — Vulkan parity via inherited mainline paths | n/a (CPU/scheduler only; no backend-specific kernels) |
-| NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | Vulkan untested (build compiles; Vulkan NLD path not smoke-validated; see known-issues) | P3 — backend-agnostic inference path (no new kernels) |
+| NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | **RELEASED** Vulkan (smoke + 5ch PPL PASS on ai01 RADV gfx1103, 2026-05-24; llama-cli load+gen + llama-perplexity validated) | n/a (released; backend-agnostic inference path, no new kernels) |
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 4 | source has dedicated HIP scoring kernel | source has none | P1 — scoring kernel needs Vulkan port |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
