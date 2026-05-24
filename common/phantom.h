@@ -233,7 +233,8 @@ struct phantom_ghost_buffer {
 // scan+patch, and ghost buffer pinned transport.
 // ============================================================================
 
-struct common_speculative_state_phantom : public common_speculative_state {
+struct common_speculative_state_phantom {
+    const common_speculative_type type = COMMON_SPECULATIVE_TYPE_PHANTOM;
     common_ngram_mod & mod; // shared ngram_mod instance (from params)
 
     // --- Component 1: Bloom filter ---
@@ -269,29 +270,33 @@ struct common_speculative_state_phantom : public common_speculative_state {
     size_t n_gamma_adjusts  = 0;
 
     const bool verbose;
+    int32_t n_min;
+    int32_t n_max;
 
     common_speculative_state_phantom(
-            enum common_speculative_type type,
             common_ngram_mod & mod_,
             int32_t bloom_bits    = 16384,
             int32_t ghost_buffers = 2,
-            int32_t ghost_cap     = 64)
-        : common_speculative_state(type)
-        , mod(mod_)
+            int32_t ghost_cap     = 64,
+            int32_t n_min_        = 0,
+            int32_t n_max_        = 64)
+        : mod(mod_)
         , bloom((size_t)bloom_bits)
         , verbose(std::getenv("LLAMA_TRACE") != nullptr)
+        , n_min(n_min_)
+        , n_max(n_max_)
     {
         if (ghost_buffers > 0) {
             ghost_buf.init(ghost_buffers, (size_t)ghost_cap);
         }
     }
 
-    ~common_speculative_state_phantom() override = default;
+    ~common_speculative_state_phantom() = default;
 
     // ----------------------------------------------------------------
     // begin() — seed ngram table from prompt
     // ----------------------------------------------------------------
-    void begin(const llama_tokens & prompt) override {
+    void begin(const llama_tokens & prompt) {
         i_last = 0;
         last_draft.clear();
         awaiting_accept = false;
@@ -322,10 +327,9 @@ struct common_speculative_state_phantom : public common_speculative_state {
     // bloom checking (no second scan pass).
     // ----------------------------------------------------------------
     void draft(
-            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
-            llama_tokens & result) override {
+            llama_tokens & result) {
 
         // Handle missed accept(0): framework swallows accept(0) at speculative.cpp:1254
         if (awaiting_accept && !last_draft.empty()) {
@@ -359,7 +363,7 @@ struct common_speculative_state_phantom : public common_speculative_state {
         }
 
         // Component 2: Use adaptive draft length clamped to params
-        const int n_draft = std::clamp(gamma_n_cur, params.n_min, params.n_max);
+        const int n_draft = std::clamp(gamma_n_cur, n_min, n_max);
 
         // Build ngram lookup context: last (n-1) prompt tokens + id_last
         std::vector<llama_token> ctx(n + n_draft);
@@ -400,7 +404,7 @@ struct common_speculative_state_phantom : public common_speculative_state {
             }
         }
 
-        if (drafted == 0 || drafted < params.n_min) {
+        if (drafted == 0 || drafted < n_min) {
             result.clear();
             clear_pending();
             return;
@@ -424,7 +428,7 @@ struct common_speculative_state_phantom : public common_speculative_state {
     // ----------------------------------------------------------------
     // accept() — update bloom, γ, fallback from acceptance signal
     // ----------------------------------------------------------------
-    void accept(uint16_t n_accepted) override {
+    void accept(uint16_t n_accepted) {
         awaiting_accept = false;
 
         if (last_draft.empty()) return;
