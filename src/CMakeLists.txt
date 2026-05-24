@@ -40,6 +40,15 @@ add_library(llama
             unicode.cpp
             unicode.h
             ${LLAMA_MODELS_SOURCES}
+            llama-triattention.cpp
+            llama-triattention.h
+            triattention.c
+            triattention.h
+            triattention-backend.c
+            triattention-backend.h
+            triattention-bridge.cpp
+            triattention-runtime.c
+            triattention-runtime.h
             )
 
 set_target_properties(llama PROPERTIES

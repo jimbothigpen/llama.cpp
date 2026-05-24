@@ -5,6 +5,7 @@
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-triattention.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -2342,6 +2343,33 @@ ggml_tensor * llm_graph_context::build_attn(
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+
+        // TriAttention in-graph K/V capture (Phase A harness)
+        // Scatter k_cur/v_cur into CPU-backed capture buffers using the same index tensors.
+        // Bypasses broken ggml_backend_tensor_get() on ROCm past ~272 MiB sub-alloc boundaries.
+        if (g_tria_capture && il < (int) g_tria_capture_n) {
+            if (g_tria_capture[il].k_buffer) {
+                // reshape k_cur 3D [ne0, ne1, n_tok] → 2D [ne0*ne1, n_tok] to match KV cache layout
+                ggml_tensor * k_2d = ggml_view_2d(ctx0, k_cur,
+                    k_cur->ne[0] * k_cur->ne[1], k_cur->ne[2], k_cur->nb[2], 0);
+                // flatten capture buffer to 2D if n_stream > 1 (multi-stream KV layout)
+                ggml_tensor * k_cap = g_tria_capture[il].k_buffer;
+                if (k_cap->ne[2] > 1) {
+                    k_cap = ggml_reshape_2d(ctx0, k_cap, k_cap->ne[0], k_cap->ne[1] * k_cap->ne[2]);
+                }
+                ggml_build_forward_expand(gf, ggml_set_rows(ctx0, k_cap, k_2d, k_idxs));
+            }
+            if (g_tria_capture[il].v_buffer) {
+                // V capture only when not transposed (allocation skips transposed V)
+                ggml_tensor * v_2d = ggml_view_2d(ctx0, v_cur,
+                    v_cur->ne[0] * v_cur->ne[1], v_cur->ne[2], v_cur->nb[2], 0);
+                ggml_tensor * v_cap = g_tria_capture[il].v_buffer;
+                if (v_cap->ne[2] > 1) {
+                    v_cap = ggml_reshape_2d(ctx0, v_cap, v_cap->ne[0], v_cap->ne[1] * v_cap->ne[2]);
+                }
+                ggml_build_forward_expand(gf, ggml_set_rows(ctx0, v_cap, v_2d, v_idxs));
+            }
+        }
     }
 
     const auto & kq_mask = inp->get_kq_mask();

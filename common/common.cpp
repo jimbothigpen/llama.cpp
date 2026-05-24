@@ -3,6 +3,8 @@
 
 #include "build-info.h"
 #include "common.h"
+#include "../src/triattention.h"
+#include "../src/triattention-runtime.h"
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -1174,7 +1176,17 @@ static void common_init_sampler_from_model(
 
 struct common_init_result::impl {
     impl() = default;
-    ~impl() = default;
+    ~impl() {
+        if (tria_rt) {
+            if (g_tria_rt == tria_rt) g_tria_rt = nullptr;
+            tria_runtime_free(tria_rt);
+            tria_rt = nullptr;
+        }
+        if (tria) {
+            tria_free(tria);
+            tria = nullptr;
+        }
+    }
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
@@ -1185,6 +1197,10 @@ struct common_init_result::impl {
 
     std::vector<common_sampler_ptr> samplers;
     std::vector<llama_sampler_seq_config> samplers_seq_config;
+
+    // TriAttention (Phase A)
+    struct tria_stats   * tria    = nullptr;
+    struct tria_runtime * tria_rt = nullptr;
 };
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
@@ -1283,6 +1299,31 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
+    // TriAttention lifecycle (Phase A): init BEFORE context so g_tria_rt is set
+    // when llama_context constructor runs and allocates capture buffers.
+    if (!params.triattention_stats_path.empty() && params.triattention_budget_pct > 0) {
+        pimpl->tria = tria_load(params.triattention_stats_path.c_str());
+        if (pimpl->tria) {
+            pimpl->tria_rt = tria_runtime_init(
+                pimpl->tria,
+                params.triattention_budget_pct,
+                params.triattention_window,
+                params.triattention_interval,
+                params.triattention_sink);
+            if (pimpl->tria_rt) {
+                g_tria_rt = pimpl->tria_rt;
+                fprintf(stderr, "tria: runtime initialized (budget=%d%% window=%d interval=%d sink=%d)\n",
+                        params.triattention_budget_pct, params.triattention_window,
+                        params.triattention_interval, params.triattention_sink);
+            } else {
+                fprintf(stderr, "tria: warning: tria_runtime_init failed — scoring disabled\n");
+            }
+        } else {
+            fprintf(stderr, "tria: warning: failed to load stats from '%s'\n",
+                    params.triattention_stats_path.c_str());
+        }
+    }
+
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1315,6 +1356,10 @@ void common_init_result::reset_samplers() {
 
 std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
+}
+
+struct tria_stats * common_init_result::triattention() {
+    return pimpl->tria;
 }
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {

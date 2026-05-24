@@ -2109,6 +2109,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--triattention"}, "PATH",
+        "path to TriAttention calibration stats file (.tria); enables KV scoring (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.triattention_stats_path = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tri-budget"}, "N",
+        string_format("TriAttention: retain N%% of n_ctx tokens (default: %d)", params.triattention_budget_pct),
+        [](common_params & params, int value) {
+            params.triattention_budget_pct = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tri-window"}, "N",
+        string_format("TriAttention: always keep last N tokens (default: %d)", params.triattention_window),
+        [](common_params & params, int value) {
+            params.triattention_window = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tri-interval"}, "N",
+        string_format("TriAttention: score every N decode steps (default: %d)", params.triattention_interval),
+        [](common_params & params, int value) {
+            params.triattention_interval = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tri-sink"}, "N",
+        string_format("TriAttention: always keep first N tokens as attention sinks (default: %d)", params.triattention_sink),
+        [](common_params & params, int value) {
+            params.triattention_sink = value;
+        }
+    ));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

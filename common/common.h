@@ -590,6 +590,13 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
+    // TriAttention KV scoring (Phase A)
+    std::string triattention_stats_path  = "";   // path to .tria calibration file; empty = disabled
+    int         triattention_budget_pct  = 0;    // % of n_ctx to retain; 0 = disabled
+    int         triattention_window      = 512;  // recent tokens always kept
+    int         triattention_interval    = 128;  // score every N decode steps
+    int         triattention_sink        = 0;    // first N tokens always kept (attention sinks)
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)
@@ -881,6 +888,7 @@ bool tty_can_use_colors();
 //
 
 struct common_sampler;
+struct tria_stats; // forward declaration for TriAttention accessor
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
@@ -894,6 +902,8 @@ struct common_init_result {
     void reset_samplers();
 
     std::vector<llama_adapter_lora_ptr> & lora();
+
+    struct tria_stats * triattention(); // returns loaded stats, or NULL if disabled
 
 private:
     struct impl;

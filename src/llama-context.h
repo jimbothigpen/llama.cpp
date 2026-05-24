@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-sidecar.h"
 #include "llama-impl.h"
+#include "llama-triattention.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -480,4 +481,10 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // TriAttention in-graph K/V capture buffers (Phase A harness)
+    // Allocated on CPU backend; populated each decode step by ggml_set_rows nodes in build_attn.
+    std::vector<tria_kv_capture> tria_capture;
+    ggml_context *               tria_capture_ctx = nullptr;
+    ggml_backend_buffer_t        tria_capture_buf = nullptr;
 };
