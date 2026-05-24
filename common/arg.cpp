@@ -3822,6 +3822,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     add_opt(common_arg(
+        {"--phantom-buffers"}, "N",
+        string_format("ghost buffer ring slots for phantom speculative decoding, 0 = disabled (default: %d)", params.speculative.phantom_buffers),
+        [](common_params & params, int value) {
+            if (value < 0 || value > 8) {
+                throw std::invalid_argument("phantom buffers must be 0-8");
+            }
+            params.speculative.phantom_buffers = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PHANTOM_BUFFERS"));
+
+    add_opt(common_arg(
+        {"--phantom-bloom-bits"}, "N",
+        string_format("bloom filter size in bits for phantom speculative decoding (default: %d)", params.speculative.phantom_bloom_bits),
+        [](common_params & params, int value) {
+            if (value < 256 || value > 1048576) {
+                throw std::invalid_argument("phantom bloom bits must be 256-1048576");
+            }
+            params.speculative.phantom_bloom_bits = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_PHANTOM_BLOOM_BITS"));
+
+    add_opt(common_arg(
         {"--pflash-scorer"}, "PATH",
         string_format("path to PFlash scorer model GGUF (e.g., Qwen3-0.6B-BF16.gguf). Enables speculative prefill for long prompts."),
         [](common_params & params, const std::string & value) {

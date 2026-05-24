@@ -157,6 +157,10 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
 };
 
+// Forward declare for phantom.h compatibility (carlosfundora uses common_speculative_state, ygg uses common_speculative_impl)
+struct common_speculative_impl;
+typedef common_speculative_impl common_speculative_state;
+
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
@@ -167,6 +171,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_PHANTOM,       // phantom: bloom + adaptive γ + fallback + ghost buffer
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -356,6 +361,10 @@ struct common_params_speculative {
     common_params_speculative_ngram_map ngram_map_k4v;
 
     common_params_speculative_ngram_cache ngram_cache;
+
+    // phantom speculative decoding parameters
+    int32_t phantom_buffers    = 2;     // ghost buffer ring slots (0 = disabled)
+    int32_t phantom_bloom_bits = 16384; // bloom filter size in bits
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
