@@ -8,6 +8,7 @@
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "ngram-mod.h"
+// #include "phantom.h"  — deferred to Phase 2: interface mismatch between carlosfundora and ygg
 #include "sampling.h"
 
 #include <algorithm>
@@ -30,7 +31,8 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
     {"ngram-mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
-    {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
+    {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE},
+    {"phantom",       COMMON_SPECULATIVE_TYPE_PHANTOM}
 };
 
 static std::string common_speculative_get_devices_str(const std::vector<ggml_backend_dev_t> & devices) {
@@ -1730,6 +1732,10 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 };
 
+// PHANTOM speculative_impl_phantom deferred to Phase 2: phantom.h uses carlosfundora-style interface
+// which is incompatible with ygg's common_speculative_impl interface. Requires interface adapter wrapper.
+// struct common_speculative_impl_phantom : public common_speculative_impl { ... };
+
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
 
@@ -1802,6 +1808,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram-mod";
         case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram-cache";
+        case COMMON_SPECULATIVE_TYPE_PHANTOM:       return "phantom";
         default:                                    return "unknown";
     }
 }
@@ -1861,9 +1868,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));
         bool has_ngram_map_k4v = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V));
         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
+        bool has_phantom       = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_PHANTOM));
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 9);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -1884,6 +1892,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
+        // PHANTOM deferred to Phase 2: API mismatch between carlosfundora-style and ygg-style speculative state
+        // if (has_phantom) {
+        //     configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_PHANTOM, params));
+        // }
         // the gemma4-assistant draft GGUF is an external-MTP foreign-KV drafter — it
         // has no own KV cache and cannot run as a standalone 'draft-simple' model, so
         // never auto-enable draft-simple for it (mtp is the only valid type).
@@ -1983,6 +1995,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
                 break;
             }
+            // PHANTOM factory dispatch deferred: requires interface adapter between phantom.h and ygg
+            // case COMMON_SPECULATIVE_TYPE_PHANTOM: {
+            //     impls.push_back(std::make_unique<common_speculative_impl_phantom>(config.params, n_seq));
+            //     break;
+            // }
             default:
                 break;
         }
