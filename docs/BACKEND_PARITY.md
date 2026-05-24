@@ -77,7 +77,8 @@ Status updated per layer landing. Initial state derived from
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | Boundary V / `TURBO_LAYER_ADAPTIVE` | 1 | **RELEASED** | **RELEASED** | n/a (default-off; backend-agnostic plumbing) |
-| MTP spec-decode spine | 2 | source has CPU/scheduler logic | source has none for novel kernels | P2 — depends on KV layer Vulkan |
+| MTP spec-decode spine + Migration 0-3 | 2 | **RELEASED** (speculative driver + loader + graph converged to b9246; V-J gap closed `705ffccb8`) | no novel GPU kernels — Vulkan parity via inherited mainline paths | n/a (CPU/scheduler only; no backend-specific kernels) |
+| NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | Vulkan untested (build compiles; Vulkan NLD path not smoke-validated; see known-issues) | P3 — backend-agnostic inference path (no new kernels) |
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 4 | source has dedicated HIP scoring kernel | source has none | P1 — scoring kernel needs Vulkan port |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
@@ -86,7 +87,9 @@ Status updated per layer landing. Initial state derived from
 | PHANTOM-X | 5 | CPU n-gram | CPU n-gram | P3 — backend-agnostic |
 | TurboMind allocator | 5 | gfx1030-specific in source | source has none | Investigate; may not be needed |
 | Wave32 RDNA2 kernels | 5 | ROCm-only by design (RDNA2 SIMD32) | not applicable | **ROCm-only** by design |
-| IK quants (IQ\*_K, IQ\*_KS) | 6 | source has CUDA + implicit HIP | **source has none** — ik_llama Vulkan is 56 shaders behind mainline | **P1** — large surface |
+| IK quants base-K (IQ2_K, IQ3_K, IQ4_K) | 5 (5b-1a) | **RELEASED** — ROCm + Vulkan (PPL Δ < 0.0045 vs reference) | **RELEASED** — Vulkan batched mul_mat SEGV fixed `5fe804bcd` | n/a (released) |
+| IK quants row-meta KS/KT (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) | 5 (5b-1b) | **RELEASED** — ROCm + Vulkan (PPL gate 20-chunk Δ ≤ 0.043) | **RELEASED** — Vulkan SEGV fixed via `is_empty()` dequant-to-f16 fallback | n/a (released) |
+| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | source has CUDA + HIP; recon in-flight | source has none (no ft2 Vulkan shaders confirmed) | P1 — pending recon verdict |
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
 | Fused MoE | 6 | source has CUDA | source has none | P2 |
@@ -265,3 +268,9 @@ features; sweep regularly.
   WHT4_0 released on both backends; WHT3_0 Vulkan deferred (original
   port pending). gfx1102/1103 ROCm scope refined from "out of scope" to
   "partial scope: smoke target" (HSA_OVERRIDE recipe documented).
+- **v3** (2026-05-22 to 2026-05-24) — Phase 5b-1a (IQ2_K/IQ3_K/IQ4_K) +
+  Phase 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) released on both backends
+  (Vulkan batched mul_mat SEGV fixed via `is_empty()` guard `5fe804bcd`).
+  MTP spine rows updated: migration phases 0-3 complete; V-J accept-rate
+  gap closed. NLD (Nemotron-Labs Diffusion) added as ROCm-released model port.
+  Per-feature table expanded with 5b-1a/1b/2 + NLD + MTP migration rows.

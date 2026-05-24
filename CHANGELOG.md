@@ -9,7 +9,81 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-Phase 2 (MTP spec-decode spine) in design.
+In-flight: Phase 5b-2 (IQ5_K / IQ6_K recon), EAGLE3 port recon, iso3-K cross-V hang fix (TODO 68).
+
+### Added — MTP top_k=1 deliberate-choice comment (2026-05-24, `fd9bf51f8`)
+
+Documents the intentional `top_k=1` (vs mainline `top_k=10`) in `state_draft_mtp` ctor.
+With `ad277572` backend sampling pre-filtering to top-10 and bundled-MTP weight-sharing,
+`top_k=1` yields an argmax draft that closely tracks target greedy. Comment guards against
+inadvertent revert: "Do NOT raise to 10 without re-running Smoke B."
+
+### Added — NLD server self-spec loop (TODO 86, 2026-05-23, `1cb8c4218`)
+
+Port of `tools/server/server-context.cpp` additions from buun `f339dbebe`
+(+589 net LOC, 12 hunks): `is_diffusion` auto-detection via
+`llama_model_is_diffusion()`; `diff_self_spec` fields on `server_slot`;
+rejection-sampling spec loop with temperature, think-tag suppression,
+cross-turn penalty, and loop detection. MTP server paths coexist
+cleanly (mutually exclusive: a slot is MTP or diffusion, never both).
+
+Server self-spec smoke: 4.49 t/s (128 tokens); ~59% draft acceptance.
+MTP regression gate: 84.62% accept on Qwen3.5-35B-A3B-MTP — above v525 anchor (77.78%).
+
+### Added — NLD Tier-B CLI port (TODO 80, 2026-05-23, `49f88e18a` + `35315922c`)
+
+Selective port of Nemotron-Labs Diffusion from buun `f339dbebe` (~612 LOC net):
+GGUF converter (`conversion/nemotron_labs_diffusion.py`), diffusion library
+(`examples/diffusion/diffusion.h` + `diffusion.cpp`), CLI refactor
+(`examples/diffusion/diffusion-cli.cpp`), model loader fixes for DREAM arch
+(`src/models/dream.cpp`, `src/llama-model.cpp`), and 3 new CLI flags
+(`--diffusion-block-length`, `--diffusion-self-spec`, `--diffusion-draft-length`).
+
+Smokes: block-mode 1.9 t/s; self-spec 7.0 t/s (3.7× speedup, 68.4% draft acceptance).
+MTP regression gate: 69.0% accept on Qwen3.5-35B-A3B-MTP after port (anchor 70.3%, Δ −1.2pp, within ±5pp).
+
+### Fixed — MTP V-J accept-rate gap (TODO 81, 2026-05-23, `705ffccb8`)
+
+`examples/speculative-simple/speculative-simple.cpp` was calling `llama_decode(ctx_dft, batch_tgt)` directly
+instead of `common_speculative_process(spec, batch_tgt)` after the target decode. Without the process
+call, `state_draft_mtp::process()` never ran, keeping `pending_h` zeroed — the MTP head read garbage
+h_input and acceptance collapsed. The server (`server-context.cpp:3125`) already had the correct call;
+only the standalone binary was broken. Fix is +8 / -2 lines.
+
+Before: **38% acceptance** (Qwen3.5-35B-A3B-MTP long-prompt).
+After: **70.28% acceptance** (mainline b9246 anchor: 71.3%). Throughput +45% e2e.
+
+### Added — MTP Migration phases 0-3 (2026-05-22 to 2026-05-23, `34a54f5fd`–`4a9977f49`)
+
+Converge fork's MTP speculative driver, loader, and graph to mainline b9246 architecture:
+
+- **Phase 0 (preflight):** recon classifying all MTP-touching files and deciding migration scope.
+- **Phase 1 (`34a54f5fd` + `1d8aa9d30`):** arch constants + NextN classification converged to b9246; server-context.cpp loader migrated from `cparams.mtp` to `LLAMA_CONTEXT_TYPE_MTP`.
+- **Phase 2 (`fefe017ea`):** Qwen3.5 + Qwen3.5-MoE loaders split into `load_block_trunk` + `load_block_mtp` lambdas matching b9246 shape (E1 task).
+- **Phase 3 (`4a9977f49`):** both graph ctors converged to `cparams.embeddings_pre_norm_masked` flag (retiring fork-local `mtp_full_embd`); inverted polarity vs mainline documented (bundled-MTP semantics preserved).
+
+PPL gate post-Phase-3: 5.5302 ± 0.064 vs Phase-1 anchor 5.5302 — numerics-clean.
+
+### Added — Phase 5b-1b row-meta IK weight quants (2026-05-22, `026671689`–`5fe804bcd`)
+
+Port of IQ4_KS / IQ4_KSS / IQ3_KS / IQ4_KT from frankenturbo2. Requires P0 prereq
+commit `d91059253` (add `row_meta_size` to `ggml_type_traits` + extend `ggml_row_size()`).
+
+Ship sequence:
+- `d91059253` — P0: `row_meta_size` infra (prerequisite for all row-meta types).
+- `026671689` — Phase 5b-1b: CPU traits + CUDA/HIP kernels + Vulkan dequant/matvec shaders for all 4 types.
+- `a0fe65a77`, `e4caef152`, `d703bf5ea`, `6d9957ae1`, `3f629f8fb` — 5 post-ship bugfixes (CUDA dequant kernels, tensor stride/nbytes, row validation, HIP __shfl_xor_sync, Vulkan batched guard).
+- `5fe804bcd` — Vulkan KS batched `mul_mat` SEGV fix: extend `is_empty()` guard in `ggml_vk_get_mul_mat_mat_pipeline` to the non-q8_1 branch; KS types now dequant-to-f16 on the batch path. Also fixes the identical latent SEGV in base-K types.
+
+PPL gate (Vulkan, Qwen3.5-9B, 20 chunks): IQ4_KS 6.4131 / IQ3_KS 6.7325 / IQ4_KSS 6.5773 / IQ4_KT 6.5364 vs ROCm anchors (Δ ≤ 0.043).
+
+### Added — Phase 5b-1a base IK weight quants (2026-05-20 to 2026-05-22, `aed6d2965`)
+
+Port of IQ2_K / IQ3_K / IQ4_K from frankenturbo2 (Phase 5b-1a). CPU traits +
+CUDA/HIP kernels (convert.cu, mmvq-iqk.cu) + Vulkan dequant/matvec shaders (6
+`.comp` shaders). No row_meta; standard `ggml_type_size`-only layout.
+Renumbered to ygg canonical IDs: IQ4_K=139, IQ3_K=138, IQ2_K=137
+(ik_llama compatibility zone). PPL parity Δ < 0.0045 vs frankenturbo2 reference.
 
 ### Added — PFlash base port Phase 3: HIP GPU scorer (2026-05-19, v355, `abe0bb81a`)
 
