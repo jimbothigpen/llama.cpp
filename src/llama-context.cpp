@@ -6,6 +6,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-memory.h"
 #include "llama-memory-hybrid.h"
 #include "llama-mmap.h"
@@ -312,6 +313,11 @@ llama_context::llama_context(
             if (!kv) {
                 auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
                 if (hybrid) kv = hybrid->get_mem_attn();
+            }
+            if (!kv) {
+                // llama_kv_cache_iswa doesn't inherit llama_kv_cache; use the base sub-cache
+                auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory.get());
+                if (iswa) kv = iswa->get_base();
             }
             if (kv) {
                 llama_tria_capture_alloc(
