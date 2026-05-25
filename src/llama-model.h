@@ -604,6 +604,10 @@ struct llama_model {
     struct ggml_tensor * target_tok_embd  = nullptr; // target model's token embeddings (if different)
     struct ggml_tensor * d2t              = nullptr; // draft-to-target vocab mapping [vocab]
 
+    // DFlash speculative decode
+    struct ggml_tensor * dflash_fc          = nullptr; // target feature projection [n_target_features, n_embd]
+    struct ggml_tensor * dflash_hidden_norm = nullptr; // fusion layer RMSNorm [n_embd]
+
     std::vector<llama_layer> layers;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
