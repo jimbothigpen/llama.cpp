@@ -431,7 +431,7 @@ static std::once_flag g_iq2kt_init_once;
 
 static void iq2kt_codebook_do_init() {
     iqkt_cooked_book_init<kIQ2KT_GroupSize, kIQ2KT_NumBits, false>(
-        g_iq2kt_codebook.cb, kIQ2KT_Offset, 6);
+        g_iq2kt_codebook.cb, kIQ2KT_Offset, 60);
     g_iq2kt_codebook.initialized = true;
 }
 
