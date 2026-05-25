@@ -1927,3 +1927,22 @@ struct llama_model_zaya : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+
+struct llama_model_eagle3 : public llama_model_base {
+    llama_model_eagle3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // encode: build the FC feature fusion and emit g_embd (no KV cache)
+    struct graph_encode : public llm_graph_context {
+        graph_encode(const llama_model & model, const llm_graph_params & params);
+    };
+
+    // decode: single-layer transformer that takes g_embd + tok_embd → logits
+    struct graph_decode : public llm_graph_context {
+        graph_decode(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};

@@ -135,6 +135,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
     { LLM_ARCH_ZAYA,             "zaya"             },
+    { LLM_ARCH_EAGLE3,           "eagle3"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -249,6 +250,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,           "%s.attention.indexer.key_length"           },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,                "%s.attention.indexer.top_k"                },
     { LLM_KV_ATTENTION_SHARED_KV_LAYERS,             "%s.attention.shared_kv_layers"             },
+
+    { LLM_KV_EAGLE3_EXTRACT_LAYERS,                  "%s.eagle3.extract_layers"                  },
+    { LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE,               "%s.eagle3.target_hidden_size"               },
+    { LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL,             "%s.eagle3.norm_before_residual"             },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,           "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,       "%s.rope.dimension_count_swa"             },
@@ -584,6 +589,9 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ZAYA_ROUTER_MLP4,                       "blk.%d.zaya_router_mlp4" },
     { LLM_TENSOR_ZAYA_ROUTER_BIASES,                     "blk.%d.zaya_router_biases" },
     { LLM_TENSOR_ZAYA_ROUTER_EDA_SCALE,                  "blk.%d.zaya_router_eda" },
+    { LLM_TENSOR_EAGLE3_FC,                              "fc" },
+    { LLM_TENSOR_EAGLE3_HIDDEN_NORM,                     "blk.%d.hidden_norm" },
+    { LLM_TENSOR_EAGLE3_D2T,                             "d2t" },
 };
 
 // declare information about the model weight tensors:

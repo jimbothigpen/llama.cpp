@@ -135,6 +135,11 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    // EAGLE3 speculative decoding
+    void set_eagle3(const int * extract_layers, int32_t n_layers);
+    const std::vector<float> & get_eagle3_target_features() const;
+    void set_eagle3_g_embeddings(const float * data, int32_t n_tokens);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -302,7 +307,8 @@ private:
     bool sidecars_post_compute_pending   = false;
     int  sidecars_post_compute_n_outputs = 0;
 
-    llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+    llama_cross  cross;  // TODO: tmp for handling cross-attention - need something better probably
+    llama_eagle3 eagle3_state;
 
     std::unique_ptr<llama_memory_i> memory;
 
