@@ -1,0 +1,69 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ2_KT — ik_llama.cpp trellis-coded 2-bit (2.0 bpw, row_meta=4 = float row scale).
+// Row layout: [float d_row][block_iq2_kt blocks].  Block is 64 bytes = 16 u32:
+//   qs[0..15] : 16 u32 (64 B) — 32 uint16_t packed as 2 per u32; one 16-bit
+//               codebook index per group.  qs_u32[g/2] holds groups g (lo) and g+1 (hi).
+//
+// Each group of 8 elements is reconstructed via the 0xCBAC1FED multiplicative
+// LCG codebook generator, seeded by (idx + kOffset) where idx is the 16-bit index
+// and kOffset = 0.  There are no sub-block scales; all groups share d_row.
+//
+// Dispatch: 1 WG per super-block (256 elements), 32 threads × 1 group each.
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const uint IQ2KT_KA     = 0xCBAC1FEDu;
+const uint IQ2KT_Offset = 0u;
+
+void iq2kt_gen_group(uint idx, out float result[8]) {
+    uint x = idx + IQ2KT_Offset;
+    [[unroll]] for (int k = 0; k < 8; k++) {
+        x = IQ2KT_KA * x;
+        const uint s = x & 0x3f3f3f3fu;
+        const int sum =  int(s         & 0xffu)
+                       + int((s >>  8) & 0xffu)
+                       + int((s >> 16) & 0xffu)
+                       + int((s >> 24) & 0xffu);
+        result[k] = float(sum - 126);
+    }
+}
+
+void main() {
+    const uint nb           = p.K / 256u;
+    const uint row_size_u32 = 1u + nb * 16u;  // 1 u32 row scale + 16 u32 per block
+    const uint total_blocks = p.nel / 256u;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const float d        = uintBitsToFloat(uint(data_a[row_u32]));
+    const uint block_u32 = row_u32 + 1u + ib_in_row * 16u;
+
+    const uint g = gl_LocalInvocationID.x;  // group index within super-block, 0..31
+
+    // Each u32 holds 2 uint16 indices: lo = bits[0:15], hi = bits[16:31].
+    const uint word  = data_a[block_u32 + (g >> 1)];
+    const uint idx   = (g & 1u) == 0u ? (word & 0xffffu) : (word >> 16u);
+
+    float gv[8];
+    iq2kt_gen_group(idx, gv);
+
+    const uint y_base = ib_global * 256u + g * 8u;
+    [[unroll]] for (uint i = 0u; i < 8u; i++) {
+        data_b[y_base + i] = D_TYPE(gv[i] * d);
+    }
+}

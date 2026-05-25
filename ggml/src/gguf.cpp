@@ -726,7 +726,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
             // calculate byte offsets given the tensor shape and type
             // Use ggml_row_size so row_meta_size preamble is included in nb[1]
-            // for types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.
+            // for types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KT/IQ4_KT.
             info.t.nb[0] = type_size;
             info.t.nb[1] = ggml_row_size(info.t.type, info.t.ne[0]);
             for (int j = 2; j < GGML_MAX_DIMS; ++j) {

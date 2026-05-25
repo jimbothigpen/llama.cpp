@@ -463,7 +463,9 @@ extern "C" {
         GGML_TYPE_IQ4_KS  = 144, // ik_llama IQK 4-bit small (4.25 bpw, row_meta=4) — source: frankenturbo2 ID 61
         // slot 145 reserved (IQ2_KS in ik_llama compat zone)
         GGML_TYPE_IQ4_KSS = 146, // ik_llama IQK 4-bit super-small (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 63
-        // slots 147–154 reserved (Q8 K-block variants + IQ2_KT/IQ3_KT per TYPE_ASSIGNMENTS.md)
+        // slots 147–152 reserved (Q8 K-block variants per TYPE_ASSIGNMENTS.md)
+        GGML_TYPE_IQ2_KT  = 153, // ik_llama IQK trellis 2-bit (2.0 bpw, row_meta=4) — source: ik/andrew_trellis
+        // slot 154 reserved (IQ3_KT per TYPE_ASSIGNMENTS.md)
         GGML_TYPE_IQ4_KT  = 155, // ik_llama IQK trellis 4-bit (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 64
         GGML_TYPE_IQ3_KS  = 156, // ik_llama IQK 3-bit small (3.1875 bpw, row_meta=2) — source: frankenturbo2 ID 62
         GGML_TYPE_IQ2_KL  = 157, // ik_llama IQK hybrid 2-bit large (2.6875 bpw, row_meta=2) — highest quality-per-bit IK type at this bpw
