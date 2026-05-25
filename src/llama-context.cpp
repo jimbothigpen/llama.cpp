@@ -4365,34 +4365,200 @@ int64_t llama_get_layer_hidden_n_embd(const struct llama_context * ctx, int laye
     return ctx->get_layer_hidden_n_embd(layer_idx);
 }
 
-// Stub implementations (GPU ring, argmax, slot selection — S2 CPU-only path)
+// DFlash S3: GPU ring buffer (allocated lazily on first DFlash init via llama_dflash_cross_ring_gpu_init)
+//
+// Layout: GPU buffer holds [n_layers][ring_size][n_embd] floats (contiguous, row-major).
+// A CPU staging mirror is maintained for cross-attention data assembly (avoids D2H per build_cross_data call).
+// Async H2D writes keep the GPU copy current for future GPU-native cross-attention paths (S4+).
+
+struct dflash_gpu_ring {
+    ggml_backend_t        backend   = nullptr; // borrowed from context, not owned
+    ggml_backend_buffer_t gpu_buf   = nullptr; // GPU-resident ring storage
+    ggml_tensor *         ring_tens = nullptr; // flat tensor wrapping gpu_buf for tensor_set/get
+    ggml_context *        ggml_ctx  = nullptr; // tiny context holding the tensor header
+    std::vector<float>    staging;             // CPU mirror: [n_layers][ring_size][n_embd]
+    int n_layers  = 0;
+    int ring_size = 0;
+    int n_embd    = 0;
+};
 
 void llama_dflash_set_active_slot(struct llama_context * /*ctx*/, int /*slot_idx*/) {
-    // single-slot S2: no-op
+    // single-slot: no-op
 }
 
-void * llama_dflash_cross_ring_gpu_init(struct llama_context * /*ctx*/, int /*n_layers*/, int /*n_embd*/, int /*ring_size*/) {
-    return nullptr; // forces CPU fallback in common_speculative_impl_dflash
+ggml_backend_t llama_context::dflash_accel_backend() {
+    for (auto & b : backends) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(b.get());
+        if (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+            return b.get();
+        }
+    }
+    return nullptr;
 }
 
-void llama_dflash_cross_ring_gpu_free(void * /*handle*/) {}
+void * llama_dflash_cross_ring_gpu_init(struct llama_context * ctx, int n_layers, int n_embd, int ring_size) {
+    ggml_backend_t gpu_backend = ctx->dflash_accel_backend();
+    if (!gpu_backend) {
+        return nullptr; // no GPU found — CPU fallback
+    }
 
-void llama_dflash_cross_ring_gpu_write(void * /*handle*/, int /*layer*/, int /*ring_pos*/, const float * /*data*/, int /*n_tokens*/, int /*n_embd*/) {}
+    const size_t n_floats = (size_t)n_layers * ring_size * n_embd;
+    const size_t n_bytes  = n_floats * sizeof(float);
 
-void llama_dflash_cross_ring_gpu_set_cross(struct llama_context * /*ctx*/, void * /*handle*/, llama_seq_id /*seq_id*/, int /*ring_write_pos*/, int /*ring_filled*/, int /*n_layers*/, int /*n_embd*/, int /*ctx_window*/) {}
+    ggml_backend_buffer_t buf = ggml_backend_alloc_buffer(gpu_backend, n_bytes);
+    if (!buf) {
+        LLAMA_LOG_WARN("dflash: GPU ring buffer allocation failed (%zu MB), falling back to CPU\n", n_bytes >> 20);
+        return nullptr;
+    }
+
+    // Create a minimal ggml context (1 tensor header) with no_alloc=true so we can
+    // wrap the GPU buffer as a tensor and use ggml_backend_tensor_set/get for H2D/D2H.
+    struct ggml_init_params gp = {
+        /* .mem_size   = */ ggml_tensor_overhead() + 64,
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    ggml_context * gctx = ggml_init(gp);
+    if (!gctx) {
+        ggml_backend_buffer_free(buf);
+        return nullptr;
+    }
+
+    ggml_tensor * tens = ggml_new_tensor_1d(gctx, GGML_TYPE_F32, (int64_t)n_floats);
+    ggml_backend_buffer_init_tensor(buf, tens);
+
+    auto * handle        = new dflash_gpu_ring();
+    handle->backend      = gpu_backend;
+    handle->gpu_buf      = buf;
+    handle->ring_tens    = tens;
+    handle->ggml_ctx     = gctx;
+    handle->staging.assign(n_floats, 0.0f);
+    handle->n_layers     = n_layers;
+    handle->ring_size    = ring_size;
+    handle->n_embd       = n_embd;
+
+    LLAMA_LOG_INFO("dflash: GPU ring allocated %.1f MB (n_layers=%d ring_size=%d n_embd=%d)\n",
+        (float)n_bytes / (1 << 20), n_layers, ring_size, n_embd);
+    return handle;
+}
+
+void llama_dflash_cross_ring_gpu_free(void * handle) {
+    if (!handle) return;
+    auto * h = static_cast<dflash_gpu_ring *>(handle);
+    ggml_free(h->ggml_ctx);
+    ggml_backend_buffer_free(h->gpu_buf);
+    delete h;
+}
+
+// Write n_tokens hidden states for one layer into the ring at ring_pos.
+// Simultaneously updates: GPU buffer (async H2D) + CPU staging mirror.
+void llama_dflash_cross_ring_gpu_write(void * handle, int layer, int ring_pos, const float * data, int n_tokens, int n_embd) {
+    if (!handle || !data || n_tokens <= 0) return;
+    auto * h = static_cast<dflash_gpu_ring *>(handle);
+
+    // CPU staging write — used by gpu_set_cross for cross-attention assembly
+    size_t stage_off = ((size_t)layer * h->ring_size + ring_pos) * h->n_embd;
+    float * dst_stage = h->staging.data() + stage_off;
+    memcpy(dst_stage, data, (size_t)n_tokens * n_embd * sizeof(float));
+
+    // Async H2D write — keeps GPU ring current for future GPU-native paths
+    size_t byte_off  = stage_off * sizeof(float);
+    size_t byte_size = (size_t)n_tokens * n_embd * sizeof(float);
+    ggml_backend_tensor_set_async(h->backend, h->ring_tens, data, byte_off, byte_size);
+}
+
+// Assemble interleaved cross-attention data from the GPU ring's CPU staging buffer
+// and inject it into the drafter context via llama_set_cross_data.
+void llama_dflash_cross_ring_gpu_set_cross(
+        struct llama_context * ctx, void * handle, llama_seq_id /*seq_id*/,
+        int ring_write_pos, int ring_filled, int n_layers, int n_embd, int ctx_window) {
+    if (!handle) return;
+    auto * h = static_cast<dflash_gpu_ring *>(handle);
+
+    const int cross_len  = std::min(ring_filled, ctx_window);
+    if (cross_len <= 0) return;
+
+    const int n_target_features = n_layers * n_embd;
+    std::vector<float> cross_buf((size_t)cross_len * n_target_features, 0.0f);
+
+    const int read_start = (ring_write_pos - cross_len + h->ring_size) % h->ring_size;
+
+    for (int t = 0; t < cross_len; ++t) {
+        const int slot = (read_start + t) % h->ring_size;
+        for (int layer = 0; layer < n_layers && layer < h->n_layers; ++layer) {
+            const float * src = h->staging.data() + ((size_t)layer * h->ring_size + slot) * h->n_embd;
+            float *       dst = cross_buf.data() + (size_t)layer * n_embd + (size_t)t * n_target_features;
+            memcpy(dst, src, (size_t)n_embd * sizeof(float));
+        }
+    }
+
+    llama_set_cross_data(ctx, cross_buf.data(), (int64_t)n_target_features, (int64_t)cross_len);
+}
 
 void llama_set_dflash_topk(struct llama_context * /*ctx*/, int /*k*/) {}
 void llama_set_dflash_sample_temp(struct llama_context * /*ctx*/, float /*temp*/) {}
 void llama_set_dflash_n_slots(struct llama_context * /*ctx*/, int /*n*/) {}
 
-int32_t * llama_get_logits_argmax(struct llama_context * /*ctx*/) {
-    return nullptr; // forces CPU argmax in speculative.cpp
+// DFlash S3: bulk argmax + log-prob over all output positions.
+//
+// The logits buffer is CPU-resident after decode (host output buffer).  Computing
+// argmax here in bulk, together with log-softmax for the winning token, enables:
+//   1. A single cache-friendly sweep over the logits rather than n_draft separate
+//      llama_get_logits_ith() calls in speculative.cpp.
+//   2. Per-draft-step p_min probability filtering (requires log-prob of the chosen token),
+//      which was previously unavailable in the CPU argmax fallback path.
+//
+// K=1 (top-1 only); log-prob computed as log-softmax of the winning logit for numerical stability.
+
+int32_t * llama_context::dflash_compute_argmax() {
+    if (!logits.data || logits.size == 0 || n_outputs == 0) {
+        return nullptr;
+    }
+    const int n_vocab = model.vocab.n_tokens();
+    if (n_vocab <= 0) return nullptr;
+
+    const int n_out = (int)n_outputs;
+    dflash_argmax.resize(n_out);
+    dflash_argmax_probs.resize(n_out);
+
+    for (int i = 0; i < n_out; ++i) {
+        const float * row = logits.data + (size_t)i * n_vocab;
+
+        // Pass 1: find argmax and max value for numerical stability
+        int   best_idx = 0;
+        float best_val = row[0];
+        for (int j = 1; j < n_vocab; ++j) {
+            if (row[j] > best_val) {
+                best_val = row[j];
+                best_idx = j;
+            }
+        }
+
+        // Pass 2: compute log-softmax for the winning token
+        //   log P(best) = best_val - max - log(sum_j exp(row[j] - max))
+        float sum_exp = 0.0f;
+        for (int j = 0; j < n_vocab; ++j) {
+            sum_exp += expf(row[j] - best_val);
+        }
+        dflash_argmax[i]       = best_idx;
+        dflash_argmax_probs[i] = -logf(sum_exp); // = 0 - log(sum) = log(exp(0)/sum)
+    }
+
+    return dflash_argmax.data();
 }
 
-float * llama_get_logits_argmax_probs(struct llama_context * /*ctx*/) {
-    return nullptr;
+float * llama_context::dflash_argmax_probs_ptr() {
+    return dflash_argmax_probs.empty() ? nullptr : dflash_argmax_probs.data();
+}
+
+int32_t * llama_get_logits_argmax(struct llama_context * ctx) {
+    return ctx->dflash_compute_argmax();
+}
+
+float * llama_get_logits_argmax_probs(struct llama_context * ctx) {
+    return ctx->dflash_argmax_probs_ptr();
 }
 
 int32_t llama_get_logits_argmax_k(struct llama_context * /*ctx*/) {
-    return 1;
+    return 1; // top-1 argmax
 }

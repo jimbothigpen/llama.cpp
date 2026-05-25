@@ -248,6 +248,11 @@ struct llama_context {
     int64_t get_layer_hidden_n_embd  (int layer_idx) const;
     int32_t get_n_layer_hiddens      () const;
 
+    // DFlash S3: backend selection + bulk argmax (called from C API wrappers)
+    ggml_backend_t dflash_accel_backend();
+    int32_t *      dflash_compute_argmax();
+    float   *      dflash_argmax_probs_ptr();
+
     //
     // training
     //
@@ -350,6 +355,10 @@ private:
     // layer_hiddens[slot][capture_layer_index] — single slot in S2
     std::unique_ptr<dflash_capture_data>                 dflash_capture;
     std::vector<std::vector<dflash_layer_hidden_buf>>    layer_hiddens;
+
+    // DFlash S3: argmax output buffers (filled by llama_get_logits_argmax after decode)
+    std::vector<int32_t> dflash_argmax;       // top-1 token index per output position
+    std::vector<float>   dflash_argmax_probs; // log-prob of top-1 token per output position
 
     std::unique_ptr<llama_memory_i> memory;
 
