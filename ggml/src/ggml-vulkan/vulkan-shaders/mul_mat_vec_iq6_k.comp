@@ -1,0 +1,177 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ6_K — 6.625 bpw, 256-element block (212 bytes).
+// Block u32 layout (53 u32):
+//   u32[0]:     d (low 16) | extra (high 16)
+//   u32[1..4]:  scales[0..15]  (int8_t, 16 bytes = 4 u32)
+//   u32[5..36]: qs[0..127]     (128 bytes = 32 u32)
+//   u32[37..52]: qh[0..63]     (64 bytes = 16 u32)
+//
+// Threading: 8 threads per block (sb=0..7).
+//   ib64 = sb>>1, subpair = sb&1
+//   g_a = 4*ib64 + 2*subpair  (first  16-element group for this thread)
+//   g_b = 4*ib64 + 2*subpair + 1 (second 16-element group)
+//   qh_combined_shift = (ib64&1)*4 + subpair*2
+//   nibble_shift = subpair*4 (low/high nibble selector in qs)
+
+#define BLOCKS_PER_WG 8
+#define U32_PER_BLOCK 53
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer A_RAW {uint32_t data_a_u32[];};
+
+const int iq6nl_values[128] = int[128](
+    -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
+     -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
+      -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
+      47,   51,   55,   59,   63,   68,   72,   77,   82,   87,   92,   98,  103,  109,  115,  121,
+    -126, -120, -114, -108, -103,  -97,  -92,  -87,  -83,  -78,  -73,  -69,  -65,  -61,  -57,  -53,
+     -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
+      -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
+      48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122
+);
+
+shared uint shmem_a[BLOCKS_PER_WG * U32_PER_BLOCK];
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+
+    const uint tid = gl_LocalInvocationID.x;
+    const uint sb  = tid & 7;
+    const uint ix  = tid >> 3;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row = first_row + n;
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG),
+                                              num_blocks_per_row - i_base);
+            const uint u32_to_load = blocks_this_iter * U32_PER_BLOCK;
+
+            barrier();
+            // 8 blocks × 53 u32 = 424.  64 threads × 7 = 448 (bounds-checked).
+            [[unroll]] for (uint pi = 0; pi < 7; ++pi) {
+                const uint shmem_idx = tid + pi * 64;
+                if (shmem_idx < u32_to_load) {
+                    const uint local_block  = shmem_idx / U32_PER_BLOCK;
+                    const uint u32_in_block = shmem_idx - local_block * U32_PER_BLOCK;
+                    const uint global_block = (row * num_blocks_per_row) + i_base + local_block;
+                    shmem_a[shmem_idx] = data_a_u32[global_block * U32_PER_BLOCK + u32_in_block];
+                }
+            }
+            barrier();
+
+            const uint local_block_idx = ix;
+            const uint global_block    = i_base + local_block_idx;
+            if (local_block_idx < blocks_this_iter) {
+                const uint shmem_base = local_block_idx * U32_PER_BLOCK;
+
+                const uint d_extra = shmem_a[shmem_base + 0];
+                const float d      = float(unpackHalf2x16(d_extra).x);
+                const uint  extra  = (d_extra >> 16) & 0xffff;
+
+                const uint ib64    = sb >> 1;
+                const uint subpair = sb & 1;
+
+                // scales[g_a] and scales[g_b] from u32[1 + ib64]
+                // g_a = 4*ib64 + 2*subpair → byte (2*subpair) in u32[1+ib64]
+                // g_b = g_a + 1            → byte (2*subpair+1)
+                const uint scales_u32 = shmem_a[shmem_base + 1 + ib64];
+                const int  scale_a    = bitfieldExtract(int(scales_u32), int(2 * subpair * 8),       8);
+                const int  scale_b    = bitfieldExtract(int(scales_u32), int((2 * subpair + 1) * 8), 8);
+
+                // qs: u32[5..36], ib64 group = u32[5 + ib64*8 .. 5 + ib64*8 + 7]
+                const uint qs_u32_base_a = shmem_base + 5 + ib64 * 8;       // first  j-group
+                const uint qs_u32_base_b = qs_u32_base_a + 4;               // second j-group
+
+                // qh: u32[37..52]; (ib64/2) selects which 32-byte half (8 u32s)
+                // qh[0..15]  → u32[37..40]; qh[16..31] → u32[41..44]
+                // qh[32..47] → u32[45..48]; qh[48..63] → u32[49..52]
+                const uint qh_u32_base_a = shmem_base + 37 + (ib64 >> 1) * 8;
+                const uint qh_u32_base_b = qh_u32_base_a + 4;
+
+                const uint nibble_shift     = subpair * 4;
+                const uint qh_comb_shift    = (ib64 & 1) * 4 + subpair * 2;
+
+                const uint g_a = 4 * ib64 + 2 * subpair;
+                const uint g_b = g_a + 1;
+                const uint codebook_off_a = ((extra >> g_a) & 1) << 6;
+                const uint codebook_off_b = ((extra >> g_b) & 1) << 6;
+
+                const uint y_base = global_block * 256 + sb * 32;
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    [[unroll]] for (uint half_idx = 0; half_idx < 2; ++half_idx) {
+                        const float dl = d * float((half_idx == 0) ? scale_a : scale_b);
+                        const uint codebook_off = (half_idx == 0) ? codebook_off_a : codebook_off_b;
+                        const uint qs_u32_base  = (half_idx == 0) ? qs_u32_base_a : qs_u32_base_b;
+                        const uint qh_u32_base  = (half_idx == 0) ? qh_u32_base_a : qh_u32_base_b;
+                        const uint y_half_base  = y_base + half_idx * 16;
+
+                        FLOAT_TYPE sum = FLOAT_TYPE(0.0);
+                        [[unroll]] for (uint l = 0; l < 4; ++l) {
+                            const uint qs_u32 = shmem_a[qs_u32_base + l];
+                            const uint qh_u32 = shmem_a[qh_u32_base + l];
+
+                            const uint qs0 = (qs_u32 >>  0) & 0xff;
+                            const uint qs1 = (qs_u32 >>  8) & 0xff;
+                            const uint qs2 = (qs_u32 >> 16) & 0xff;
+                            const uint qs3 = (qs_u32 >> 24) & 0xff;
+
+                            // 2 high bits from qh byte at position qh_comb_shift
+                            const uint high2_0 = (((qh_u32 >>  0) >> qh_comb_shift) & 0x3) << 4;
+                            const uint high2_1 = (((qh_u32 >>  8) >> qh_comb_shift) & 0x3) << 4;
+                            const uint high2_2 = (((qh_u32 >> 16) >> qh_comb_shift) & 0x3) << 4;
+                            const uint high2_3 = (((qh_u32 >> 24) >> qh_comb_shift) & 0x3) << 4;
+
+                            const float v0 = float(iq6nl_values[codebook_off + ((qs0 >> nibble_shift) & 0xf) | high2_0]);
+                            const float v1 = float(iq6nl_values[codebook_off + ((qs1 >> nibble_shift) & 0xf) | high2_1]);
+                            const float v2 = float(iq6nl_values[codebook_off + ((qs2 >> nibble_shift) & 0xf) | high2_2]);
+                            const float v3 = float(iq6nl_values[codebook_off + ((qs3 >> nibble_shift) & 0xf) | high2_3]);
+
+                            const vec4 b = vec4(data_b_v4[(j * p.batch_stride_b + b_offset + y_half_base) / 4 + l]);
+
+                            sum = fma(FLOAT_TYPE(b.x), FLOAT_TYPE(v0),
+                                  fma(FLOAT_TYPE(b.y), FLOAT_TYPE(v1),
+                                  fma(FLOAT_TYPE(b.z), FLOAT_TYPE(v2),
+                                  fma(FLOAT_TYPE(b.w), FLOAT_TYPE(v3), sum))));
+                        }
+                        temp[j][n] = fma(FLOAT_TYPE(dl), sum, temp[j][n]);
+                    }
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}
