@@ -2,26 +2,29 @@
 //
 // Architecture summary:
 //   The codebook is NOT stored — it's regenerated on demand via a deterministic
-//   bit-mixing function (`set_values_int`).  A 16-bit index + offset selects a
-//   group_size-element float vector via a hash-like state machine.
+//   bit-mixing function (iqkt_gen_group_int from ggml-iqk-kt-family.hpp).
+//   A 15-bit index + offset selects a group_size-element float vector via a
+//   hash-like state machine.
 //
-//   Quantize: brute-force nearest-neighbor search over the implicit 32K codebook
-//   per group (~140ms for 4096 elements; clustering optimization deferred).
+//   Quantize: nearest-neighbor search over the implicit 32K codebook per group
+//   (~140ms for 4096 elements with brute force; soft-bin clustering ~100× faster).
 //   Dequant: trivial — just call the formula.
 //
-// IQ4_KT specifically: QuantizerIQKT<block_size=32, group_size=4, num_bits=15,
-//   is_abs=false, is_int=true>.  kNumVal = 32768.  Two implicit codebooks (offset
-//   4096 vs 36864) selected per-sub-block by shb[ib] & 1.
+// IQ4_KT specifically: IQ4KTParams = IQKTParams<GROUP_SIZE=4, NUM_BITS=15, IS_ABS=false>.
+//   kNumVal = 32768.  Two implicit codebooks (offset 4096 vs 36864) selected
+//   per-sub-block by shb[ib] & 1.
 //
 // Block layout (128 bytes per QK_K=256 elements):
 //   shb[0..7]   = 8 uint32_t (32 B): bit 0 = "use offset2" flag, bits 1..7 = signed
 //                 6-bit-offset-by-64 scale, bits 8..31 = 24 high bits across 4 groups
-//   ql[0..63]   = 64 B: 8-bit low part of 16-bit index, one byte per group
+//   ql[0..63]   = 64 B: 8-bit low part of 15-bit index, one byte per group
 //                 (kNumGroups = 32 groups per superblock; 8 sub-blocks × 4 groups)
 //   qh[0..15]   = 16 B: 4-bit mid part of index, two groups packed per byte
 //   bytes 80..127 unused (block size is allocated padded to 128 B).
 //
 // Row layout: [float row_scale][block_iq4_kt blocks[n_per_row/QK_K]]; row_meta=4.
+
+#include "ggml-iqk-kt-family.hpp"
 
 #include "ggml-impl.h"
 #include "ggml-common.h"
@@ -44,124 +47,27 @@ extern "C" {
 
 namespace {
 
+// IQ4_KT block-layout constants.
 constexpr int kIQ4KT_BlockSize  = 32;
-constexpr int kIQ4KT_GroupSize  = 4;
-constexpr int kIQ4KT_NumBits    = 15;
-constexpr int kIQ4KT_NumVal     = 1 << kIQ4KT_NumBits;   // 32768
+constexpr int kIQ4KT_GroupSize  = IQ4KTParams::kGroupSize;   // 4
+constexpr int kIQ4KT_NumBits    = IQ4KTParams::kNumBits;     // 15
+constexpr int kIQ4KT_NumVal     = IQ4KTParams::kNumVal;      // 32768
 constexpr int kIQ4KT_Ng         = kIQ4KT_BlockSize / kIQ4KT_GroupSize; // 8
 constexpr int kIQ4KT_Nblock     = QK_K / kIQ4KT_BlockSize;             // 8
 constexpr int kIQ4KT_NumGroups  = QK_K / kIQ4KT_GroupSize;             // 64
 constexpr int kIQ4KT_OffsetA    = 4096;
 constexpr int kIQ4KT_OffsetB    = 4096 + 32768;
+constexpr int kIQ4KT_NeighboursPB = 6;    // soft-bin replication factor
 
-// Deterministic codebook generator (the "is_int" branch of QuantizerIQKT::set_values).
-// idx is a 16-bit index, offset selects between codebook A and B.  Generates
-// kIQ4KT_GroupSize floats.  The output values are integers in [-126, +126].
-static inline void iq4kt_gen_group(uint32_t idx, int offset, float * result) {
-    constexpr uint32_t ka = 0xCBAC1FED;
-    uint32_t x = idx + (uint32_t)offset;
-    for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-        x = ka * x;
-        const uint32_t s = x & 0x3f3f3f3f;
-        const int8_t  i0 = (int8_t)(s & 0xff);
-        const int8_t  i1 = (int8_t)((s >> 8) & 0xff);
-        const int8_t  i2 = (int8_t)((s >> 16) & 0xff);
-        const int8_t  i3 = (int8_t)((s >> 24) & 0xff);
-        // Each int8_t is in [0, 63] because we masked to 6 bits.  Sum in [0, 252].
-        result[k] = (float)((int)i0 + (int)i1 + (int)i2 + (int)i3 - 126);
-    }
-}
-
-// Build the full codebook for a given offset, plus a 625-bin soft-clustering
-// index for fast nearest-neighbour search.
-//
-// Clustering scheme (mirrors ik_llama's QuantizerIQKT for ndim=4, ncluster=625):
-//   1. Hash each codebook entry into a 5×5×5×5 = 625-bin grid via bin5(v[k]).
-//   2. Compute each bin's centroid (mean of points hashed to it).
-//   3. SOFT BINNING: for each codebook entry, find the kNeighbours=6 nearest bin
-//      centroids and add it to all of them.  This way a query hashing to bin X
-//      gets access to entries that are spatially near X even if their primary
-//      bin is different — fixes the boundary-miss problem of hard binning.
-//
-// Result: at search time, hash query → scan ~315 candidates per bin
-// (32768 entries × 6 placements / 625 bins ≈ 315) instead of 32768.
-// That's ~100× faster for IQ4_KT quantize, making real-model use feasible.
-constexpr int kIQ4KT_NumBins      = 625;     // 5^4
-constexpr int kIQ4KT_NeighboursPB = 6;       // soft-bin replication factor
-
-static inline int iq4kt_bin5(float x) {
-    return x < -48.f ? 0 : x < -16.f ? 1 : x < 16.f ? 2 : x < 48.f ? 3 : 4;
-}
-
-static inline int iq4kt_hash_bin4(const float * v) {
-    return iq4kt_bin5(v[0]) + 5*iq4kt_bin5(v[1]) + 25*iq4kt_bin5(v[2]) + 125*iq4kt_bin5(v[3]);
-}
-
-struct IQ4KT_CookedBook {
-    std::vector<float> values;                    // codebook (kNumVal × group_size floats)
-    std::vector<std::vector<int>> bin_to_entries; // 625 bins, each with list of entry indices
-};
-
+// Dual codebook (offset A + offset B) for IQ4_KT.
+// Other IQ_KT family members use a single codebook each; see family header.
 struct IQ4KT_Codebook {
-    IQ4KT_CookedBook a;   // offset = kIQ4KT_OffsetA
-    IQ4KT_CookedBook b;   // offset = kIQ4KT_OffsetB
+    IQKTCookedBook<kIQ4KT_GroupSize, kIQ4KT_NumBits> a;   // offset = kIQ4KT_OffsetA
+    IQKTCookedBook<kIQ4KT_GroupSize, kIQ4KT_NumBits> b;   // offset = kIQ4KT_OffsetB
     bool initialized = false;
 };
 
 static IQ4KT_Codebook g_iq4kt_codebook;
-
-static void iq4kt_build_cluster_index(IQ4KT_CookedBook & cb) {
-    const float * V = cb.values.data();
-    cb.bin_to_entries.assign(kIQ4KT_NumBins, {});
-
-    // Phase 1: primary binning, compute centroids.
-    std::vector<int>   bin_count(kIQ4KT_NumBins, 0);
-    std::vector<float> bin_sum((size_t)kIQ4KT_NumBins * kIQ4KT_GroupSize, 0.f);
-    for (int i = 0; i < kIQ4KT_NumVal; ++i) {
-        const float * v = V + (size_t)i * kIQ4KT_GroupSize;
-        const int b = iq4kt_hash_bin4(v);
-        bin_count[b]++;
-        for (int k = 0; k < kIQ4KT_GroupSize; ++k) bin_sum[b * kIQ4KT_GroupSize + k] += v[k];
-    }
-    std::vector<float> centroid((size_t)kIQ4KT_NumBins * kIQ4KT_GroupSize, 0.f);
-    for (int b = 0; b < kIQ4KT_NumBins; ++b) {
-        if (bin_count[b] > 0) {
-            for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-                centroid[b * kIQ4KT_GroupSize + k] = bin_sum[b * kIQ4KT_GroupSize + k] / bin_count[b];
-            }
-        }
-    }
-
-    // Phase 2: for each entry, find kNeighbours nearest non-empty centroids and
-    // append the entry to each of those bins.  ~32768 × 625 = 20M ops, runs once.
-    for (int i = 0; i < kIQ4KT_NumVal; ++i) {
-        const float * v = V + (size_t)i * kIQ4KT_GroupSize;
-        float best_d[kIQ4KT_NeighboursPB];
-        int   best_b[kIQ4KT_NeighboursPB];
-        for (int j = 0; j < kIQ4KT_NeighboursPB; ++j) { best_d[j] = INFINITY; best_b[j] = -1; }
-        for (int b = 0; b < kIQ4KT_NumBins; ++b) {
-            if (bin_count[b] == 0) continue;
-            const float * c = centroid.data() + (size_t)b * kIQ4KT_GroupSize;
-            float dist = 0;
-            for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-                const float d = v[k] - c[k]; dist += d * d;
-            }
-            // Insertion sort into top-kNeighbours.
-            for (int j = 0; j < kIQ4KT_NeighboursPB; ++j) {
-                if (dist < best_d[j]) {
-                    for (int kk = kIQ4KT_NeighboursPB - 1; kk > j; --kk) {
-                        best_d[kk] = best_d[kk - 1]; best_b[kk] = best_b[kk - 1];
-                    }
-                    best_d[j] = dist; best_b[j] = b;
-                    break;
-                }
-            }
-        }
-        for (int j = 0; j < kIQ4KT_NeighboursPB; ++j) {
-            if (best_b[j] >= 0) cb.bin_to_entries[best_b[j]].push_back(i);
-        }
-    }
-}
 
 // Thread-safe lazy initialization.  test-backend-ops parallelizes quantize across
 // threads via std::async; without synchronization, multiple threads racing on the
@@ -169,14 +75,10 @@ static void iq4kt_build_cluster_index(IQ4KT_CookedBook & cb) {
 static std::once_flag g_iq4kt_init_once;
 
 static void iq4kt_codebook_do_init() {
-    g_iq4kt_codebook.a.values.resize((size_t)kIQ4KT_NumVal * kIQ4KT_GroupSize);
-    g_iq4kt_codebook.b.values.resize((size_t)kIQ4KT_NumVal * kIQ4KT_GroupSize);
-    for (int i = 0; i < kIQ4KT_NumVal; ++i) {
-        iq4kt_gen_group((uint32_t)i, kIQ4KT_OffsetA, g_iq4kt_codebook.a.values.data() + i * kIQ4KT_GroupSize);
-        iq4kt_gen_group((uint32_t)i, kIQ4KT_OffsetB, g_iq4kt_codebook.b.values.data() + i * kIQ4KT_GroupSize);
-    }
-    iq4kt_build_cluster_index(g_iq4kt_codebook.a);
-    iq4kt_build_cluster_index(g_iq4kt_codebook.b);
+    iqkt_cooked_book_init<kIQ4KT_GroupSize, kIQ4KT_NumBits, false>(
+        g_iq4kt_codebook.a, kIQ4KT_OffsetA, kIQ4KT_NeighboursPB);
+    iqkt_cooked_book_init<kIQ4KT_GroupSize, kIQ4KT_NumBits, false>(
+        g_iq4kt_codebook.b, kIQ4KT_OffsetB, kIQ4KT_NeighboursPB);
     g_iq4kt_codebook.initialized = true;
 }
 
@@ -184,49 +86,9 @@ static inline void iq4kt_codebook_init() {
     std::call_once(g_iq4kt_init_once, iq4kt_codebook_do_init);
 }
 
-// Clustered nearest-neighbour search.  Hashes the id-scaled query, scans only
-// entries assigned to that bin (~315 candidates avg).  If the bin is empty
-// (rare — happens when the query hashes to a region with no codebook coverage),
-// fall back to brute force.
-static int iq4kt_find_best_index(const float * xb, const float * weight, float d,
-                                 const IQ4KT_CookedBook & cb) {
-    const float id = d != 0.f ? 1.f / d : 0.f;
-    float xs[kIQ4KT_GroupSize];
-    for (int k = 0; k < kIQ4KT_GroupSize; ++k) xs[k] = id * xb[k];
-    const int b = iq4kt_hash_bin4(xs);
-    const auto & candidates = cb.bin_to_entries[b];
-    const float * V = cb.values.data();
-
-    if (!candidates.empty()) {
-        float best_dist = INFINITY;
-        int best_i = candidates[0];
-        for (int e : candidates) {
-            const float * v = V + (size_t)e * kIQ4KT_GroupSize;
-            float dist = 0;
-            for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-                const float diff = v[k] - xs[k];
-                dist += weight[k] * diff * diff;
-            }
-            if (dist < best_dist) { best_dist = dist; best_i = e; }
-        }
-        return best_i;
-    }
-    // Fallback: brute force (should be very rare).
-    float best_dist = INFINITY;
-    int best_i = 0;
-    for (int i = 0; i < kIQ4KT_NumVal; ++i) {
-        const float * v = V + (size_t)i * kIQ4KT_GroupSize;
-        float dist = 0;
-        for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-            const float diff = v[k] - xs[k];
-            dist += weight[k] * diff * diff;
-        }
-        if (dist < best_dist) { best_dist = dist; best_i = i; }
-    }
-    return best_i;
-}
-
-// Find best scale d such that d * codebook[best_idx] approximates xb under weight.
+// Find best per-sub-block scale d such that d * codebook[best_idx[g]] approximates xb.
+// IQ4_KT-specific: takes both codebook_a and codebook_b (dual-codebook).
+// IQ2/3/1_KT use a single codebook; their scale-finding is simpler and defined in P3a/b/c.
 static float iq4kt_find_best_scale(const float * xb, const float * weight,
                                    const int * best_idx, const float * codebook_a,
                                    const float * codebook_b, const uint8_t * use_b) {
@@ -244,34 +106,13 @@ static float iq4kt_find_best_scale(const float * xb, const float * weight,
     return sumq2 > 0.f ? sumqx / sumq2 : 0.f;
 }
 
-// Brute-force fallback used during the second-pass per-group lookup with the
-// final scale, when we want guaranteed best match (no clustering miss).
-static int iq4kt_find_best_index_brute(const float * xb, const float * weight, float d,
-                                       const float * codebook) {
-    const float id = d != 0.f ? 1.f / d : 0.f;
-    float xs[kIQ4KT_GroupSize];
-    for (int k = 0; k < kIQ4KT_GroupSize; ++k) xs[k] = id * xb[k];
-    float best_dist = INFINITY;
-    int best_i = 0;
-    for (int i = 0; i < kIQ4KT_NumVal; ++i) {
-        const float * v = codebook + (size_t)i * kIQ4KT_GroupSize;
-        float dist = 0;
-        for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
-            const float diff = v[k] - xs[k];
-            dist += weight[k] * diff * diff;
-        }
-        if (dist < best_dist) { best_dist = dist; best_i = i; }
-    }
-    return best_i;
-}
-
-// Per-row IQ4_KT quantizer (brute-force search).  Mirrors quantize_row_iq4_kt_impl
-// in ik_llama.cpp but without the cluster-acceleration.
+// Per-row IQ4_KT quantizer.  Uses iqkt_find_best_index from the family header
+// for cluster-accelerated NN search over both codebooks.
 static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
                                      const float * quant_weights) {
     iq4kt_codebook_init();
-    const IQ4KT_CookedBook & ckA = g_iq4kt_codebook.a;
-    const IQ4KT_CookedBook & ckB = g_iq4kt_codebook.b;
+    const IQKTCookedBook<kIQ4KT_GroupSize, kIQ4KT_NumBits> & ckA = g_iq4kt_codebook.a;
+    const IQKTCookedBook<kIQ4KT_GroupSize, kIQ4KT_NumBits> & ckB = g_iq4kt_codebook.b;
     const float * cb_a = ckA.values.data();
     const float * cb_b = ckB.values.data();
 
@@ -281,7 +122,7 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
     float * dptr = (float *)cy;
     block_iq4_kt * y = (block_iq4_kt *)(dptr + 1);
 
-    // Compute weights (sigma2 + xb²) * imatrix when imatrix provided.
+    // Compute weights (sigma2 + xb²) × imatrix when imatrix provided.
     std::vector<float> weights(n_per_row);
     {
         constexpr float kEps2 = 1e-14f;
@@ -325,7 +166,7 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
 
     std::vector<float> all_scales((size_t)nblock * kIQ4KT_Nblock);
 
-    // Phase 1: per-sub-block, find best scale + offset choice.
+    // Phase 1: per-sub-block, find best scale + codebook choice (A or B).
     float amax_scale = 0, max_scale = 0;
     int best_idx[kIQ4KT_Ng];
     float xaux[kIQ4KT_BlockSize];
@@ -347,8 +188,8 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
                 continue;
             }
             // Try a few starting scales with codebook A; pick best.  Mirrors ik_llama
-            // logic but simplified (we already do exhaustive search per group, so we
-            // only need a small handful of starting points).
+            // logic but simplified (we do exhaustive cluster search per group, so only
+            // a small handful of starting points needed).
             float best_score = -INFINITY;
             const float scale_0 = std::max(90.f, 124.f * amax / amax_row);
             uint8_t use_b[kIQ4KT_Ng];
@@ -356,12 +197,12 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
             for (int sign = 0; sign < 2; ++sign) {
                 const float d_init = (sign == 0 ? amax : -amax) / scale_0;
                 for (int g = 0; g < kIQ4KT_Ng; ++g) {
-                    best_idx[g] = iq4kt_find_best_index(xaux + g * kIQ4KT_GroupSize,
-                                                       weight + g * kIQ4KT_GroupSize,
-                                                       d_init, ckA);
+                    best_idx[g] = iqkt_find_best_index<kIQ4KT_GroupSize, kIQ4KT_NumBits, false>(
+                        xaux + g * kIQ4KT_GroupSize,
+                        weight + g * kIQ4KT_GroupSize,
+                        d_init, ckA);
                 }
                 const float d = iq4kt_find_best_scale(xaux, weight, best_idx, cb_a, cb_b, use_b);
-                // Score = sumqx * d.
                 float sumqx = 0;
                 for (int g = 0; g < kIQ4KT_Ng; ++g) {
                     const float * v  = cb_a + (size_t)best_idx[g] * kIQ4KT_GroupSize;
@@ -376,9 +217,10 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
             for (int sign = 0; sign < 2; ++sign) {
                 const float d_init = (sign == 0 ? amax : -amax) / scale_0;
                 for (int g = 0; g < kIQ4KT_Ng; ++g) {
-                    best_idx[g] = iq4kt_find_best_index(xaux + g * kIQ4KT_GroupSize,
-                                                       weight + g * kIQ4KT_GroupSize,
-                                                       d_init, ckB);
+                    best_idx[g] = iqkt_find_best_index<kIQ4KT_GroupSize, kIQ4KT_NumBits, false>(
+                        xaux + g * kIQ4KT_GroupSize,
+                        weight + g * kIQ4KT_GroupSize,
+                        d_init, ckB);
                 }
                 for (int g = 0; g < kIQ4KT_Ng; ++g) use_b[g] = 1;
                 const float d = iq4kt_find_best_scale(xaux, weight, best_idx, cb_a, cb_b, use_b);
@@ -430,13 +272,14 @@ static void quantize_row_iq4_kt_impl(const float * x, char * cy, int n_per_row,
             shb[ib] = (shb[ib] & ~0xffu) | scale_byte;
 
             const bool use_b = (shb[ib] & 1) != 0;
-            const IQ4KT_CookedBook & ck = use_b ? ckB : ckA;
+            const IQKTCookedBook<kIQ4KT_GroupSize, kIQ4KT_NumBits> & ck = use_b ? ckB : ckA;
             const float * cb = use_b ? cb_b : cb_a;
             const float dl = d_row * (float)ls;
             for (int g = 0; g < kIQ4KT_Ng; ++g) {
-                best_idx[g] = iq4kt_find_best_index(xaux + g * kIQ4KT_GroupSize,
-                                                   weight + g * kIQ4KT_GroupSize,
-                                                   dl, ck);
+                best_idx[g] = iqkt_find_best_index<kIQ4KT_GroupSize, kIQ4KT_NumBits, false>(
+                    xaux + g * kIQ4KT_GroupSize,
+                    weight + g * kIQ4KT_GroupSize,
+                    dl, ck);
             }
 
             for (int g = 0; g < kIQ4KT_Ng; ++g) {
@@ -487,7 +330,7 @@ void dequantize_row_iq4_kt(const block_iq4_kt * GGML_RESTRICT vx, float * GGML_R
                 const uint32_t idx = (uint32_t)ql[jj]
                                    | (((uint32_t)((qh[qh_byte] >> (4 * qh_nibble)) & 0xf)) << 8)
                                    | (((uint32_t)((shb[ib] >> (8 + 3 * g)) & 7)) << 12);
-                iq4kt_gen_group(idx, offset, y);
+                iqkt_gen_group_int<kIQ4KT_GroupSize>(idx, offset, y);
                 for (int kk = 0; kk < kIQ4KT_GroupSize; ++kk) y[kk] *= sl;
                 y += kIQ4KT_GroupSize;
             }
@@ -551,7 +394,7 @@ void ggml_vec_dot_iq4_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
                 const uint32_t idx = (uint32_t)ql[jj]
                                    | (((uint32_t)((qh[qh_byte] >> (4 * qh_nibble)) & 0xf)) << 8)
                                    | (((uint32_t)((shb[ib] >> (8 + 3 * g)) & 7)) << 12);
-                iq4kt_gen_group(idx, offset, gv);
+                iqkt_gen_group_int<kIQ4KT_GroupSize>(idx, offset, gv);
                 for (int k = 0; k < kIQ4KT_GroupSize; ++k) {
                     sumf += dl * gv[k] * (float)q8[k];
                 }
