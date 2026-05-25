@@ -37,8 +37,8 @@ but with an architecture co-designed with the target backbone:
 | Convert Hugging Face checkpoint → GGUF | ✅ |
 | `gguf-dump` inspection | ✅ |
 | Model load (`llama_model_load_from_file`) | ✅ |
-| Forward pass / `llama_decode` | ⛔ aborts with a clear message |
-| Speculative-decoding integration | ⛔ follow-up PR |
+| Forward pass / `llama_decode` | ✅ foreign-KV external-assistant path shipped |
+| Speculative-decoding integration | ✅ external-assistant MTP shipped; ~85–89% accept on Gemma4-26B-A4B (ROCm + Vulkan) |
 
 The runtime path is intentionally gated: completing it requires plumbing the
 target context's last-layer K/V tensors into the drafter context, which is a
@@ -101,10 +101,16 @@ Tensor schema (per-block tensors are written for `blk.0..3`):
   same command (only the backbone size changes); they are not exercised by
   this PR but should work — please file an issue if not.
 
-## Why the runtime is staged
+## Runtime implementation (shipped)
+
+**Shipped:** The external-assistant MTP decoding path is implemented in this fork.
+The three pieces described below were all resolved and shipped as part of the
+fork's Phase 2 Gemma4 external-assistant MTP work (see CHANGELOG.md).
+
+The three pieces that were required:
 
 Implementing decoding faithfully needs three pieces that don't exist yet
-in llama.cpp:
+in mainline llama.cpp (implemented as fork-divergence, 666 LoC, per §D1):
 
 1. **Cross-context K/V exposure.** Reading the target context's last-layer
    K/V at decode time and passing those tensors as graph inputs to the
