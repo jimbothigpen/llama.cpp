@@ -172,6 +172,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
     COMMON_SPECULATIVE_TYPE_PHANTOM,       // phantom: bloom + adaptive γ + fallback + ghost buffer
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash block-diffusion speculative decoding
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 

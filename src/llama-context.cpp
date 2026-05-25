@@ -1722,6 +1722,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     mtp_chain_depth = 0;
 
+    // DFlash: reset per-layer hidden state capture before each decode so
+    // the eval callback accumulates only this decode's tokens.
+    dflash_reset_hidden_capture();
+
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
@@ -4199,4 +4203,196 @@ void llama_opt_epoch(
 
 llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
     return ctx->memory_breakdown();
+}
+
+// =============================================================================
+// DFlash hidden-state capture — eval callback + public API
+// =============================================================================
+
+static bool dflash_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * cap = (dflash_capture_data *) user_data;
+    if (!cap || !cap->hiddens || cap->layer_ids.empty()) {
+        return false;
+    }
+
+    const char * t_name = ggml_get_name(t);
+    if (!t_name) {
+        return false;
+    }
+
+    auto it = cap->hidden_name_idx.find(t_name);
+    if (it == cap->hidden_name_idx.end()) {
+        return false;
+    }
+
+    const size_t cap_idx = it->second;
+
+    if (ask) {
+        // Ask: should we capture this tensor?
+        return ggml_is_contiguous(t) && t->type == GGML_TYPE_F32;
+    }
+
+    // ask=false: tensor data is ready — read it into the hidden buffer.
+    // For simplicity (single-seq S2), capture into slot 0.
+    if (cap->hiddens->empty()) {
+        return true;
+    }
+    auto & slot_bufs = (*cap->hiddens)[0];
+    if (cap_idx >= slot_bufs.size()) {
+        return true;
+    }
+    auto & buf = slot_bufs[cap_idx];
+
+    // Tensor shape: [n_embd, n_tokens] (ggml ne[0]=n_embd, ne[1]=n_tokens)
+    const int64_t n_embd_t   = t->ne[0];
+    const int64_t n_tokens_t = ggml_nelements(t) / n_embd_t;
+
+    const size_t add_elems  = (size_t)n_embd_t * n_tokens_t;
+    const size_t old_elems  = (size_t)buf.n_embd * buf.n_tokens;
+
+    buf.data.resize(old_elems + add_elems);
+    ggml_backend_tensor_get(t, buf.data.data() + old_elems, 0, add_elems * sizeof(float));
+
+    buf.n_embd    = n_embd_t;
+    buf.n_tokens += n_tokens_t;
+
+    return true;
+}
+
+void llama_context::set_dflash_capture(const int32_t * layer_ids, int32_t n_layers) {
+    dflash_capture = std::make_unique<dflash_capture_data>();
+    dflash_capture->hiddens = &layer_hiddens;
+    layer_hiddens.assign(1, std::vector<dflash_layer_hidden_buf>(n_layers));
+
+    for (int32_t i = 0; i < n_layers; ++i) {
+        dflash_capture->layer_ids.push_back(layer_ids[i]);
+        std::string name = "l_out-" + std::to_string(layer_ids[i]);
+        dflash_capture->hidden_name_idx[name] = (size_t)i;
+        dflash_capture->tensor_names.push_back(std::move(name));
+    }
+
+    cparams.cb_eval           = dflash_eval_callback;
+    cparams.cb_eval_user_data = dflash_capture.get();
+
+    // Re-arm scheduler with the new callback (takes effect on next graph compute).
+    if (sched) {
+        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+    }
+}
+
+void llama_context::dflash_reset_hidden_capture() {
+    if (!dflash_capture || layer_hiddens.empty()) {
+        return;
+    }
+    for (auto & slot_bufs : layer_hiddens) {
+        for (auto & buf : slot_bufs) {
+            buf.n_tokens = 0;
+            buf.data.clear();
+        }
+    }
+}
+
+float * llama_context::get_layer_hidden(int layer_idx) {
+    if (!dflash_capture || layer_hiddens.empty()) {
+        return nullptr;
+    }
+    auto & slot_bufs = layer_hiddens[0];
+    if (layer_idx < 0 || layer_idx >= (int)slot_bufs.size()) {
+        return nullptr;
+    }
+    auto & buf = slot_bufs[layer_idx];
+    return buf.n_tokens > 0 ? buf.data.data() : nullptr;
+}
+
+int64_t llama_context::get_layer_hidden_n_tokens(int layer_idx) const {
+    if (!dflash_capture || layer_hiddens.empty()) {
+        return 0;
+    }
+    const auto & slot_bufs = layer_hiddens[0];
+    if (layer_idx < 0 || layer_idx >= (int)slot_bufs.size()) {
+        return 0;
+    }
+    return slot_bufs[layer_idx].n_tokens;
+}
+
+int64_t llama_context::get_layer_hidden_n_embd(int layer_idx) const {
+    if (!dflash_capture || layer_hiddens.empty()) {
+        return 0;
+    }
+    const auto & slot_bufs = layer_hiddens[0];
+    if (layer_idx < 0 || layer_idx >= (int)slot_bufs.size()) {
+        return 0;
+    }
+    return slot_bufs[layer_idx].n_embd;
+}
+
+int32_t llama_context::get_n_layer_hiddens() const {
+    if (!dflash_capture || layer_hiddens.empty()) {
+        return 0;
+    }
+    return (int32_t)layer_hiddens[0].size();
+}
+
+// Public C API wrappers
+
+void llama_set_dflash_capture(struct llama_context * ctx, const int32_t * layer_ids, int32_t n_layers) {
+    ctx->set_dflash_capture(layer_ids, n_layers);
+}
+
+void llama_context::set_cross_data(const float * data, int64_t n_embd, int64_t n_enc) {
+    cross.v_embd.assign(data, data + n_embd * n_enc);
+    cross.n_embd = n_embd;
+    cross.n_enc  = n_enc;
+}
+
+void llama_set_cross_data(struct llama_context * ctx, const float * data, int64_t n_embd, int64_t n_enc) {
+    ctx->set_cross_data(data, n_embd, n_enc);
+}
+
+int32_t llama_get_n_layer_hiddens(const struct llama_context * ctx) {
+    return ctx->get_n_layer_hiddens();
+}
+
+float * llama_get_layer_hidden(struct llama_context * ctx, int layer_idx) {
+    return ctx->get_layer_hidden(layer_idx);
+}
+
+int64_t llama_get_layer_hidden_n_tokens(const struct llama_context * ctx, int layer_idx) {
+    return ctx->get_layer_hidden_n_tokens(layer_idx);
+}
+
+int64_t llama_get_layer_hidden_n_embd(const struct llama_context * ctx, int layer_idx) {
+    return ctx->get_layer_hidden_n_embd(layer_idx);
+}
+
+// Stub implementations (GPU ring, argmax, slot selection — S2 CPU-only path)
+
+void llama_dflash_set_active_slot(struct llama_context * /*ctx*/, int /*slot_idx*/) {
+    // single-slot S2: no-op
+}
+
+void * llama_dflash_cross_ring_gpu_init(struct llama_context * /*ctx*/, int /*n_layers*/, int /*n_embd*/, int /*ring_size*/) {
+    return nullptr; // forces CPU fallback in common_speculative_impl_dflash
+}
+
+void llama_dflash_cross_ring_gpu_free(void * /*handle*/) {}
+
+void llama_dflash_cross_ring_gpu_write(void * /*handle*/, int /*layer*/, int /*ring_pos*/, const float * /*data*/, int /*n_tokens*/, int /*n_embd*/) {}
+
+void llama_dflash_cross_ring_gpu_set_cross(struct llama_context * /*ctx*/, void * /*handle*/, llama_seq_id /*seq_id*/, int /*ring_write_pos*/, int /*ring_filled*/, int /*n_layers*/, int /*n_embd*/, int /*ctx_window*/) {}
+
+void llama_set_dflash_topk(struct llama_context * /*ctx*/, int /*k*/) {}
+void llama_set_dflash_sample_temp(struct llama_context * /*ctx*/, float /*temp*/) {}
+void llama_set_dflash_n_slots(struct llama_context * /*ctx*/, int /*n*/) {}
+
+int32_t * llama_get_logits_argmax(struct llama_context * /*ctx*/) {
+    return nullptr; // forces CPU argmax in speculative.cpp
+}
+
+float * llama_get_logits_argmax_probs(struct llama_context * /*ctx*/) {
+    return nullptr;
+}
+
+int32_t llama_get_logits_argmax_k(struct llama_context * /*ctx*/) {
+    return 1;
 }
