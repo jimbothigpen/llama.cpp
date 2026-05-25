@@ -156,6 +156,20 @@ GGML_API void dequantize_row_iq2_k  (const block_iq2_k * GGML_RESTRICT x, float 
 GGML_API size_t quantize_iq2_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API void ggml_vec_dot_iq2_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+// IQ5_K: ik_llama 5-bit imatrix-aware weight quant (5.50 bpw) — source: ikllama/main
+GGML_API void quantize_row_iq5_k_ref(const float * GGML_RESTRICT x, block_iq5_k * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_iq5_k    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_iq5_k  (const block_iq5_k * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_iq5_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API void ggml_vec_dot_iq5_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
+// IQ6_K: ik_llama 6-bit imatrix-aware weight quant (6.625 bpw) — source: ikllama/ik/iq6_k
+GGML_API void quantize_row_iq6_k_ref(const float * GGML_RESTRICT x, block_iq6_k * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_iq6_k    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_iq6_k  (const block_iq6_k * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_iq6_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API void ggml_vec_dot_iq6_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 // Phase 5b-1b: row-meta KS family weight quants
 GGML_API void quantize_row_iq4_ks_ref(const float * GGML_RESTRICT x, block_iq4_ks * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_ks    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);

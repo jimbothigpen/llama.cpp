@@ -721,6 +721,204 @@ static void launch_mul_mat_vec_iq2_k_q8_1(
 }
 
 // ============================================================================
+// IQ5_K MMVQ kernel.  No row meta.  Per block_iq5_k:
+//   half d, uint16 extra (1 codebook-shift bit per 16-element group),
+//   scales_h[4] (2-bit high parts of 16 sub-block scales),
+//   scales_l[8] (4-bit low parts), qs[128] (4 low bits of 5-bit index),
+//   qh[32] (1 high bit per element, packed 8 per byte).
+// Scale format identical to IQ4_K (6-bit: 2h+4l, offset -32).
+// ============================================================================
+
+extern __constant__ int8_t iq5nl_values_dev[];
+
+static __global__ void mul_mat_vec_iq5_k_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+    const int lane = threadIdx.x;
+
+    const block_iq5_k * x = (const block_iq5_k *)((const char *)vx + (size_t)row * row_size_x);
+    const block_q8_1  * y = (const block_q8_1 *)vy;
+
+    const int total_subblocks = (ncols_x / QK_K) * 8;
+    float sumf = 0.0f;
+
+    for (int sb_flat = lane; sb_flat < total_subblocks; sb_flat += 32) {
+        const int blk  = sb_flat / 8;
+        const int ib32 = sb_flat % 8;
+
+        const block_iq5_k * bq5 = &x[blk];
+        const block_q8_1  * bq8 = &y[blk * (QK_K / QK8_1) + ib32];
+        const int32_t * q8 = (const int32_t *)bq8->qs;
+
+        // qs layout: qs[(ib32/2)*32 + e_local], low nibble for which_half=0, high for which_half=1.
+        // qh layout: qh[e_local] >> ib32 & 1 (all 8 ib32 sub-blocks share qh[0..31]).
+        const uint8_t * qs_base = bq5->qs + (ib32 / 2) * 32;
+        const uint8_t * qh      = bq5->qh;   // no ib32 offset; bit index IS ib32
+        const int       use_hi  = ib32 & 1;
+
+        const uint16_t extra   = bq5->extra;
+        const int8_t * vals_lo = iq5nl_values_dev + ((extra >> (2*ib32    )) & 1) * 32;
+        const int8_t * vals_hi = iq5nl_values_dev + ((extra >> (2*ib32 + 1)) & 1) * 32;
+
+        const uint8_t  sh  = bq5->scales_h[ib32 / 2] >> (4 * (ib32 % 2));
+        const int      ls1 = ((bq5->scales_l[ib32] & 0xf)  | ((sh << 4) & 0x30)) - 32;
+        const int      ls2 = ((bq5->scales_l[ib32] >>   4) | ((sh << 2) & 0x30)) - 32;
+
+        int sumi1 = 0, sumi2 = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = j * 4 + k;          // e_local 0..15
+                const int qs4  = use_hi ? (qs_base[e] >> 4) : (qs_base[e] & 0xf);
+                const int idx5 = qs4 | (((qh[e] >> ib32) & 1) << 4);
+                v |= ((uint32_t)(uint8_t)vals_lo[idx5] << (k * 8));
+            }
+            sumi1 = ggml_cuda_dp4a(v, q8[j], sumi1);
+        }
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = 16 + j * 4 + k;     // e_local 16..31
+                const int qs4  = use_hi ? (qs_base[e] >> 4) : (qs_base[e] & 0xf);
+                const int idx5 = qs4 | (((qh[e] >> ib32) & 1) << 4);
+                v |= ((uint32_t)(uint8_t)vals_hi[idx5] << (k * 8));
+            }
+            sumi2 = ggml_cuda_dp4a(v, q8[j + 4], sumi2);
+        }
+
+        const float d = __half2float(bq5->d) * __low2float(bq8->ds);
+        sumf += d * (float)(sumi1 * ls1 + sumi2 * ls2);
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+    if (lane == 0) dst[row] = sumf;
+}
+
+static void launch_mul_mat_vec_iq5_k_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq5_k_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
+// IQ6_K MMVQ kernel.  No row meta.  Per block_iq6_k:
+//   half d, uint16 extra (1 codebook-shift bit per 16-element group),
+//   scales[16] (direct int8 per 16-element group, no offset),
+//   qs[128] (4 low bits of 6-bit index), qh[64] (2 high bits per element,
+//   packed 4 per byte at (elem%4)*2 within qh[elem/4]).
+// ============================================================================
+
+extern __constant__ int8_t iq6nl_values_dev[];
+
+static __global__ void mul_mat_vec_iq6_k_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+    const int lane = threadIdx.x;
+
+    const block_iq6_k * x = (const block_iq6_k *)((const char *)vx + (size_t)row * row_size_x);
+    const block_q8_1  * y = (const block_q8_1 *)vy;
+
+    const int total_subblocks = (ncols_x / QK_K) * 8;
+    float sumf = 0.0f;
+
+    for (int sb_flat = lane; sb_flat < total_subblocks; sb_flat += 32) {
+        const int blk  = sb_flat / 8;
+        const int ib32 = sb_flat % 8;
+
+        const block_iq6_k * bq6 = &x[blk];
+        const block_q8_1  * bq8 = &y[blk * (QK_K / QK8_1) + ib32];
+        const int32_t * q8 = (const int32_t *)bq8->qs;
+
+        // qs layout: qs[(ib32/2)*32 + e_local], low nibble for which_half=0, high for which_half=1.
+        // qh layout: qh[(ib32/4)*32 + e_local] >> qh_shift, 2 bits per element.
+        //   qh_shift cycles 0,2,4,6 as ib32=0,1,2,3,0,1,2,3 within each 4-group pair.
+        const uint8_t * qs_base   = bq6->qs + (ib32 / 2) * 32;
+        const uint8_t * qh_chunk  = bq6->qh + (ib32 / 4) * 32;
+        const int       use_hi    = ib32 & 1;
+        const int       qh_shift  = ((ib32 >> 1) & 1) * 4 + (ib32 & 1) * 2;
+
+        const uint16_t extra   = bq6->extra;
+        const int8_t * vals_lo = iq6nl_values_dev + ((extra >> (2*ib32    )) & 1) * 64;
+        const int8_t * vals_hi = iq6nl_values_dev + ((extra >> (2*ib32 + 1)) & 1) * 64;
+
+        const int ls1 = (int)bq6->scales[2*ib32    ];
+        const int ls2 = (int)bq6->scales[2*ib32 + 1];
+
+        int sumi1 = 0, sumi2 = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = j * 4 + k;           // e_local 0..15
+                const int qs4  = use_hi ? (qs_base[e] >> 4) : (qs_base[e] & 0xf);
+                const int q2   = (qh_chunk[e] >> qh_shift) & 0x03;
+                v |= ((uint32_t)(uint8_t)vals_lo[qs4 | (q2 << 4)] << (k * 8));
+            }
+            sumi1 = ggml_cuda_dp4a(v, q8[j], sumi1);
+        }
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = 16 + j * 4 + k;      // e_local 16..31
+                const int qs4  = use_hi ? (qs_base[e] >> 4) : (qs_base[e] & 0xf);
+                const int q2   = (qh_chunk[e] >> qh_shift) & 0x03;
+                v |= ((uint32_t)(uint8_t)vals_hi[qs4 | (q2 << 4)] << (k * 8));
+            }
+            sumi2 = ggml_cuda_dp4a(v, q8[j + 4], sumi2);
+        }
+
+        const float d = __half2float(bq6->d) * __low2float(bq8->ds);
+        sumf += d * (float)(sumi1 * ls1 + sumi2 * ls2);
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+    if (lane == 0) dst[row] = sumf;
+}
+
+static void launch_mul_mat_vec_iq6_k_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq6_k_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
 // Public dispatch
 // ============================================================================
 
@@ -733,6 +931,8 @@ bool ggml_cuda_iqk_mmvq_supported(enum ggml_type type) {
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ5_K:
+        case GGML_TYPE_IQ6_K:
             return true;
         default:
             return false;
@@ -803,6 +1003,16 @@ void ggml_cuda_mul_mat_iqk_mmvq(ggml_backend_cuda_context & ctx,
             break;
         case GGML_TYPE_IQ2_K:
             launch_mul_mat_vec_iq2_k_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ5_K:
+            launch_mul_mat_vec_iq5_k_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ6_K:
+            launch_mul_mat_vec_iq6_k_q8_1(
                 src0->data, src1_q8_1.get(), (float *)dst->data,
                 (int)ne00, (int)ne01, row_size_x, stream);
             break;
