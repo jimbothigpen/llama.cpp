@@ -376,3 +376,41 @@ Measured performance (Nemotron-Labs Diffusion 14B Q8_0, ai00 ROCm):
 | Block mode (32 steps) | 1.9 t/s | n/a | Block-wise refinement baseline |
 | CLI self-spec (draft_length=8) | 7.0 t/s | ~68% | 3.7× speedup over block mode |
 | Server self-spec (draft_length=4) | 4.49 t/s | ~59% | ~2.4× over block mode; server overhead from rep-penalty + loop detection |
+
+---
+
+## Fork-specific: EAGLE3 hidden-state extrapolation
+
+EAGLE3 (`e9f6d9ce7`) is a speculative decoder ported from carlosfundora
+`1-bit-turbo`. Unlike draft-model speculation (which runs a full separate smaller
+model), EAGLE3 extrapolates draft tokens from the target model's residual hidden
+states after each layer — a joint architecture that avoids the overhead of a
+separate drafter forward pass.
+
+Primary target model: Gemma 4 26B-A4B with the paired
+`Gemma4-26B-A4B-it-assistant` checkpoint. Backend-agnostic (no novel GPU kernels;
+operates within the existing speculative-decode scheduling path).
+
+Full `--spec-type eagle3` factory dispatch integration is in-flight.
+
+---
+
+## Fork-specific: PHANTOM-X speculative decoder
+
+PHANTOM-X (`2199e8445`; Phase 2 factory dispatch adapter `4fd52ddc0`) is a
+speculative decoder ported from carlosfundora `1-bit-turbo`. It uses a learned
+per-model n-gram pattern lookup table for draft generation. The Phase 2 adapter
+wires PHANTOM-X into the `--spec-type` factory dispatch so it can be combined
+with other spec-decode mechanisms.
+
+Backend-agnostic — CPU n-gram lookup; no novel GPU kernels.
+
+---
+
+## Fork-specific: DFlash S1 model loader
+
+The DFlash S1 drafter model architecture and GGUF loader are ported from buun
+`master` (`b8bf27eda`). The model type is now loadable; the speculative-decode
+integration path requires a DFlash S1 drafter GGUF (not yet publicly available
+from z-lab or community sources). Full revival unblocked further by this port —
+remaining gate is drafter GGUF sourcing.
