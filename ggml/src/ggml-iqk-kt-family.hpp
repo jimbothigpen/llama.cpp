@@ -104,20 +104,37 @@ static inline int iqkt_bin5_abs(float x) {
     return x < 11.2f ? 0 : x < 24.f ? 1 : x < 39.f ? 2 : x < 58.f ? 3 : 4;
 }
 
+// 3-bin step functions for GROUP_SIZE=8 (IQ2/3/1_KT).
+// Thresholds at -16/+16 split the codebook range ≈ [-126, +126] into 3 parts.
+static inline int iqkt_bin3_default(float x) {
+    if (x < -16.f) return 0;
+    if (x <  16.f) return 1;
+    return 2;
+}
+static inline int iqkt_bin3_abs(float x) {
+    const float ax = std::abs(x);
+    if (ax < 16.f) return 0;
+    if (ax < 48.f) return 1;
+    return 2;
+}
+
 // Number of soft-bins for a given GROUP_SIZE.
-//   GROUP_SIZE=4 → 5^4 = 625  (IQ4_KT)
-//   Otherwise   → 1           (brute-force; P3a/P3b workers substitute k-means)
+//   GROUP_SIZE=4 → 5^4 = 625   (IQ4_KT)
+//   GROUP_SIZE=8 → 3^8 = 6561  (IQ2/3/1_KT — full-8D base-3 hash)
+//   Otherwise   → 1            (brute-force fallback)
 template<int GROUP_SIZE>
 static constexpr int iqkt_num_bins() {
     if constexpr (GROUP_SIZE == 4) return 625;
+    if constexpr (GROUP_SIZE == 8) return 6561;  // 3^8 — all 8 dims via base-3
     return 1;
 }
 
 // Hash a GROUP_SIZE vector into a bin index.
 //   GROUP_SIZE=4, non-abs → 5^4 grid using bin5_default
 //   GROUP_SIZE=4, abs     → 5^4 grid using bin5_abs
+//   GROUP_SIZE=8, non-abs → 3^8 grid using bin3_default (all 8 dims)
+//   GROUP_SIZE=8, abs     → 3^8 grid using bin3_abs (all 8 dims)
 //   Other                 → 0  (single-bin passthrough)
-// P3a/P3b workers can add specializations for GROUP_SIZE=8 as needed.
 template<int GROUP_SIZE, bool IS_ABS>
 static inline int iqkt_hash_bin(const float * v) {
     if constexpr (GROUP_SIZE == 4) {
@@ -131,6 +148,27 @@ static inline int iqkt_hash_bin(const float * v) {
                  + 5   * iqkt_bin5_abs(v[1])
                  + 25  * iqkt_bin5_abs(v[2])
                  + 125 * iqkt_bin5_abs(v[3]);
+        }
+    }
+    if constexpr (GROUP_SIZE == 8) {
+        if constexpr (!IS_ABS) {
+            return   iqkt_bin3_default(v[0])
+                 + 3    * iqkt_bin3_default(v[1])
+                 + 9    * iqkt_bin3_default(v[2])
+                 + 27   * iqkt_bin3_default(v[3])
+                 + 81   * iqkt_bin3_default(v[4])
+                 + 243  * iqkt_bin3_default(v[5])
+                 + 729  * iqkt_bin3_default(v[6])
+                 + 2187 * iqkt_bin3_default(v[7]);
+        } else {
+            return   iqkt_bin3_abs(v[0])
+                 + 3    * iqkt_bin3_abs(v[1])
+                 + 9    * iqkt_bin3_abs(v[2])
+                 + 27   * iqkt_bin3_abs(v[3])
+                 + 81   * iqkt_bin3_abs(v[4])
+                 + 243  * iqkt_bin3_abs(v[5])
+                 + 729  * iqkt_bin3_abs(v[6])
+                 + 2187 * iqkt_bin3_abs(v[7]);
         }
     }
     return 0;  // single-bin fallback
