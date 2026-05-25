@@ -555,6 +555,18 @@ typedef struct {
 } block_iq3_ks;
 static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
 
+// IQ2_KL: ik_llama.cpp 2-bit large (2.6875 bpw)
+// Row layout: 2-byte ggml_half row scale prepended (row_meta_size=2), then blocks below.
+// Per-block: 2-byte scales_h + 4 bytes scales_l + 64 qs bytes + 16 qh bytes
+typedef struct {
+    uint16_t scales_h;
+    uint8_t  scales_l[QK_K/64];    // 4 bytes
+    uint8_t  qs[QK_K/4];           // 64 bytes
+    uint8_t  qh[QK_K/16];          // 16 bytes
+} block_iq2_kl;
+static_assert(sizeof(block_iq2_kl) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/16,
+              "wrong iq2_kl block size/padding");
+
 //
 // Super-block quantization structures
 //
@@ -2173,6 +2185,15 @@ GGML_TABLE_BEGIN(uint32_t, iq1s_grid_gpu, NGRID_IQ1S)
     0x22202022, 0x22202220, 0x22202222, 0x22212121, 0x22222020, 0x22222022, 0x22222220, 0x22222222,
 GGML_TABLE_END()
 #endif
+
+// IQ2_KL codebook: 32-entry uint16 pairs (each uint16 = two int8 weights packed low/high byte).
+// Used by both CPU dequant (ggml-iqk-quants.c) and CUDA MMVQ kernel (mmvq-iqk.cu).
+GGML_TABLE_BEGIN(uint16_t, iq2kl_values, 32)
+    0xe9c1, 0x0dc1, 0xc1d8, 0xf6d8, 0x0dd8, 0x2fd8, 0xd8e9, 0xe9e9,
+    0x01e9, 0x0de9, 0x1ce9, 0xc1f6, 0x01f6, 0x0df6, 0x2ff6, 0xe901,
+    0xf601, 0x0101, 0x0d01, 0x1c01, 0xd80d, 0xe90d, 0xf60d, 0x010d,
+    0x0d0d, 0xc11c, 0xe91c, 0x011c, 0x1c1c, 0x2f1c, 0xe92f, 0x0d2f,
+GGML_TABLE_END()
 
 #endif // GGML_COMMON_IMPL
 #endif // GGML_COMMON_IMPL
