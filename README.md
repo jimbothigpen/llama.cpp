@@ -337,8 +337,8 @@ Ported IQ5_K and IQ6_K from ik_llama.cpp (`f7a489de5`). Higher-quality extension
 
 | Type | Slot | Backends | Notes |
 |---|---|---|---|
-| `IQ5_K` | 140 | CPU + CUDA/HIP + Vulkan | 5-bit imatrix-aware weight quant |
-| `IQ6_K` | 141 | CPU + CUDA/HIP + Vulkan | 6-bit imatrix-aware weight quant |
+| `IQ5_K` | 140 | CPU + CUDA/HIP (Vulkan in-flight S2) | 5-bit imatrix-aware weight quant |
+| `IQ6_K` | 141 | CPU + CUDA/HIP (Vulkan in-flight S2) | 6-bit imatrix-aware weight quant |
 
 Imatrix required per PM-15 mandate. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
 
@@ -352,7 +352,7 @@ Ported IQ2_KL (ik_llama type 157, 2.6875 bpw) from ik_llama.cpp (`e404274b9`). U
 |---|---|---|---|---|
 | `IQ2_KL` | 157 | 2.6875 | CPU + CUDA/HIP | Low-bpw variant of the IK-K family |
 
-Imatrix required. Vulkan parity status TBD (Phase 5b-1c S1).
+Imatrix required. Vulkan parity in-flight.
 
 ---
 

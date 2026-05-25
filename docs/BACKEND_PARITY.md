@@ -89,7 +89,7 @@ Status updated per layer landing. Initial state derived from
 | Wave32 RDNA2 kernels | 5 | ROCm-only by design (RDNA2 SIMD32) | not applicable | **ROCm-only** by design |
 | IK quants base-K (IQ2_K, IQ3_K, IQ4_K) | 5 (5b-1a) | **RELEASED** — ROCm + Vulkan (PPL Δ < 0.0045 vs reference) | **RELEASED** — Vulkan batched mul_mat SEGV fixed `5fe804bcd` | n/a (released) |
 | IK quants row-meta KS/KT (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) | 5 (5b-1b) | **RELEASED** — ROCm + Vulkan (PPL gate 20-chunk Δ ≤ 0.043) | **RELEASED** — Vulkan SEGV fixed via `is_empty()` dequant-to-f16 fallback | n/a (released) |
-| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 S1 (`f7a489de5`) | **RELEASED** — Vulkan included in S1 ship | n/a (released) |
+| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 S1 (`f7a489de5`) | in-flight (S2 worker running) | P1 — Vulkan port pending |
 | IK quant IQ2_KL (2.6875 bpw) | 5 (5b-1c) | **RELEASED** — Phase 5b-1c S1 (`e404274b9`) | Vulkan parity in-flight | P1 — Vulkan port pending |
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
