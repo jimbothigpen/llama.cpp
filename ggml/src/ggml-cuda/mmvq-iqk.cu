@@ -599,6 +599,107 @@ static void launch_mul_mat_vec_iq3_ks_q8_1(
 }
 
 // ============================================================================
+// IQ2_KL MMVQ kernel.
+// Row layout: [half row_scale][N × block_iq2_kl]
+// block_iq2_kl: scales_h(2B) + scales_l[4](4B) + qs[64](64B) + qh[16](16B)
+// QK_K=256 elements split into 4 ib64 groups of 64 elements each.
+// Each ib64 group: 2 sub-blocks of 32 elements (scale ls1, ls2).
+// Each lane processes one ib64 group across all blocks, strided by 32.
+// ============================================================================
+
+static __global__ void mul_mat_vec_iq2_kl_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+
+    const int lane = threadIdx.x;
+
+    const char * row_ptr = (const char *)vx + (size_t)row * row_size_x;
+    const float d = __half2float(*(const __half *)row_ptr);
+    const block_iq2_kl * x = (const block_iq2_kl *)(row_ptr + sizeof(__half));
+    const block_q8_1   * y = (const block_q8_1 *)vy;
+
+    const int n_blocks = ncols_x / QK_K;
+    const int total_groups = n_blocks * (QK_K / 64);  // n_blocks * 4
+
+    float sumf = 0.0f;
+
+    for (int g_flat = lane; g_flat < total_groups; g_flat += WARP_SIZE) {
+        const int blk  = g_flat / 4;
+        const int ib64 = g_flat % 4;
+
+        const block_iq2_kl * bq2 = &x[blk];
+
+        // qs[16*ib64 .. 16*ib64+15] and qh[0..15] for this ib64 group.
+        const uint16_t * ql = (const uint16_t *)bq2->qs + 8*ib64;
+        const uint16_t * qh = (const uint16_t *)bq2->qh;
+
+        const block_q8_1 * bq8_s1 = &y[blk * (QK_K/QK8_1) + 2*ib64 + 0];
+        const block_q8_1 * bq8_s2 = &y[blk * (QK_K/QK8_1) + 2*ib64 + 1];
+        const int32_t * q8s1 = (const int32_t *)bq8_s1->qs;
+        const int32_t * q8s2 = (const int32_t *)bq8_s2->qs;
+
+        int sumi1 = 0, sumi2 = 0;
+
+        // Process 2 halves of 16 ql entries × 2 iterations = 32 pairs total.
+        for (int il = 0; il < 2; ++il) {
+            for (int i = 0; i < 2; ++i) {
+                uint32_t vl = (uint32_t)ql[4*il + 2*i + 0] | ((uint32_t)ql[4*il + 2*i + 1] << 16);
+                uint32_t vh = ((uint32_t)qh[4*il + 2*i + 0] | ((uint32_t)qh[4*il + 2*i + 1] << 16)) >> (2*ib64);
+
+                // sub-block 0 (ib = 2*ib64): index = (qs & 0xf) | (qh_bit << 4)
+                int32_t aux1 = (int32_t)((vl & 0x0f0f0f0fu) | ((vh << 4) & 0x10101010u));
+                const uint8_t * a1 = (const uint8_t *)&aux1;
+                int32_t v1 = (int32_t)((uint32_t)iq2kl_values[a1[0]] | ((uint32_t)iq2kl_values[a1[1]] << 16));
+                int32_t v2 = (int32_t)((uint32_t)iq2kl_values[a1[2]] | ((uint32_t)iq2kl_values[a1[3]] << 16));
+                sumi1 = ggml_cuda_dp4a(v1, q8s1[4*il + 2*i + 0], ggml_cuda_dp4a(v2, q8s1[4*il + 2*i + 1], sumi1));
+
+                // sub-block 1 (ib = 2*ib64+1): index = (qs >> 4) | (qh_bit_next << 4)
+                int32_t aux2 = (int32_t)(((vl >> 4) & 0x0f0f0f0fu) | ((vh << 3) & 0x10101010u));
+                const uint8_t * a2 = (const uint8_t *)&aux2;
+                int32_t v3 = (int32_t)((uint32_t)iq2kl_values[a2[0]] | ((uint32_t)iq2kl_values[a2[1]] << 16));
+                int32_t v4 = (int32_t)((uint32_t)iq2kl_values[a2[2]] | ((uint32_t)iq2kl_values[a2[3]] << 16));
+                sumi2 = ggml_cuda_dp4a(v3, q8s2[4*il + 2*i + 0], ggml_cuda_dp4a(v4, q8s2[4*il + 2*i + 1], sumi2));
+            }
+        }
+
+        // Scale decode: 6-bit signed (4 low bits from scales_l + 2 high bits from scales_h) - 32
+        const uint16_t sh = bq2->scales_h >> (4*ib64);
+        const int ls1 = (int)(((bq2->scales_l[(2*ib64+0) % 4] >> (4*(ib64/2))) & 0xf) | ((sh << 4) & 0x30)) - 32;
+        const int ls2 = (int)(((bq2->scales_l[(2*ib64+1) % 4] >> (4*(ib64/2))) & 0xf) | ((sh << 2) & 0x30)) - 32;
+
+        sumf += d * (__low2float(bq8_s1->ds) * (float)ls1 * (float)sumi1 +
+                     __low2float(bq8_s2->ds) * (float)ls2 * (float)sumi2);
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+
+    if (lane == 0) {
+        dst[row] = sumf;
+    }
+}
+
+static void launch_mul_mat_vec_iq2_kl_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq2_kl_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
 // IQ2_K MMVQ kernel.  Per block_iq2_k:
 //   half d, uint16 extra (1 codebook-shift bit per 16-element sub-block),
 //   scales[8] (two 4-bit signed-offset-by-8 scales per 32-elem ib32),
@@ -930,6 +1031,7 @@ bool ggml_cuda_iqk_mmvq_supported(enum ggml_type type) {
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
+        case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ5_K:
         case GGML_TYPE_IQ6_K:
@@ -998,6 +1100,11 @@ void ggml_cuda_mul_mat_iqk_mmvq(ggml_backend_cuda_context & ctx,
             break;
         case GGML_TYPE_IQ3_KS:
             launch_mul_mat_vec_iq3_ks_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ2_KL:
+            launch_mul_mat_vec_iq2_kl_q8_1(
                 src0->data, src1_q8_1.get(), (float *)dst->data,
                 (int)ne00, (int)ne01, row_size_x, stream);
             break;

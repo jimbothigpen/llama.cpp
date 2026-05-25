@@ -170,6 +170,7 @@ extern "C" {
         // Phase 5b-2: no-row-meta 5/6-bit IK family
         LLAMA_FTYPE_MOSTLY_IQ5_K         = 51, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ6_K         = 52, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_KL        = 53, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
