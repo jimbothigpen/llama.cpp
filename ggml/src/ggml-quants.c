@@ -5559,6 +5559,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             // TODO: add more thorough validation if needed
             break;
         case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ4_KS:

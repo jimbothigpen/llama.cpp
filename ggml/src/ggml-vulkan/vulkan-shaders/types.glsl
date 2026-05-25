@@ -2075,6 +2075,19 @@ struct block_iq4_k_packed16 {
 #define DATA_A_QUANT_K
 #endif
 
+// IQ2_KL — ik_llama.cpp 2-bit large (2.6875 bpw, row_meta=2 = ggml_half row scale).
+// Per block (86B = 43 u16): uint16 scales_h | uint8[4] scales_l | uint8[64] qs | uint8[16] qh.
+// Bound as uint16_t[].
+#define QUANT_K_IQ2_KL 256
+#define QUANT_R_IQ2_KL 1
+
+#if defined(DATA_A_IQ2_KL)
+#define QUANT_K QUANT_K_IQ2_KL
+#define QUANT_R QUANT_R_IQ2_KL
+#define A_TYPE uint16_t
+#define DATA_A_QUANT_K
+#endif
+
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
