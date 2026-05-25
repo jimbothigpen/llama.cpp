@@ -82,21 +82,22 @@ Status updated per layer landing. Initial state derived from
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 4 | source has dedicated HIP scoring kernel | source has none | P1 — scoring kernel needs Vulkan port |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
-| Q1_0_G128 (PrismML 1-bit) | 5 | source files not yet located | source has none | P1 |
-| EAGLE3 | 5 | mostly CPU; scheduler logic | mostly CPU | P3 — backend-agnostic |
-| PHANTOM-X | 5 | CPU n-gram | CPU n-gram | P3 — backend-agnostic |
+| Q1_0_G128 (PrismML 1-bit) | 5 | **RELEASED** — ported `67edf5eec` at ygg canonical slot 96 | no Vulkan shaders from source; CPU path only for now | P2 — Vulkan port pending |
+| EAGLE3 | 5 | **RELEASED** — hidden-state extrapolation ported `e9f6d9ce7` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
+| PHANTOM-X | 5 | **RELEASED** — speculator ported `2199e8445`; Phase 2 dispatch `4fd52ddc0` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
 | TurboMind allocator | 5 | gfx1030-specific in source | source has none | Investigate; may not be needed |
 | Wave32 RDNA2 kernels | 5 | ROCm-only by design (RDNA2 SIMD32) | not applicable | **ROCm-only** by design |
 | IK quants base-K (IQ2_K, IQ3_K, IQ4_K) | 5 (5b-1a) | **RELEASED** — ROCm + Vulkan (PPL Δ < 0.0045 vs reference) | **RELEASED** — Vulkan batched mul_mat SEGV fixed `5fe804bcd` | n/a (released) |
 | IK quants row-meta KS/KT (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) | 5 (5b-1b) | **RELEASED** — ROCm + Vulkan (PPL gate 20-chunk Δ ≤ 0.043) | **RELEASED** — Vulkan SEGV fixed via `is_empty()` dequant-to-f16 fallback | n/a (released) |
-| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | source has CUDA + HIP; recon in-flight | source has none (no ft2 Vulkan shaders confirmed) | P1 — pending recon verdict |
+| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 S1 (`f7a489de5`) | **RELEASED** — Vulkan included in S1 ship | n/a (released) |
+| IK quant IQ2_KL (2.6875 bpw) | 5 (5b-1c) | **RELEASED** — Phase 5b-1c S1 (`e404274b9`) | Vulkan parity in-flight | P1 — Vulkan port pending |
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
 | Fused MoE | 6 | source has CUDA | source has none | P2 |
 | Trellis weight quants (IQ2/3/4_KT) | 6 | ik_llama branches dormant | none | **declined** unless Phase 0.5 recon revives them |
 | Q\*_K row-interleaved (\_R4/\_R8) | 6 | CUDA only in ik_llama | none | P2 — CPU variants exist; GPU optional |
 | RaBitQ TQ3 weights (RBQ3_\*) | 7 | source has CUDA; HIP branch not yet merged | source has none | P1 |
-| DFlash drafter | 8 | mostly CPU/scheduler | mostly CPU | P3 — backend-agnostic |
+| DFlash S1 model loader | 8 | **S1 loader ported** (`b8bf27eda`); spec-decode path pending GGUF sourcing | backend-agnostic | P3 — backend-agnostic |
 | PFlash prompt compression | 8 | mostly CPU/scheduler | mostly CPU | P3 — backend-agnostic |
 | --hugepages | 9 | Linux kernel feature; backend-agnostic | same | n/a |
 | gfx1030 normalization | 9 | ROCm-only by design | not applicable | **ROCm-only** by design |
@@ -274,3 +275,8 @@ features; sweep regularly.
   MTP spine rows updated: migration phases 0-3 complete; V-J accept-rate
   gap closed. NLD (Nemotron-Labs Diffusion) added as ROCm-released model port.
   Per-feature table expanded with 5b-1a/1b/2 + NLD + MTP migration rows.
+- **v4** (2026-05-24) — Phase 5b-2 (IQ5_K/IQ6_K) and Phase 5b-1c (IQ2_KL)
+  released rows updated. EAGLE3 + PHANTOM-X marked RELEASED (backend-agnostic).
+  Q1_0_G128 marked RELEASED (ROCm; Vulkan pending). DFlash S1 model loader noted.
+  NLD Vulkan RELEASED confirmed (ai01 gfx1103 RADV, `7da3a8378`). Vulkan base-K
+  MUL_MAT_ID fix (`c4da029f3`) recorded.

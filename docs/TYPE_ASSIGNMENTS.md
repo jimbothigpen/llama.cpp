@@ -150,7 +150,8 @@ existing ik_llama-quantized GGUFs. The full list of preserved assignments:
 | 137 | `IQ2_K` | IQK 2-bit imatrix-aware weight quant (2.375 bpw) — **Phase 5b-1a; ygg canonical** |
 | 138 | `IQ3_K` | IQK 3-bit imatrix-aware weight quant (3.44 bpw) — **Phase 5b-1a; ygg canonical** |
 | 139 | `IQ4_K` | IQK 4-bit imatrix-aware weight quant (4.50 bpw) — **Phase 5b-1a; ygg canonical** |
-| 140–141 | `IQ5_K`, `IQ6_K` | "K" family (ik_llama IDs preserved; Phase 5b-2 recon in-flight 2026-05-24) |
+| 140 | `IQ5_K` | IQK 5-bit imatrix-aware weight quant — **Phase 5b-2 S1 `f7a489de5`; ygg canonical** |
+| 141 | `IQ6_K` | IQK 6-bit imatrix-aware weight quant — **Phase 5b-2 S1 `f7a489de5`; ygg canonical** |
 | 144 | `IQ4_KS` | IK-quant small; row_meta=4 bytes (float row-scale) — **Phase 5b-1b; ygg canonical** |
 | 145 | `IQ2_KS` | |
 | 146 | `IQ4_KSS` | IK-quant small-small; row_meta=4 bytes — **Phase 5b-1b; ygg canonical** |
@@ -159,7 +160,7 @@ existing ik_llama-quantized GGUFs. The full list of preserved assignments:
 | 153–154 | `IQ2_KT`, `IQ3_KT` | trellis weight quants (dormant; preserve IDs) |
 | 155 | `IQ4_KT` | IK trellis 4-bit weight quant; row_meta=4 bytes — **Phase 5b-1b; ygg canonical** (differs from buun TCQ: IQ4_KT is a weight quant, TCQ is a KV-cache quant) |
 | 156 | `IQ3_KS` | IK-quant small 3-bit; row_meta=2 bytes (uint16_t half-row-scale) — **Phase 5b-1b; ygg canonical** |
-| 157 | `IQ2_KL` | |
+| 157 | `IQ2_KL` | IQK 2-bit low-bpw (2.6875 bpw) imatrix-aware weight quant — **Phase 5b-1c S1 `e404274b9`; ygg canonical** |
 | 158 | `IQ1_KT` | trellis 1-bit (dormant) |
 
 ### Special case: `Q1_0_G128`
@@ -280,3 +281,6 @@ invented):
   IQ4_KS=144, IQ4_KSS=146, IQ4_KT=155, IQ3_KS=156 annotated with Phase 5b-1b tag +
   row_meta byte sizes. IQ4_KT separated from dormant IQ2/IQ3_KT in table entry.
   IQ5_K/IQ6_K noted as Phase 5b-2 recon in-flight.
+- **v3** (2026-05-24) — Phase 5b-2 S1 landed: IQ5_K=140, IQ6_K=141 annotated with
+  ygg canonical + Phase 5b-2 S1 tag. Phase 5b-1c S1 landed: IQ2_KL=157 annotated
+  with ygg canonical + Phase 5b-1c S1 tag.

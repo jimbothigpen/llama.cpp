@@ -9,7 +9,75 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-In-flight: Phase 5b-2 (IQ5_K / IQ6_K recon), EAGLE3 port recon, iso3-K cross-V hang fix (TODO 68).
+In-flight: iso3-K cross-V hang fix (TODO 68), EAGLE3 full factory integration, IQ2_KL/IQ5_K/IQ6_K Vulkan parity.
+
+### Added — DFlash S1 model loader (2026-05-24, `b8bf27eda`)
+
+Port of the DFlash S1 drafter model architecture and GGUF loader from buun `master`.
+The model type and loader are now in-tree; speculative-decode integration requires a
+DFlash S1 drafter GGUF (not yet publicly available). Revival unblocked further by
+this port — remaining gate is drafter GGUF sourcing.
+
+### Added — Phase 5b-1c: IQ2_KL ultra-low-bpw weight quant (2026-05-24, `e404274b9`)
+
+Port of `IQ2_KL` (ik_llama type 157, 2.6875 bpw) from ik_llama.cpp. Imatrix-aware
+ultra-low-bitrate weight quantization at ygg canonical slot 157. CPU + CUDA/HIP
+on main; Vulkan parity in-flight.
+
+### Added — Phase 5b-2 S1: IQ5_K and IQ6_K weight quants (2026-05-24, `f7a489de5`)
+
+Port of `IQ5_K` (slot 140) and `IQ6_K` (slot 141) from ik_llama.cpp upstream.
+Higher-quality extensions of the IK-K family with imatrix weighting. CPU + CUDA/HIP
++ Vulkan on main. Slots preserved from ik_llama compatibility zone.
+
+### Added — EAGLE3 hidden-state extrapolation speculative decoder (2026-05-24, `e9f6d9ce7`)
+
+Port of the EAGLE3 speculative decoder from carlosfundora `1-bit-turbo`. EAGLE3
+uses the target model's residual hidden states to extrapolate draft tokens rather
+than running a separate full drafter model. Backend-agnostic (no novel GPU kernels).
+Primary target: Gemma 4 26B-A4B with the paired assistant checkpoint. Full
+`--spec-type` factory dispatch integration in-flight.
+
+### Fixed — Q1_0 wired into Flash Attention VEC dispatch (2026-05-24, `db1e8cb9d`)
+
+Q1_0 CUDA/HIP kernel was not registered in the Flash Attention VEC dispatch table,
+causing incorrect dispatch for Q1_0 weights on the attention path. +2 LOC wiring fix.
+
+### Added — PHANTOM-X Phase 2 factory dispatch adapter (2026-05-24, `4fd52ddc0`)
+
+PHANTOM-X speculative decoder wired into the `--spec-type` factory dispatch
+adapter (Phase 2 integration). The speculator can now be selected via the
+standard `--spec-type` flag alongside other spec-decode mechanisms.
+
+### Fixed — MTP draft path backend_sampling default-flip (2026-05-24, `b665294b8`)
+
+`backend_sampling` now defaults to `false` for the MTP draft path. The previous
+default caused the MTP draft sampler to invoke the full backend sampling pipeline
+(including top-k filtering) before the draft was verified, which degraded draft
+acceptance rates. The `top_k=1` argmax draft path (see `fd9bf51f8` comment) only
+works correctly when `backend_sampling=false`; the fix ensures clean behavior
+without a manual override.
+
+### Added — PHANTOM-X speculator port (2026-05-24, `2199e8445`)
+
+Port of the PHANTOM-X speculative decoder from carlosfundora `1-bit-turbo`.
+PHANTOM-X uses a learned per-model n-gram pattern lookup table for draft
+generation. Backend-agnostic (CPU n-gram; no novel GPU kernels).
+
+### Added — Q1_0_G128 (PrismML 1-bit weight quant, Bonsai-family) (2026-05-24, `67edf5eec`)
+
+Port of `Q1_0_G128` from carlosfundora `1-bit-turbo`. 1-bit weight quantization
+with 128-element groups. Placed at ygg canonical slot 96 (first slot of ik_llama
+compat zone) to avoid the three-way slot collision between ik_llama (41),
+carlosfundora (43), and mainline `Q1_0` (41). Imatrix required per PM-15 mandate.
+CPU + CUDA/HIP on main.
+
+### Fixed — Vulkan MUL_MAT_ID is_empty() guard for base-K types (2026-05-24, `c4da029f3`)
+
+Extended the `is_empty()` guard in `ggml_vk_get_mul_mat_mat_pipeline` to cover
+base-K types (IQ2_K/IQ3_K/IQ4_K) in the MUL_MAT_ID (MoE expert-routing) path.
+The fix forces dequant-to-f16 fallback for base-K types in batched MoE dispatch,
+preventing the latent Vulkan SEGV when base-K weights are used with MoE models.
 
 ### Added — MTP top_k=1 deliberate-choice comment (2026-05-24, `fd9bf51f8`)
 

@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 7b, MTP Migration 0-3, NLD COMPLETE — **HEAD `fd9bf51f8`** on
-`main`. Recent ships (2026-05-22 to 2026-05-24): Phase 5b-1b row-meta IK weight quants (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) + Vulkan KS batched-mul_mat fix; MTP Migration phases 0-3 (mainline-aligned speculative driver + loader split + graph convergence); V-J spec-decode accept-rate gap closed 38% → 70% (TODO 81); Nemotron-Labs Diffusion CLI + server self-spec port (TODO 80/86); top_k=1 deliberate-choice comment (TODO 84). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7b, MTP Migration 0-3, NLD COMPLETE — **HEAD `b8bf27eda`** on
+`main`. Recent ships (2026-05-24 wave): IQ5_K/IQ6_K Phase 5b-2 (`f7a489de5`); IQ2_KL type-157 Phase 5b-1c (`e404274b9`); EAGLE3 hidden-state extrapolation spec-decoder (`e9f6d9ce7`); PHANTOM-X speculator port + Phase 2 dispatch (`2199e8445`, `4fd52ddc0`); Q1_0_G128 1-bit weight quant (`67edf5eec`); DFlash S1 model loader (`b8bf27eda`); Q1_0 ROCm FA dispatch fix (`db1e8cb9d`); Vulkan base-K MUL_MAT_ID fix (`c4da029f3`); backend_sampling default-flip for MTP draft (`b665294b8`). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -56,7 +56,7 @@ sibling forks rebased onto mainline's architecture.
 |---|---|---|
 | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | **Base** — this fork rebases against mainline regularly | upstream-of-everything |
 | [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | TurboQuant KV cache (`TURBOQ{2,3,4}_0`), WHT weight quants, alpha-scaling, asymmetric K/V, InnerQ calibrated KV (`TURBOQ{2,3,4}_INNERQ`) | active |
-| [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), PFlash prompt compression | active (DFlash paused — see beellama) |
+| [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), PFlash prompt compression, DFlash S1 model loader | active |
 | [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | RotorQuant KV V-cache (`RQ_*`), PrismML 1-bit (`Q1_0_G128`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
 | [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) | RaBitQ TQ3 weight quants (`RBQ3_*`); MTP research | recent |
 | [domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip) | TriAttention KV compression with GPU scoring, `--hugepages` | moderate |
@@ -88,10 +88,10 @@ cross-backend PPL matches within tolerance. See
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
 | 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
 | 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **shipped 34/34 pairs (HEAD `88afd0b5a`); iso3-K cross-V hang (4 pairs) remains open per TODO 68; HIP kernel Cat 2/3 bugs surface ppl-gate failures** |
-| 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` | **pending (sequenced after RotorQuant completion)** |
-| 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`aed6d2965`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`5fe804bcd`); 5b-2 (IQ5_K/IQ6_K) recon in-flight; MLA declined** |
+| 4 | Carlosfundora dense bundle (Q1_0_G128, EAGLE3, PHANTOM-X, DFlash S1, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` / buun | **Q1_0_G128 ported (`67edf5eec`); EAGLE3 ported (`e9f6d9ce7`); PHANTOM-X ported + Phase 2 dispatch (`2199e8445`, `4fd52ddc0`); DFlash S1 model loader ported (`b8bf27eda`); TurboMind/Wave32 pending** |
+| 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`aed6d2965`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`5fe804bcd`); 5b-1c (IQ2_KL type-157) complete (`e404274b9`); 5b-2 (IQ5_K/IQ6_K) complete (`f7a489de5`); MLA declined** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending** |
-| 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **PAUSED — revival condition B satisfied (beellama active); drafter GGUF sourcing pending** |
+| 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **DFlash S1 model loader ported (`b8bf27eda`); full spec-decode path pending drafter GGUF sourcing** |
 | 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`); NEW-D Vulkan GPU scorer fix shipped (`276508aaa`) — IGPU fallback enables ~0.20s GPU scoring on Strix Halo Vulkan (was 3-5s CPU fallback)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **pending** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **deferred post-Phase-8; halted on GGML backend bug** |
@@ -102,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `fd9bf51f8`**, the following features are on `main`.
+As of **HEAD `b8bf27eda`**, the following features are on `main`.
 
 ---
 
@@ -331,6 +331,41 @@ Slots are ik_llama compatibility zone IDs (preserved verbatim). Row-meta types s
 
 ---
 
+### ik_llama extended weight quants (IQ5_K, IQ6_K) — Phase 5b-2
+
+Ported IQ5_K and IQ6_K from ik_llama.cpp (`f7a489de5`). Higher-quality extensions of the IK-K family.
+
+| Type | Slot | Backends | Notes |
+|---|---|---|---|
+| `IQ5_K` | 140 | CPU + CUDA/HIP + Vulkan | 5-bit imatrix-aware weight quant |
+| `IQ6_K` | 141 | CPU + CUDA/HIP + Vulkan | 6-bit imatrix-aware weight quant |
+
+Imatrix required per PM-15 mandate. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
+
+---
+
+### ik_llama IQ2_KL weight quant — Phase 5b-1c
+
+Ported IQ2_KL (ik_llama type 157, 2.6875 bpw) from ik_llama.cpp (`e404274b9`). Ultra-low bitrate imatrix-aware weight quantization.
+
+| Type | Slot | bpw | Backends | Notes |
+|---|---|---|---|---|
+| `IQ2_KL` | 157 | 2.6875 | CPU + CUDA/HIP | Low-bpw variant of the IK-K family |
+
+Imatrix required. Vulkan parity status TBD (Phase 5b-1c S1).
+
+---
+
+### Q1_0_G128 (PrismML 1-bit weight quant) — Phase 4 carlosfundora
+
+Ported `Q1_0_G128` from carlosfundora `1-bit-turbo` (`67edf5eec`). 1-bit weight quantization with 128-element groups (Bonsai-family). Placed at ygg canonical slot 96 (first slot of ik_llama compat zone) to resolve the three-way collision between ik_llama (slot 41), carlosfundora (slot 43), and mainline `Q1_0` (slot 41).
+
+| Type | Slot | Backends | Notes |
+|---|---|---|---|
+| `Q1_0_G128` | 96 | CPU + CUDA/HIP | 1-bit with 128-element group; imatrix required per PM-15 |
+
+---
+
 ### PFlash NEW-E: on-disk persistence for scorer cache — Phase 7b
 
 The PFlash LRU scorer cache (4c) now supports on-disk persistence. Cache entries are serialized to disk and restored on subsequent runs, eliminating the penalty of cache cold-start on repeat queries. The on-disk format is opaque (versioned sidecar); format breakage triggers a cache rebuild.
@@ -432,6 +467,39 @@ MTP regression gate confirmed clean (84.6% accept on Qwen3.5-35B-A3B-MTP after N
 
 ---
 
+### EAGLE3 hidden-state extrapolation speculative decoder — Phase 4
+
+Ported EAGLE3 from carlosfundora `1-bit-turbo` (`e9f6d9ce7`). EAGLE3 uses the target
+model's hidden-state residuals to extrapolate draft tokens rather than running a
+separate full drafter model. Primary test target: Gemma 4 26B-A4B with the paired
+assistant checkpoint.
+
+Backend-agnostic — no novel GPU kernels; operates entirely within the existing
+speculative-decode scheduling path. Full factory dispatch integration in-flight
+(see [In-flight workstreams](#in-flight-workstreams)).
+
+---
+
+### PHANTOM-X speculative decoder — Phase 4
+
+Ported PHANTOM-X from carlosfundora `1-bit-turbo` (`2199e8445`; Phase 2 factory
+dispatch adapter `4fd52ddc0`). PHANTOM-X uses a learned per-model n-gram pattern
+lookup for draft generation. The Phase 2 adapter wires it into the `--spec-type`
+factory dispatch so it can be selected alongside other spec-decode mechanisms.
+
+Backend-agnostic — CPU n-gram lookup; no novel GPU kernels.
+
+---
+
+### DFlash S1 model loader — Phase 7a partial
+
+DFlash S1 drafter model loader ported from buun `master` (`b8bf27eda`). The model
+architecture and GGUF loader are now in-tree, but the speculative-decode integration
+path requires a DFlash S1 drafter GGUF which is not yet publicly available. See
+[Blocked / awaiting decision](#blocked--awaiting-decision).
+
+---
+
 ### Novel model architectures — in-tree ports
 
 In addition to all mainline-supported architectures (inherited via upstream
@@ -487,17 +555,17 @@ Active feature branches with work in progress; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| Phase 5b-2 (IQ5_K / IQ6_K recon) | — | recon in-flight 2026-05-24 (ft2 has CPU impls; Vulkan shaders absent) |
 | X-3-s2, X-3-s3 (remaining asymmetric pairs) | — | starters exist, not yet spawned |
 | Mainline forward-sync rebase | — | fork synced to b9246 (`871b0b70f`); next sync pending |
 | iso3-K cross-V hang fix (TODO 68) | — | fix worker in-flight 2026-05-24 |
-| EAGLE3 port recon | — | recon in-flight 2026-05-24 |
+| EAGLE3 full factory integration | — | S1 ported `e9f6d9ce7`; `--spec-type` wiring + Vulkan parity in-flight |
+| IQ2_KL / IQ5_K / IQ6_K Vulkan parity | — | S1 ships CPU+CUDA/HIP; Vulkan ports in-flight |
 
 ## Blocked / awaiting decision
 
 | Item | Blocked on |
 |---|---|
-| DFlash spec-decode revival | Drafter GGUF sourcing (no Qwen3.5-9B DFlash drafter available from z-lab or community); beellama Criterion B satisfied, architecture verified |
+| DFlash spec-decode revival | DFlash S1 model loader ported (`b8bf27eda`); drafter GGUF sourcing still pending (no Qwen3.5-9B DFlash drafter available from z-lab or community) |
 | RotorQuant iso3-K cross-V (4 pairs: iso3×{iso4, f16, q8_0, planar4}) | TODO 68 — HIP kernel bugs in iso3-K side; ppl-gate Cat 2/3 triage required |
 | PFlash 1b (real scorer) | Quality validation smoke on existing 1a branch; user decision on 1b scope |
 | PolarQuant v2 evaluation | arXiv 2603.29078 withdrawn 2026-04-20 for errors; awaiting v2 repost or independent audit |
@@ -584,7 +652,7 @@ fork and contain no fork-specific type names or conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   `5d44db600` = mainline tag `b9133` (2026-05-13); rebase planned
   ~2026-05-24 to close ~80 commits of upstream drift.
-- Trunk: `main` (HEAD `30067d81b`).
+- Trunk: `main` (HEAD `b8bf27eda`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
@@ -626,8 +694,8 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 
 - **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
 - **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
-- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D)
-- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4, in-flight); EAGLE3, PHANTOM-X, TurboMind allocator
+- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`)
+- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); Q1_0_G128 (shipped `67edf5eec`); EAGLE3 (shipped `e9f6d9ce7`); PHANTOM-X (shipped `2199e8445` + `4fd52ddc0`); TurboMind allocator + Wave32 (pending)
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a, reference + monitoring, currently paused)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending)
 - **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, pending post-Phase-8)
