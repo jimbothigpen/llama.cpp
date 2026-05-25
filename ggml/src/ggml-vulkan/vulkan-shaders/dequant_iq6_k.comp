@@ -1,0 +1,66 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ6_K — ik_llama.cpp 6-bit imatrix (6.625 bpw).  256-element block.
+// 16 groups of 16 elements; direct int8_t scale per group.
+// 6-bit index: low nibble from qs, 2 high bits from qh.
+// Codebook per 16-element group selected by 1 bit from extra (bit g).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq6_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq6nl_values[128] = int[128](
+    -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
+     -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
+      -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
+      47,   51,   55,   59,   63,   68,   72,   77,   82,   87,   92,   98,  103,  109,  115,  121,
+    -126, -120, -114, -108, -103,  -97,  -92,  -87,  -83,  -78,  -73,  -69,  -65,  -61,  -57,  -53,
+     -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
+      -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
+      48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122
+);
+
+void main() {
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= p.nel / 256) return;
+
+    const float d     = float(data_a[ib_global].d);
+    const uint  extra = uint(data_a[ib_global].extra);
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k        = tid * 4 + r;
+        const uint g        = k >> 4;           // 0..15: group index (16 elements/group)
+        const uint j        = k & 0xf;          // 0..15: position within group
+        const uint ib64     = g >> 2;           // 0..3
+        const uint pos_quad = g & 3;            // 0..3: sub-block within ib64
+
+        // Scale: direct int8 per group
+        const float dl = d * float(int(data_a[ib_global].scales[g]));
+
+        // qs: 4 low bits; qs byte index = 32*ib64 + (pos_quad & 1)*16 + j
+        const uint qs_idx  = 32 * ib64 + (pos_quad & 1) * 16 + j;
+        const uint nib_sh  = (pos_quad >> 1) * 4;    // 0=low nibble, 4=high nibble
+        const uint nibble  = (uint(data_a[ib_global].qs[qs_idx]) >> nib_sh) & 0xf;
+
+        // qh: 2 high bits from qh[(ib64>>1)*32 + (pos_quad&1)*16 + j]
+        // shifted by (ib64&1)*4 + (pos_quad>>1)*2 within the byte
+        const uint qh_idx      = (ib64 >> 1) * 32 + (pos_quad & 1) * 16 + j;
+        const uint qh_shift    = (ib64 & 1) * 4 + (pos_quad >> 1) * 2;
+        const uint high2       = ((uint(data_a[ib_global].qh[qh_idx]) >> qh_shift) & 0x3) << 4;
+        const uint idx6        = nibble | high2;
+
+        // Codebook: 1 bit per group from extra (bit g); 64-entry codebooks
+        const uint codebook_off = ((extra >> g) & 1) << 6;
+
+        data_b[ib_global * 256 + k] = D_TYPE(dl * float(iq6nl_values[codebook_off + idx6]));
+    }
+}

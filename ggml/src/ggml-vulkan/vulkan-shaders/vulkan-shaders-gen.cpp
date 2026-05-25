@@ -79,6 +79,8 @@ const std::vector<std::string> type_names = {
     "iq4_kss",
     "iq4_kt",
     "iq2_kl",
+    "iq5_k",
+    "iq6_k",
     "turboq2_0",
     "turboq3_0",
     "turboq4_0",
@@ -591,9 +593,10 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
             tname == "turboq2_tcq" || tname == "turboq3_tcq") {
             continue;
         }
-        // IQ{2,3,4}_K and KS family use per-type standalone matvec shaders only.
+        // IQ{2,3,4,5,6}_K and KS family use per-type standalone matvec shaders only.
         // No generic mul_mm or mul_mmq backing.
-        if (tname == "iq2_k" || tname == "iq3_k" || tname == "iq4_k") {
+        if (tname == "iq2_k" || tname == "iq3_k" || tname == "iq4_k" ||
+            tname == "iq5_k" || tname == "iq6_k") {
             continue;
         }
         // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
@@ -725,7 +728,8 @@ void process_shaders() {
         // mul_mat_vecq_funcs.glsl has no implementation for DATA_A_IQ{2,3,4}_K.
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if ((is_legacy_quant(tname) || tname == "mxfp4" || is_k_quant(tname) || tname == "iq1_s" || tname == "iq1_m") &&
-            tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k") {
+            tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" &&
+            tname != "iq5_k" && tname != "iq6_k") {
             string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}}));
             string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_subgroup", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}}));
             string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_subgroup_no_shmem", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
@@ -741,9 +745,10 @@ void process_shaders() {
             string_to_spv("dequant_" + tname, "dequant_" + tname + ".comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float16_t"}}));
         }
 
-        // IQ{2,3,4}_K and the KS/KL-family types are weight-only quants; get_rows_quant.comp requires
+        // IQ{2,3,4,5,6}_K and the KS/KL-family types are weight-only quants; get_rows_quant.comp requires
         // dequant_funcs.glsl backing which is not implemented for these types. Skip get_rows.
         if (tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" &&
+            tname != "iq5_k" && tname != "iq6_k" &&
             tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" && tname != "iq4_kt" &&
             tname != "iq2_kl") {
             shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
@@ -1184,7 +1189,8 @@ void write_output_files() {
         if (btype == "q8_1" && (!is_legacy_quant(tname) && tname != "mxfp4" && !is_k_quant(tname) && tname != "iq1_s" && tname != "iq1_m")) {
             continue;
         }
-        if (btype == "q8_1" && (tname == "iq2_k" || tname == "iq3_k" || tname == "iq4_k")) {
+        if (btype == "q8_1" && (tname == "iq2_k" || tname == "iq3_k" || tname == "iq4_k" ||
+                                 tname == "iq5_k" || tname == "iq6_k")) {
             continue;
         }
         hdr << "extern const void * arr_dmmv_"   << tname << "_" << btype << "_f32_data[3];\n";
