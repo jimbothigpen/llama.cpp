@@ -101,7 +101,7 @@ struct llama_hparams {
 
     // DFlash speculative decode
     uint32_t dflash_block_size        = 0;
-    int32_t  dflash_mask_token_id     = -1;
+    uint32_t dflash_mask_token_id     = UINT32_MAX;
     uint32_t dflash_n_target_features = 0;
     uint32_t dflash_n_target_layers   = 0;
     uint32_t dflash_target_layer_ids[8] = {};
