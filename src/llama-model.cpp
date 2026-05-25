@@ -2652,7 +2652,20 @@ int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float
     if (buf_size < n_elements) {
         return 0;
     }
-    ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
+    const ggml_type fc_type = model->fc->type;
+    if (fc_type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
+    } else if (fc_type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(n_elements);
+        ggml_backend_tensor_get(model->fc, tmp.data(), 0, ggml_nbytes(model->fc));
+        ggml_fp16_to_fp32_row(tmp.data(), buf, n_elements);
+    } else if (fc_type == GGML_TYPE_BF16) {
+        std::vector<ggml_bf16_t> tmp(n_elements);
+        ggml_backend_tensor_get(model->fc, tmp.data(), 0, ggml_nbytes(model->fc));
+        ggml_bf16_to_fp32_row(tmp.data(), buf, n_elements);
+    } else {
+        return 0; // unsupported fc dtype
+    }
     return fc_input_size;
 }
 
