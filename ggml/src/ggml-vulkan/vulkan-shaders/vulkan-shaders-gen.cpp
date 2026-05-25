@@ -78,6 +78,7 @@ const std::vector<std::string> type_names = {
     "iq4_ks",
     "iq4_kss",
     "iq4_kt",
+    "iq2_kl",
     "turboq2_0",
     "turboq3_0",
     "turboq4_0",
@@ -595,9 +596,9 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         if (tname == "iq2_k" || tname == "iq3_k" || tname == "iq4_k") {
             continue;
         }
-        // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT: row-meta weight-only types.
+        // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
         // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
-        if (tname == "iq3_ks" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq4_kt") {
+        if (tname == "iq3_ks" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
 
@@ -740,10 +741,11 @@ void process_shaders() {
             string_to_spv("dequant_" + tname, "dequant_" + tname + ".comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float16_t"}}));
         }
 
-        // IQ{2,3,4}_K and the KS-family types are weight-only quants; get_rows_quant.comp requires
+        // IQ{2,3,4}_K and the KS/KL-family types are weight-only quants; get_rows_quant.comp requires
         // dequant_funcs.glsl backing which is not implemented for these types. Skip get_rows.
         if (tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" &&
-            tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" && tname != "iq4_kt") {
+            tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" && tname != "iq4_kt" &&
+            tname != "iq2_kl") {
             shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
 
             if (tname == "f16") {
