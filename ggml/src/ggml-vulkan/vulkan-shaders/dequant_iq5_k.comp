@@ -1,0 +1,64 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ5_K — ik_llama.cpp 5-bit imatrix (5.50 bpw).  256-element block.
+// 4 ib64 groups × 64 elements; within each group 4 sub-blocks of 16.
+// Scale: 6-bit signed (2 high bits from scales_h, 4 low from scales_l, biased −32).
+// 5-bit index: low nibble from qs, 1 high bit from qh.
+// Codebook per 16-element sub-block selected by 1 bit from extra.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_iq5_k data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq5nl_values[64] = int[64](
+    -126,-114,-103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6,
+      -1,   5,  11,  17,  23,  29,  36,  43,  51,  59,  68,  77,  87,  97, 109, 121,
+    -124,-112,-101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10,  -4,
+       1,   7,  13,  19,  25,  31,  38,  45,  53,  61,  70,  79,  89,  99, 111, 123
+);
+
+void main() {
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= p.nel / 256) return;
+
+    const float d     = float(data_a[ib_global].d);
+    const uint  extra = uint(data_a[ib_global].extra);
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k        = tid * 4 + r;
+        const uint ib64     = k / 64;
+        const uint pos      = k & 63;
+        const uint pos_quad = pos >> 4;      // 0..3: which 16-element sub-block
+        const uint j        = pos & 0xf;     // 0..15: position within sub-block
+
+        // Scale: low4 from scales_l nibble, high2 from scales_h, bias −32
+        const uint sl_idx = 2 * ib64 + (pos_quad >> 1);
+        const uint sl_nib = pos_quad & 1;
+        const uint low4   = (uint(data_a[ib_global].scales_l[sl_idx]) >> (4 * sl_nib)) & 0xf;
+        const uint high2  = ((uint(data_a[ib_global].scales_h[ib64]) >> (2 * pos_quad)) & 0x3) << 4;
+        const float dl    = d * float(int(low4 | high2) - 32);
+
+        // 5-bit index: low nibble from qs, high bit from qh at position (2*ib64 + pos_quad>>1)
+        const uint qs_idx   = 32 * ib64 + (pos_quad & 1) * 16 + j;
+        const uint nib_sh   = (pos_quad >> 1) * 4;
+        const uint nibble   = (uint(data_a[ib_global].qs[qs_idx]) >> nib_sh) & 0xf;
+        const uint qh_idx   = (pos_quad & 1) * 16 + j;
+        const uint qh_shift = 2 * ib64 + (pos_quad >> 1);
+        const uint qh_bit   = (uint(data_a[ib_global].qh[qh_idx]) >> qh_shift) & 1;
+        const uint idx5     = nibble | (qh_bit << 4);
+
+        // Codebook: 1 bit per sub-block from extra (bit at position 4*ib64 + pos_quad)
+        const uint codebook_off = ((extra >> (4 * ib64 + pos_quad)) & 1) << 5;
+
+        data_b[ib_global * 256 + k] = D_TYPE(dl * float(iq5nl_values[codebook_off + idx5]));
+    }
+}

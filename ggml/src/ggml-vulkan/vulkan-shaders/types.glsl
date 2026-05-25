@@ -2023,6 +2023,53 @@ struct block_iq4_k_packed16 {
 #define DATA_A_QUANT_K
 #endif
 
+// IQ5_K — ik_llama.cpp 5-bit imatrix (5.50 bpw, no row_meta).
+// Per block (176 bytes): float16 d | uint16 extra | uint8[4] scales_h |
+// uint8[8] scales_l | uint8[128] qs | uint8[32] qh.
+// 4 ib64 groups × 64 elements; 4 sub-blocks of 16 per ib64 group.
+// 5-bit index: low nibble from qs, 1 high bit from qh.
+#define QUANT_K_IQ5_K 256
+#define QUANT_R_IQ5_K 1
+
+struct block_iq5_k {
+    float16_t d;
+    uint16_t  extra;
+    uint8_t   scales_h[4];
+    uint8_t   scales_l[8];
+    uint8_t   qs[128];
+    uint8_t   qh[32];
+};
+
+#if defined(DATA_A_IQ5_K)
+#define QUANT_K QUANT_K_IQ5_K
+#define QUANT_R QUANT_R_IQ5_K
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
+// IQ6_K — ik_llama.cpp 6-bit imatrix (6.625 bpw, no row_meta).
+// Per block (212 bytes): float16 d | uint16 extra | int8[16] scales |
+// uint8[128] qs | uint8[64] qh.
+// 16 groups of 16 elements; direct int8 scale per group.
+// 6-bit index: low nibble from qs, 2 high bits from qh.
+#define QUANT_K_IQ6_K 256
+#define QUANT_R_IQ6_K 1
+
+struct block_iq6_k {
+    float16_t d;
+    uint16_t  extra;
+    int8_t    scales[16];
+    uint8_t   qs[128];
+    uint8_t   qh[64];
+};
+
+#if defined(DATA_A_IQ6_K)
+#define QUANT_K QUANT_K_IQ6_K
+#define QUANT_R QUANT_R_IQ6_K
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
 // Phase 5b-1b: row-meta KS family (IQ4_KS, IQ3_KS, IQ4_KSS, IQ4_KT)
 // These types have per-row metadata (float or half scale) before the block array.
 
