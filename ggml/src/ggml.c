@@ -1268,7 +1268,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FILL",
 
     "FLASH_ATTN_EXT",
-    "FLASH_ATTN_SPARSE",
     "FLASH_ATTN_BACK",
     "SSM_CONV",
     "SSM_SCAN",
@@ -1281,7 +1280,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV7",
     "SOLVE_TRI",
     "GATED_DELTA_NET",
-    "TURBO_WHT",
 
     "UNARY",
 
@@ -1297,6 +1295,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "FLASH_ATTN_SPARSE",
+    "TURBO_WHT",
 };
 
 static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
@@ -1380,7 +1380,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "fill(x, c)",
 
     "flash_attn_ext(x)",
-    "flash_attn_sparse(q, k, v)",
     "flash_attn_back(x)",
     "ssm_conv(x)",
     "ssm_scan(x)",
@@ -1393,7 +1392,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
-    "turbo_wht(a)",
 
     "unary(x)",
 
@@ -1409,6 +1407,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "flash_attn_sparse(q, k, v)",
+    "turbo_wht(a)",
 };
 
 static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
