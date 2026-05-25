@@ -9,7 +9,155 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-In-flight: iso3-K cross-V hang fix (TODO 68), EAGLE3 full factory integration, IQ2_KL/IQ5_K/IQ6_K Vulkan parity.
+In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); MTP V-J clean re-measurement post-mrope-fix on a quiet host (TODO 134); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103).
+
+### Fixed — MTP M-RoPE duplicate-impl regression (2026-05-25, `e8e767347`)
+
+Removed a duplicate `if (has_mtp) { configs.push_back(...DRAFT_MTP...) }` block at
+`common/speculative.cpp:2426-2428`, a copy-paste introduced by upstream
+`255582687b`. The duplicate caused two `common_speculative_state_draft_mtp`
+instances to be created; `process()` then ran twice per batch, advancing
+`ctx_dft seq_pos_max` twice and violating the M-RoPE `X < Y` invariant on the
+second call. Diagnosed initially as a checkpoint-restore bug; per-iteration
+tracing of `delta_post = -1` on all 124 iterations ruled that out. Fix is 3 LOC.
+
+Gates (Qwen3.5-35B-A3B-MTP-IQ4_XS on ai00 ROCm):
+mrope_errors **248 → 0**; accept rate **70.769%** (≥70 gate); PPL **6.5604**
+bit-identical to anchor; MTP-ON 17.761 t/s = **0.737× MTP-OFF** (§-FLAG —
+still below 0.78–0.85× projection; clean re-measurement on a quiet host queued
+as TODO 134, since the 24.1 t/s MTP-OFF baseline used here was contaminated by
+concurrent peer-worker builds).
+
+### Refactored — GGML op enum convergence to mainline (2026-05-25, `b3ec1f8e2`)
+
+Moved fork-only ops `GGML_OP_FLASH_ATTN_SPARSE` and `GGML_OP_TURBO_WHT` to the
+end of the op enum (just before `GGML_OP_COUNT`, after `GGML_OP_GLU`). All
+subsequent ops now match the mainline numeric values, eliminating the
+merge-conflict surface that mid-insertion was accumulating on every mainline
+rebase. 4/4 build cells PASS. PPL 6.5604 bit-for-bit anchor match.
+
+### Refactored — MTP CLI flag rename `mtp` → `draft-mtp` (2026-05-25, `763c79c9b`)
+
+`"draft-mtp"` is now the canonical `--spec-type` name matching mainline.
+`"mtp"` is retained as a backward-compat alias in
+`common_speculative_type_from_name_map`. No behavior change.
+
+### Added — Trellis IQ2_KT (Phase P3a) weight quant + IQ_KT-family template refactor (2026-05-25, `e9520caac`, `0dac276d9`)
+
+Generalized the IQ4_KT trellis scaffold in `ggml-iqk-kt.cpp` into a
+header-only template family `IQKTParams<G,N,A>` at
+`ggml/src/ggml-iqk-kt-family.hpp` (with `iqkt_gen_group_int`,
+`IQKTCookedBook`, `iqkt_build_cluster_index`, `iqkt_find_best_index`).
+Ported IQ2_KT (`IQKTParams<8, 16, false>`, slot 153, 2.125 bpw) as Phase P3a
+of the trellis port plan. Imatrix required at quantize-time.
+
+PPL gate (Qwen3.5-0.8B IQ4_KT @ template refactor): **11.4264 ± 2.22**
+(1-chunk, 512t, CPU, `wiki.test.raw`).
+
+**Known limitations:**
+
+- IQ2_KT on Qwen3.5-0.8B PPL=99.58 vs IQ2_KL=26.12 and IQ4_KT=11.43 — anomaly
+  open under `[[iq2-kt-known-issues]]` (scope-TBD: scale-dependent vs general).
+- Vulkan path not yet ported.
+- IQ3_KT / IQ1_KT (Phase P3b / P3c) queued behind P3a.
+
+### Added — IQ{2,3,1}_KT cluster-acceleration (8D base-3 hash, k=60) (2026-05-25, `1e8501e46`)
+
+GROUP_SIZE=8 trellis types fall back to a brute-force 65536-entry codebook
+search at quantize time (the IQ4_KT GROUP_SIZE=4 family already had cluster
+acceleration). The Option-C lift adds an 8-dimensional base-3 hash (3^8 = 6561
+bins) with `k_neighbours=60`, recovering ~30× quantize speedup (~7h → ~10–20 min
+on Qwen3.5-9B). Coverage 0.91% (599/65536); matches the IQ4_KT pattern.
+
+**Known limitations:**
+
+- PPL 107.87 vs brute-force baseline 99.58 — **+8.3%** above the ≤+5% clean
+  threshold (§-FLAG). Shipped on speedup grounds per the worker brief criteria.
+  Retune to k=80–100 queued for late-stage polish.
+- When IQ3_KT / IQ1_KT land via Phase P3b / P3c, apply the same `k_neighbours=60`
+  treatment at their `iqkt_cooked_book_init` call sites.
+
+### Added — IQ2_KL Vulkan shaders (Phase 5b-2a S2) (2026-05-25, `3723c1f61`)
+
+Ported IQ2_KL Vulkan dequant + matvec shaders + S1 brace/template fixes.
+IQ2_KL is now CPU + CUDA/HIP + Vulkan on `main`.
+
+### Added — IQ5_K + IQ6_K Vulkan shaders (Phase 5b-2 S2) (2026-05-25, `0ade7ff86`)
+
+Ported IQ5_K (slot 140) and IQ6_K (slot 141) Vulkan dequant + matvec
+shaders. Both are now CPU + CUDA/HIP + Vulkan on `main`. Imatrix required
+per PM-15.
+
+### Fixed — EAGLE3 fc tensor dtype-aware read (BF16/F16 → F32 conversion) (2026-05-25, `4c38845c4`)
+
+`src/llama-model.cpp:llama_model_eagle3_get_fc_weight()` hardcoded
+`n_elements * sizeof(float)` when the fc tensor is BF16, requesting twice as
+many bytes as the tensor holds and reading out of bounds. Fix uses
+`ggml_nbytes()` plus `ggml_bf16_to_fp32_row` / `ggml_fp16_to_fp32_row`
+conversion. Smoke gate PASSED (EAGLE3 init OK, 6.3 t/s, EXIT:0).
+
+### Added — DFlash S2 dispatch (`common_speculative_state_dflash` + factory) (2026-05-25, `ef80c728c`)
+
+DFlash speculative-decode dispatch wired into the `--spec-type` factory.
+`common_speculative_state_dflash` is now selectable from CLI / server.
+
+### Added — DFlash S3: GPU ring buffer, bulk argmax, server spec_type wiring (2026-05-25, `9b7ab4e83`)
+
+Phase S3 of the DFlash port: GPU-side ring buffer for drafter activations,
+bulk argmax kernel, and server-side `spec_type` plumbing for `llama-server
+--spec-type dflash`. End-to-end smoke gate GREEN on Qwen3.6-35B-A3B-MTP target
++ Qwen3.6 DFlash-draft Q8_0 — 33.3% combined accept rate in dual-spec mode
+(isolated DFlash-only rate unmeasured; estimated ≥60%).
+
+### Fixed — DFlash `mask_token_id` GGUF type mismatch (2026-05-25, `1436d1890`)
+
+`dflash_mask_token_id` was declared `int32_t` in `llama-hparams.h` but the
+GGUF stores it as `u32`. All binaries built before this fix failed to load
+the z-lab DFlash drafter GGUF. Build must be ≥ this commit to load any
+z-lab DFlash drafter.
+
+### Added — DFlashDraftModel safetensors → GGUF converter (2026-05-25, `ee7d4f896`)
+
+Ported the DFlashDraftModel converter (MIT lift from Anbeeld/beellama.cpp).
+Registered in `TEXT_MODEL_MAP` as `"DFlashDraftModel" → dflash_draft`. Adds
+`DFLASH_DRAFT` arch + `DFLASH_FC` / `DFLASH_HIDDEN_NORM` tensor enums to
+`gguf-py/gguf/constants.py`. Qwen3.5-4B and Qwen3.6 tokenizer-hash → `"qwen35"`
+mapping added. Smoke GREEN: 915 MB GGUF, arch=`dflash-draft`, all DFlash KV
+entries present. Gemma-4 path implemented but not yet smoke-tested.
+
+### Added — TriAttention Phase A in-graph K/V capture harness (2026-05-25, `6cbc9e06c`)
+
+TriAttention was deferred post-Phase-8 since 2026-05-15 due to a sub-alloc
+zero-read in `ggml_backend_tensor_get` (not fixed in mainline for the basic
+non-2D path TriAttention uses). The Phase A workaround installs a persistent
+graph-side capture buffer via `llama_tria_capture_alloc`, populated by
+`ggml_set_rows` nodes in `build_attn()`. Phase A `tria_compact_kv` is a no-op
+(harness only; zero evictions).
+
+Companion fixes:
+
+- `eea5e25f5` — `TRIA_HIP_BACKEND` guard so the Phase B GPU path stays gated
+  behind an undefined macro until Phase C lands.
+- `2ad2564f1` — safe null-return in `get_layer_k_raw` / `get_layer_v_raw` for
+  hybrid models (Qwen3.5-0.8B only has 6/24 layers in the full-attn KV cache).
+- `cbd071632` — third `dynamic_cast` branch in `src/llama-context.cpp` for
+  Gemma-4's `llama_kv_cache_iswa` (which does not inherit from `llama_kv_cache`).
+  Gemma-4 now allocates 35-layer K/V capture buffers. `kv_swa` (SWA layers) is
+  still not captured; Phase C extension needed for SWA coverage.
+
+Validation: 4-cell build PASS; Phase B GQA CPU smoke GREEN 3/3 (Qwen3.5-9B,
+Llama-3.1-8B, Gemma-4-E2B); PPL Δ=0.09% (no-op compact expected).
+
+### Refactored — Mainline rebase onto `b9310` (`e2ef8fe42`) (2026-05-25, `1191e48fc`)
+
+Periodic mainline forward-sync. 282 fork commits replayed onto `b9310`.
+3 cherry-picks from mainline: `9a9ca0ff2` (ggml-alloc OOB), `f9323396f`
+(MTP KV-type server), `d2a79534a` (FFN_LATENT MUL_MAT). 2 post-rebase
+fixups: `85fdde861` (restore 3-param `accept()` interface that the b9246
+rebase fixup reverted), `e109b17d8` (repair EAGLE3 struct with missing
+batch field + duplicate ctor/fns from rebase conflict). PPL smoke gate
+6.5604 vs anchor 6.71 — GREEN. ROCm + Vulkan builds EXIT:0 on ai00 gfx1150.
+ai01 builds not executed in this session (§-FLAG).
 
 ### Added — DFlash S1 model loader (2026-05-24, `b8bf27eda`)
 
