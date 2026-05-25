@@ -2409,9 +2409,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));
         }
-        if (has_mtp) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
-        }
+        // (removed duplicate has_mtp push 2026-05-25 — see [[mtp-mrope-checkpoint-bug]])
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
