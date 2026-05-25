@@ -12,6 +12,8 @@
 #include "ggml-opt.h"
 
 #include <map>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 struct llama_model;
@@ -23,6 +25,23 @@ class llama_io_write_i;
 // "memory" as in abstract memory for the context
 struct llama_memory_i;
 struct llama_memory_context_i;
+
+// DFlash: hidden state buffer for one captured layer (one slot)
+struct dflash_layer_hidden_buf {
+    std::vector<float> data;    // flattened [n_tokens * n_embd]
+    int64_t n_embd   = 0;
+    int64_t n_tokens = 0;
+};
+
+// DFlash: per-context capture state (set up by llama_set_dflash_capture)
+struct dflash_capture_data {
+    std::vector<int32_t>     layer_ids;        // target layer indices to capture
+    std::vector<std::string> tensor_names;     // "l_out-{id}" names for O(1) lookup
+    std::unordered_map<std::string, size_t> hidden_name_idx;
+
+    // pointer to context's layer_hiddens (single slot in S2)
+    std::vector<std::vector<dflash_layer_hidden_buf>> * hiddens = nullptr;
+};
 
 // stores copy of the memory in device buffer. used for fast state save/load
 struct llama_memory_buffer {
@@ -213,6 +232,23 @@ struct llama_context {
     llama_memory_breakdown memory_breakdown() const;
 
     //
+    // DFlash hidden state capture
+    //
+
+    // Configure which target layers to capture hidden states from during decode.
+    // Sets up the GGML eval callback to intercept "l_out-{id}" tensors.
+    void set_dflash_capture(const int32_t * layer_ids, int32_t n_layers);
+
+    // Reset captured token counts before each decode (called from decode()).
+    void dflash_reset_hidden_capture();
+
+    void    set_cross_data           (const float * data, int64_t n_embd, int64_t n_enc);
+    float * get_layer_hidden         (int layer_idx);
+    int64_t get_layer_hidden_n_tokens(int layer_idx) const;
+    int64_t get_layer_hidden_n_embd  (int layer_idx) const;
+    int32_t get_n_layer_hiddens      () const;
+
+    //
     // training
     //
 
@@ -309,6 +345,11 @@ private:
 
     llama_cross  cross;  // TODO: tmp for handling cross-attention - need something better probably
     llama_eagle3 eagle3_state;
+
+    // DFlash: eval-callback-based hidden state capture (populated by set_dflash_capture)
+    // layer_hiddens[slot][capture_layer_index] — single slot in S2
+    std::unique_ptr<dflash_capture_data>                 dflash_capture;
+    std::vector<std::vector<dflash_layer_hidden_buf>>    layer_hiddens;
 
     std::unique_ptr<llama_memory_i> memory;
 
