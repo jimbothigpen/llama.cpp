@@ -77,6 +77,7 @@ const std::vector<std::string> type_names = {
     "iq3_ks",
     "iq4_ks",
     "iq4_kss",
+    "iq2_kt",
     "iq4_kt",
     "iq2_kl",
     "iq5_k",
@@ -601,7 +602,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         }
         // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
         // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
-        if (tname == "iq3_ks" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq4_kt" || tname == "iq2_kl") {
+        if (tname == "iq3_ks" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq2_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
 
@@ -749,7 +750,8 @@ void process_shaders() {
         // dequant_funcs.glsl backing which is not implemented for these types. Skip get_rows.
         if (tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" &&
             tname != "iq5_k" && tname != "iq6_k" &&
-            tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" && tname != "iq4_kt" &&
+            tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" &&
+            tname != "iq2_kt" && tname != "iq4_kt" &&
             tname != "iq2_kl") {
             shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
 

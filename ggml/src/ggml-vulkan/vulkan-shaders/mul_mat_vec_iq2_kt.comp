@@ -1,0 +1,135 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ2_KT — see dequant_iq2_kt.comp for layout.  Bound as uint32_t[].
+// Block size = 16 u32; row stride = 1 + nb * 16 u32 (1 u32 = float row_scale).
+// 32 groups per super-block, GROUP_SIZE = 8.
+//
+// Threading: 64 threads/WG, BLOCKS_PER_WG = 8.
+//   tid & 7  = block-within-WG (0..7)
+//   tid >> 3 = thread-within-block (0..7); each handles 4 groups per block.
+// shmem: 8 blocks × 16 u32 = 128 u32.  Loaded cooperatively (64 threads × 2 u32).
+
+#define BLOCKS_PER_WG 8
+#define U32_PER_BLOCK 16
+#define GROUPS_PER_BLOCK 32
+#define GROUP_SIZE 8
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+const uint IQ2KT_KA     = 0xCBAC1FEDu;
+const uint IQ2KT_Offset = 0u;
+
+void iq2kt_gen_group(uint idx, out float result[8]) {
+    uint x = idx + IQ2KT_Offset;
+    [[unroll]] for (int k = 0; k < 8; k++) {
+        x = IQ2KT_KA * x;
+        const uint s = x & 0x3f3f3f3fu;
+        const int sum =  int(s         & 0xffu)
+                       + int((s >>  8) & 0xffu)
+                       + int((s >> 16) & 0xffu)
+                       + int((s >> 24) & 0xffu);
+        result[k] = float(sum - 126);
+    }
+}
+
+shared uint shmem_a[BLOCKS_PER_WG * U32_PER_BLOCK];
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;     // QUANT_K = 256
+    const uint row_size_u32       = 1u + num_blocks_per_row * U32_PER_BLOCK;
+
+    const uint tid = gl_LocalInvocationID.x;
+    const uint ix  = tid & 7u;      // block-in-WG 0..7
+    const uint t   = tid >> 3;      // thread-within-block 0..7
+
+    // Each thread-within-block handles groups [t*4 .. t*4+3] within the block.
+    const uint g_base = t * 4u;     // first group this thread processes (0, 4, 8, ..., 28)
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row     = first_row + n;
+        const uint row_u32 = row * row_size_u32;
+        const float d_row  = uintBitsToFloat(data_a[row_u32]);
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG),
+                                              num_blocks_per_row - i_base);
+            const uint u32_to_load = blocks_this_iter * U32_PER_BLOCK;
+
+            barrier();
+            // Each thread loads 2 u32 (128 u32 total / 64 threads = 2 exactly).
+            [[unroll]] for (uint pi = 0; pi < 2; ++pi) {
+                const uint shmem_idx = tid + pi * 64u;
+                if (shmem_idx < u32_to_load) {
+                    const uint local_block  = shmem_idx / U32_PER_BLOCK;
+                    const uint u32_in_block = shmem_idx - local_block * U32_PER_BLOCK;
+                    const uint global_block = i_base + local_block;
+                    const uint global_u32   = row_u32 + 1u + global_block * U32_PER_BLOCK + u32_in_block;
+                    shmem_a[shmem_idx] = data_a[global_u32];
+                }
+            }
+            barrier();
+
+            const uint global_block = i_base + ix;
+            if (global_block < num_blocks_per_row) {
+                const uint shmem_base = ix * U32_PER_BLOCK;
+
+                const uint y_base = global_block * 256u + t * 4u * uint(GROUP_SIZE);
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    FLOAT_TYPE sum = FLOAT_TYPE(0.0);
+
+                    // Process 4 consecutive groups assigned to this thread.
+                    [[unroll]] for (uint gi = 0u; gi < 4u; gi++) {
+                        const uint g = g_base + gi;   // global group in block [0..31]
+                        // Unpack 16-bit index: each u32 holds 2 groups.
+                        const uint word = shmem_a[shmem_base + (g >> 1)];
+                        const uint idx  = (g & 1u) == 0u ? (word & 0xffffu) : (word >> 16u);
+
+                        float gv[8];
+                        iq2kt_gen_group(idx, gv);
+
+                        const uint b_idx = j * p.batch_stride_b + b_offset
+                                         + y_base + gi * uint(GROUP_SIZE);
+                        [[unroll]] for (uint i = 0u; i < uint(GROUP_SIZE); i++) {
+                            sum = fma(FLOAT_TYPE(gv[i]),
+                                      FLOAT_TYPE(data_b[b_idx + i]),
+                                      sum);
+                        }
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(d_row), sum, temp[j][n]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

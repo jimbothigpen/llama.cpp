@@ -930,6 +930,15 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_iq4_kss_ref,
         .row_meta_size            = 4,
     },
+    [GGML_TYPE_IQ2_KT] = {
+        .type_name                = "iq2_kt",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_iq2_kt),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq2_kt,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_iq2_kt_ref,
+        .row_meta_size            = 4,
+    },
     [GGML_TYPE_IQ4_KT] = {
         .type_name                = "iq4_kt",
         .blck_size                = QK_K,
@@ -1668,7 +1677,7 @@ static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
         return false;
     }
     // Use ggml_row_size so that the expected nb[1] stride includes row_meta_size for
-    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.  For all other types row_meta_size is
+    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KT/IQ4_KT.  For all other types row_meta_size is
     // 0, making this identical to the previous next_nb *= ne[0]/blck_size formula.
     next_nb = ggml_row_size(tensor->type, tensor->ne[0]);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
@@ -2016,7 +2025,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     result->nb[0] = ggml_type_size(type);
     // ggml_row_size includes the per-row metadata preamble (row_meta_size) for
-    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ4_KT.  For all other types row_meta_size
+    // types like IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KT/IQ4_KT.  For all other types row_meta_size
     // is 0, so this is identical to the previous nb[0]*(ne[0]/blck_size) formula.
     result->nb[1] = ggml_row_size(type, result->ne[0]);
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
@@ -8060,6 +8069,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_KS:  result = quantize_iq3_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KSS: result = quantize_iq4_kss(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ2_KT:  result = quantize_iq2_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KT:  result = quantize_iq4_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ5_K:   result = quantize_iq5_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ6_K:   result = quantize_iq6_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

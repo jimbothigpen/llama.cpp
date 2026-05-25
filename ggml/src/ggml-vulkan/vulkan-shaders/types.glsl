@@ -2080,7 +2080,21 @@ struct block_iq6_k {
 #endif
 
 // Phase 5b-1b: row-meta KS family (IQ4_KS, IQ3_KS, IQ4_KSS, IQ4_KT)
+// P3a: IQ2_KT trellis 2-bit.
 // These types have per-row metadata (float or half scale) before the block array.
+
+// IQ2_KT — ik_llama.cpp trellis-coded 2-bit (2.0 bpw, row_meta=4 = float row scale).
+// Block: 16 u32 = 64 bytes. No struct; bound as raw uint32_t[].
+#define QUANT_K_IQ2_KT 256
+#define QUANT_R_IQ2_KT 1
+
+#if defined(DATA_A_IQ2_KT)
+#define QUANT_K QUANT_K_IQ2_KT
+#define QUANT_R QUANT_R_IQ2_KT
+#define QUANT_AUXF 1
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
 
 // IQ4_KT — ik_llama.cpp trellis-coded 4-bit (4.0 bpw, row_meta=4 = float row scale).
 // Block: 32 u32 = 128 bytes. No struct; bound as raw uint32_t[].
