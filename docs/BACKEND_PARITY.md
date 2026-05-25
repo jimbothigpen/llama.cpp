@@ -80,24 +80,25 @@ Status updated per layer landing. Initial state derived from
 | MTP spec-decode spine + Migration 0-3 | 2 | **RELEASED** (speculative driver + loader + graph converged to b9246; V-J gap closed `705ffccb8`) | no novel GPU kernels — Vulkan parity via inherited mainline paths | n/a (CPU/scheduler only; no backend-specific kernels) |
 | NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | **RELEASED** Vulkan (smoke + 5ch PPL PASS on ai01 RADV gfx1103, 2026-05-24; llama-cli load+gen + llama-perplexity validated) | n/a (released; backend-agnostic inference path, no new kernels) |
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
-| TriAttention | 4 | source has dedicated HIP scoring kernel | source has none | P1 — scoring kernel needs Vulkan port |
+| TriAttention | 9 (revived) | **Phase A+B SHIPPED** — in-graph K/V capture harness `6cbc9e06c` + HIP guard + Gemma-4 ISWA fix `cbd071632`; GQA CPU smoke GREEN 3/3; Phase C GPU GQA kernel pending | (Phase A+B are CPU-side; GPU kernel work in Phase C) | P1 — scoring kernel + SWA-layer capture extension needed |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
-| Q1_0_G128 (PrismML 1-bit) | 5 | **RELEASED** — ported `67edf5eec` at ygg canonical slot 96 | no Vulkan shaders from source; CPU path only for now | P2 — Vulkan port pending |
-| EAGLE3 | 5 | **RELEASED** — hidden-state extrapolation ported `e9f6d9ce7` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
-| PHANTOM-X | 5 | **RELEASED** — speculator ported `2199e8445`; Phase 2 dispatch `4fd52ddc0` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
+| Q1_0_G128 (PrismML 1-bit) | 5 | **RELEASED** — ported `87d3705e0` at ygg canonical slot 96; Q1_0 FA dispatch fix `011939dcb` | **RELEASED** — Vulkan dequant shader `dequant_q1_0_g128.comp` ported in same wave | n/a (released) |
+| EAGLE3 | 5 | **RELEASED** — hidden-state extrapolation ported `c0f3c1486`; fc dtype-aware fix `4c38845c4` (BF16/F16→F32); struct rebase fixup `e109b17d8` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
+| PHANTOM-X | 5 | **RELEASED** — speculator ported `d6dc63224`; Phase 2 dispatch `388169995` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
 | TurboMind allocator | 5 | gfx1030-specific in source | source has none | Investigate; may not be needed |
 | Wave32 RDNA2 kernels | 5 | ROCm-only by design (RDNA2 SIMD32) | not applicable | **ROCm-only** by design |
 | IK quants base-K (IQ2_K, IQ3_K, IQ4_K) | 5 (5b-1a) | **RELEASED** — ROCm + Vulkan (PPL Δ < 0.0045 vs reference) | **RELEASED** — Vulkan batched mul_mat SEGV fixed `5fe804bcd` | n/a (released) |
 | IK quants row-meta KS/KT (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) | 5 (5b-1b) | **RELEASED** — ROCm + Vulkan (PPL gate 20-chunk Δ ≤ 0.043) | **RELEASED** — Vulkan SEGV fixed via `is_empty()` dequant-to-f16 fallback | n/a (released) |
-| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 S1 (`f7a489de5`) | in-flight (S2 worker running) | P1 — Vulkan port pending |
-| IK quant IQ2_KL (2.6875 bpw) | 5 (5b-1c) | **RELEASED** — Phase 5b-1c S1 (`e404274b9`) | Vulkan parity in-flight | P1 — Vulkan port pending |
+| IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 CPU+CUDA/HIP `8e19be061` | **RELEASED** — Vulkan dequant + matvec shaders `0ade7ff86` 2026-05-25 | n/a (released) |
+| IK quant IQ2_KL (2.6875 bpw) | 5 (5b-1c) | **RELEASED** — Phase 5b-1c CPU+CUDA/HIP `f18a92a42` | **RELEASED** — Vulkan dequant + matvec shaders `3723c1f61` 2026-05-25 | n/a (released) |
+| IK Trellis IQ2_KT (Phase P3a) | 5 (Trellis P3a) | **RELEASED** — template refactor `e9520caac` + port `0dac276d9` + cluster-accel `1e8501e46` 2026-05-25 | not yet ported | P1 — Vulkan port pending |
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
 | Fused MoE | 6 | source has CUDA | source has none | P2 |
-| Trellis weight quants (IQ2/3/4_KT) | 6 | ik_llama branches dormant | none | **declined** unless Phase 0.5 recon revives them |
+| Trellis weight quants (IQ3_KT, IQ1_KT) | 5 (Trellis P3b, P3c) | port-in-progress — IQ3_KT on branch `feature/trellis-iq3-kt-port`; IQ1_KT queued; IQ2_KT shipped above as part of Phase P3a | not yet ported | follows IQ2_KT pattern |
 | Q\*_K row-interleaved (\_R4/\_R8) | 6 | CUDA only in ik_llama | none | P2 — CPU variants exist; GPU optional |
 | RaBitQ TQ3 weights (RBQ3_\*) | 7 | source has CUDA; HIP branch not yet merged | source has none | P1 |
-| DFlash S1 model loader | 8 | **S1 loader ported** (`b8bf27eda`); spec-decode path pending GGUF sourcing | backend-agnostic | P3 — backend-agnostic |
+| DFlash spec-decode (S1+S2+S3+converter) | 7a | **RELEASED** — S1 loader `b6a75e524` + S2 dispatch `ef80c728c` + S3 GPU ring buffer + server `spec_type` `9b7ab4e83` + mask_token_id u32 fix `1436d1890` + DFlashDraftModel safetensors→GGUF converter `ee7d4f896`; end-to-end smoke GREEN @ `2726a56c0` | backend-agnostic at S3 dispatch level; GPU ring buffer is CUDA/HIP | n/a (released) |
 | PFlash prompt compression | 8 | mostly CPU/scheduler | mostly CPU | P3 — backend-agnostic |
 | --hugepages | 9 | Linux kernel feature; backend-agnostic | same | n/a |
 | gfx1030 normalization | 9 | ROCm-only by design | not applicable | **ROCm-only** by design |
