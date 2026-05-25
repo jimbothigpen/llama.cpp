@@ -6,10 +6,9 @@
 
 struct tria_backend g_tria_backend;
 
-#if defined(GGML_USE_HIP) && defined(GGML_USE_CUDA)
-/* Static HIP linking — GGML_USE_HIP is always set for HIP builds,
-   GGML_USE_CUDA is the compat macro only set when GGML_BACKEND_DL=OFF.
-   Both together = HIP static build = safe to resolve tria_hip_* symbols. */
+#if defined(TRIA_HIP_BACKEND)
+/* Phase B GPU scoring — requires triattention-hip.hip + TRIA_HIP_BACKEND define.
+   Phase A uses CPU-backed capture only; this path is intentionally disabled. */
 #include "triattention-hip.h"
 
 int tria_backend_init(void) {
