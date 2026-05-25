@@ -391,7 +391,7 @@ Primary target model: Gemma 4 26B-A4B with the paired
 `Gemma4-26B-A4B-it-assistant` checkpoint. Backend-agnostic (no novel GPU kernels;
 operates within the existing speculative-decode scheduling path).
 
-Full `--spec-type eagle3` factory dispatch integration is in-flight.
+Wired as `--spec-type draft-eagle3` since e9f6d9ce7.
 
 ---
 
