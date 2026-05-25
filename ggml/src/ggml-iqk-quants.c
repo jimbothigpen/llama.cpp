@@ -1795,6 +1795,10 @@ void dequantize_row_iq5_k(const block_iq5_k * GGML_RESTRICT x, float * GGML_REST
             extra >>= 4;
             shift += 2;
             if (shift == 8) { qh += 32; shift = 0; }
+        }  // ib64
+    }  // i
+}  // dequantize_row_iq5_k
+
 // =============================================================================
 // IQ2_KL — 2.6875 bpw (row_meta_size = 2: per-row ggml_half scale)
 // Row layout: [ggml_half d][block_iq2_kl blocks[n_per_row/QK_K]]
@@ -2538,6 +2542,10 @@ void ggml_vec_dot_iq6_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
             if (shift == 8) { qh += 32; shift = 0; }
         }
         sumf += d * sumb;
+    }
+    *s = sumf;
+}
+
 size_t quantize_iq2_kl(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                         int64_t nrows, int64_t n_per_row, const float * imatrix) {
     assert(n_per_row % QK_K == 0);

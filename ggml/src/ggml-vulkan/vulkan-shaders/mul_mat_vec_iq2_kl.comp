@@ -1,0 +1,174 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "mul_mat_vec_base.glsl"
+
+// IQ2_KL — see dequant_iq2_kl.comp for layout. Buffer at binding 0 is raw
+// row-major IQ2_KL data: [ggml_half d_row][block_0 (86B)]...[block_{nb-1}]
+// per row. data_a[] is bound as uint16_t[].
+//
+// Per block (43 u16):
+//   u16[0]:    scales_h        — high 2 bits x 8 sub-block scales
+//   u16[1-2]:  scales_l[0..3]  — low 4 bits x 8 sub-block scales
+//   u16[3-34]: qs[0..63]       — 4-bit primary indices
+//   u16[35-42]:qh[0..15]       — 1 extra bit per element per ib64
+//
+// Threading: 64 threads, 8 per A block (BLOCKS_PER_WG=8).
+//   ix    = tid >> 3: block index in the BLOCKS_PER_WG window
+//   itid  = tid & 7:  inner thread (0..7)
+//   ib64  = itid >> 1 (0..3): which 64-element group within the block
+//   dl_sel = itid & 1 (0..1): dl1 (first 32 elements of ib64) or dl2 (last 32)
+//
+// Each thread accumulates 16 vec2 activation pairs → 32-element dot product.
+
+#define BLOCKS_PER_WG   8
+#define UINTS_PER_BLOCK 22
+#define U16_PER_BLOCK   43
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// iq2kl_values: 32 pairs of int8 values. v0 = low byte, v1 = high byte.
+const int iq2kl_v0[32] = int[32](
+    -63, -63, -40, -40, -40, -40, -23, -23, -23, -23, -23,
+    -10, -10, -10, -10,   1,   1,   1,   1,   1,
+     13,  13,  13,  13,  13,  28,  28,  28,  28,  28,  47,  47
+);
+const int iq2kl_v1[32] = int[32](
+    -23,  13, -63, -10,  13,  47, -40, -23,   1,  13,  28,
+    -63,   1,  13,  47, -23, -10,   1,  13,  28,
+    -40, -23, -10,   1,  13, -63, -23,   1,  28,  47, -23,  13
+);
+
+// Shared memory: BLOCKS_PER_WG blocks, each 22 uints (43 u16 + 1 padding).
+// Total: 8 * 22 * 4 = 704 bytes.
+shared uint shmem_a[BLOCKS_PER_WG * UINTS_PER_BLOCK];
+
+uint shmem_u16(uint block_idx, uint u16_idx) {
+    const uint uint_idx = block_idx * UINTS_PER_BLOCK + (u16_idx >> 1);
+    return (shmem_a[uint_idx] >> ((u16_idx & 1) << 4)) & 0xffff;
+}
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+    const uint row_size_u16       = 1 + num_blocks_per_row * U16_PER_BLOCK;
+
+    const uint tid    = gl_LocalInvocationID.x;
+    const uint itid   = tid & 7;
+    const uint ix     = tid >> 3;
+    const uint ib64   = itid >> 1;   // 0..3
+    const uint dl_sel = itid & 1;    // 0=dl1 (elements 0..31), 1=dl2 (elements 32..63)
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint k = 0; k < NUM_ROWS; ++k) {
+            temp[j][k] = FLOAT_TYPE(0);
+        }
+    }
+
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint row     = first_row + n;
+        const uint row_u16 = row * row_size_u16;
+        const float d_row  = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+        for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
+            // Cooperative load of up to BLOCKS_PER_WG blocks into shmem.
+            // Each block = 22 uints (44 u16 incl. 1 padding). 64 threads load
+            // 176 uints total; 3 uints/thread with 1 leftover → load 4 with bounds check.
+            const uint blocks_this_iter = min(uint(BLOCKS_PER_WG), num_blocks_per_row - i_base);
+            const uint uints_to_load = blocks_this_iter * UINTS_PER_BLOCK;
+
+            barrier();
+            [[unroll]] for (uint pi = 0; pi < 4; ++pi) {
+                const uint shmem_idx = tid + pi * 64;
+                if (shmem_idx < uints_to_load) {
+                    const uint local_block  = shmem_idx / UINTS_PER_BLOCK;
+                    const uint u16_pair_idx = shmem_idx - local_block * UINTS_PER_BLOCK;
+                    const uint global_block = i_base + local_block;
+                    const uint block_u16    = row_u16 + 1 + global_block * U16_PER_BLOCK;
+
+                    const uint u16_low_idx = u16_pair_idx << 1;
+                    const uint v0 = uint(data_a[block_u16 + u16_low_idx]);
+                    // Last u16 of each block is padding; don't read OOB.
+                    const uint v1 = (u16_low_idx + 1 < U16_PER_BLOCK)
+                                  ? uint(data_a[block_u16 + u16_low_idx + 1])
+                                  : 0u;
+                    shmem_a[shmem_idx] = v0 | (v1 << 16);
+                }
+            }
+            barrier();
+
+            const uint local_block_idx = ix;
+            const uint global_block    = i_base + local_block_idx;
+            if (global_block < num_blocks_per_row) {
+                // Decode scale for this thread's (ib64, dl_sel) sub-block.
+                const uint scales_h = shmem_u16(local_block_idx, 0);
+                const uint sl01     = shmem_u16(local_block_idx, 1);
+                const uint sl23     = shmem_u16(local_block_idx, 2);
+                uint sl[4] = uint[4](sl01 & 0xff, (sl01 >> 8) & 0xff,
+                                     sl23 & 0xff, (sl23 >> 8) & 0xff);
+
+                const uint scale_sub = 2*ib64 + dl_sel;     // 0..7
+                const uint sl_shift  = 4 * (ib64 >> 1);     // 0 for ib64<2, 4 for ib64>=2
+                const uint lo = (sl[scale_sub & 3] >> sl_shift) & 0xf;
+                const uint hi = (scales_h >> (4*ib64 + 2*dl_sel)) & 3;
+                const float dl = d_row * float(int(lo | (hi << 4)) - 32);
+
+                // Absolute start of the 32-element activation range for this thread.
+                const uint y_base_thread = global_block * 256 + ib64 * 64 + dl_sel * 32;
+
+                // qs u16 base for this ib64: qs starts at block u16 offset 3,
+                // ib64's 16 bytes start at byte ib64*16 → u16 offset ib64*8.
+                const uint qs_u16_off = 3 + ib64 * 8;
+                // qh u16 base: qh starts at block u16 offset 35.
+                const uint qh_u16_off = 35;
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    FLOAT_TYPE sum = FLOAT_TYPE(0.0);
+                    for (uint q = 0; q < 16; ++q) {
+                        // qs byte at ib64*16+q: u16 = qs_u16_off + q/2
+                        const uint qs_pair = shmem_u16(local_block_idx, qs_u16_off + (q >> 1));
+                        const uint qs_byte = (qs_pair >> ((q & 1) * 8)) & 0xff;
+
+                        // qh byte at q: u16 = qh_u16_off + q/2
+                        const uint qh_pair = shmem_u16(local_block_idx, qh_u16_off + (q >> 1));
+                        const uint qh_byte = (qh_pair >> ((q & 1) * 8)) & 0xff;
+
+                        // 5-bit codebook index: nibble from qs + extra bit from qh
+                        const uint qs_nib = (dl_sel == 0u) ? (qs_byte & 0xf) : (qs_byte >> 4);
+                        const uint qh_bit = (qh_byte >> (2*ib64 + dl_sel)) & 1;
+                        const uint idx = qs_nib | (qh_bit << 4);
+
+                        const int v0 = iq2kl_v0[idx];
+                        const int v1 = iq2kl_v1[idx];
+
+                        const vec2 b = vec2(data_b_v2[(j * p.batch_stride_b + b_offset + y_base_thread) / 2 + q]);
+                        sum = fma(FLOAT_TYPE(b.x), FLOAT_TYPE(v0),
+                              fma(FLOAT_TYPE(b.y), FLOAT_TYPE(v1), sum));
+                    }
+                    temp[j][n] = fma(FLOAT_TYPE(dl), sum, temp[j][n]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

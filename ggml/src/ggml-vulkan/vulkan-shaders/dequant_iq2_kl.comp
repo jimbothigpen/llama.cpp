@@ -1,0 +1,102 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ2_KL — ik_llama.cpp 2-bit large (2.6875 bpw, row_meta=2)
+// Row layout: [ggml_half d][block_0 (86B)][block_1]...[block_{nb-1}]
+//
+// Per block (86 bytes = 43 u16):
+//   u16[0]:    scales_h        — high 2 bits x 8 sub-block scales (packed)
+//   u16[1-2]:  scales_l[0..3]  — low 4 bits x 8 sub-block scales (4 bytes)
+//   u16[3-34]: qs[0..63]       — primary 4-bit indices (64 bytes = 32 u16)
+//   u16[35-42]:qh[0..15]       — 1 extra bit per element per ib64 (16 bytes = 8 u16)
+//
+// Codebook: iq2kl_values[32] — each entry packs 2 int8 values.
+//   val[0] = low byte, val[1] = high byte.
+// 5-bit index per iq64 sub-pair: (qs nibble) | (qh bit << 4).
+//
+// Dispatch: one WG per super-block (256 elements), 64 threads.
+// Thread tid: ib64 = tid/16 (0..3), j = tid%16 (0..15) → 4 outputs each.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint16_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+// iq2kl_values decoded: v0 = low int8, v1 = high int8 of each uint16 entry.
+const int iq2kl_v0[32] = int[32](
+    -63, -63, -40, -40, -40, -40, -23, -23, -23, -23, -23,
+    -10, -10, -10, -10,   1,   1,   1,   1,   1,
+     13,  13,  13,  13,  13,  28,  28,  28,  28,  28,  47,  47
+);
+const int iq2kl_v1[32] = int[32](
+    -23,  13, -63, -10,  13,  47, -40, -23,   1,  13,  28,
+    -63,   1,  13,  47, -23, -10,   1,  13,  28,
+    -40, -23, -10,   1,  13, -63, -23,   1,  28,  47, -23,  13
+);
+
+void main() {
+    const uint nb           = p.K / 256;
+    const uint row_size_u16 = 1 + nb * 43;
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    // Row scale prefix (ggml_half) at row * row_size_u16
+    const uint row_u16 = row * row_size_u16;
+    const float d = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+    // Block start in u16 indices
+    const uint block_u16 = row_u16 + 1 + ib_in_row * 43;
+
+    // scales_h: u16[0]
+    const uint scales_h = uint(data_a[block_u16]);
+
+    // scales_l[4] packed into u16[1] (bytes 0,1) and u16[2] (bytes 2,3)
+    const uint sl01 = uint(data_a[block_u16 + 1]);
+    const uint sl23 = uint(data_a[block_u16 + 2]);
+    uint sl[4];
+    sl[0] =  sl01        & 0xff;
+    sl[1] = (sl01 >> 8)  & 0xff;
+    sl[2] =  sl23        & 0xff;
+    sl[3] = (sl23 >> 8)  & 0xff;
+
+    const uint tid  = gl_LocalInvocationID.x;
+    const uint ib64 = tid / 16;  // 0..3: which 64-element group
+    const uint j    = tid % 16;  // 0..15: which qs entry within this group
+
+    // Decode dl1 (first sub-block scale of ib64) and dl2 (second)
+    const uint sl_shift = 4 * (ib64 >> 1);  // 0 for ib64<2, 4 for ib64>=2
+
+    const uint lo1 = (sl[(2*ib64    ) & 3] >> sl_shift) & 0xf;
+    const uint hi1 = (scales_h >> (4*ib64    )) & 3;
+    const float dl1 = d * float(int(lo1 | (hi1 << 4)) - 32);
+
+    const uint lo2 = (sl[(2*ib64 + 1) & 3] >> sl_shift) & 0xf;
+    const uint hi2 = (scales_h >> (4*ib64 + 2)) & 3;
+    const float dl2 = d * float(int(lo2 | (hi2 << 4)) - 32);
+
+    // qs byte at ib64*16+j: u16 offset = 3 + (ib64*16+j)/2
+    const uint qs_byte_idx = ib64 * 16 + j;
+    const uint qs_byte = (uint(data_a[block_u16 + 3 + (qs_byte_idx >> 1)]) >> ((qs_byte_idx & 1) * 8)) & 0xff;
+
+    // qh byte at j: u16 offset = 35 + j/2
+    const uint qh_byte = (uint(data_a[block_u16 + 35 + (j >> 1)]) >> ((j & 1) * 8)) & 0xff;
+
+    // 5-bit codebook indices
+    const uint idx1 = (qs_byte & 0xf) | (((qh_byte >> (2*ib64    )) & 1) << 4);
+    const uint idx2 = (qs_byte >> 4 ) | (((qh_byte >> (2*ib64 + 1)) & 1) << 4);
+
+    const uint y_base = ib_global * 256 + ib64 * 64;
+    data_b[y_base + 2*j +  0] = D_TYPE(dl1 * float(iq2kl_v0[idx1]));
+    data_b[y_base + 2*j +  1] = D_TYPE(dl1 * float(iq2kl_v1[idx1]));
+    data_b[y_base + 2*j + 32] = D_TYPE(dl2 * float(iq2kl_v0[idx2]));
+    data_b[y_base + 2*j + 33] = D_TYPE(dl2 * float(iq2kl_v1[idx2]));
+}
