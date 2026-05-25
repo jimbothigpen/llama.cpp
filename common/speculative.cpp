@@ -387,12 +387,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     common_params_speculative_draft params;
 
-    common_speculative_impl_draft_eagle3(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
-    {
-        LOG_INF("%s: adding speculative implementation 'draft-eagle3'\n", __func__);
-        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, params.draft.n_max, params.draft.n_min, params.draft.p_min);
-    }
+    llama_batch batch;
 
     std::vector<common_sampler_ptr> smpls;
 
@@ -2733,34 +2728,6 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_acc_tokens,
                 str_perf.c_str());
     }
-}
-
-bool common_speculative_need_embd_pre_norm(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd_pre_norm()) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool common_speculative_need_embd(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd()) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 // ----------------------------------------------------------------------------
