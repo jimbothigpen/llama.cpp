@@ -160,7 +160,7 @@ struct common_speculative_impl {
 
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
-    virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
+    virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
 
     // The external-assistant MTP impl owns a separately-loaded draft context
     // (the gemma4-assistant GGUF) that the server must reach to thread
@@ -1287,7 +1287,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
@@ -1438,7 +1438,7 @@ struct common_speculative_impl_mtp_external : public common_speculative_impl {
             /*constant_draft_positions=*/ true);
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         GGML_UNUSED(seq_id);
         GGML_UNUSED(n_accepted);
         // No-op: the external assistant has no own MTP-KV cells to drop — the
@@ -1922,7 +1922,7 @@ struct common_speculative_impl_phantom : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id >= 0 && seq_id < (llama_seq_id)phantoms.size()) {
             phantoms[seq_id]->accept(n_accepted);
         }
@@ -2139,7 +2139,7 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t n_accepted) override {
+    void accept(llama_seq_id /*seq_id*/, uint16_t n_accepted, bool /*is_other*/) override {
         // Adaptive draft length
         if (n_draft_last > 0) {
             float f_acc = (float) n_accepted / (float) n_draft_last;
