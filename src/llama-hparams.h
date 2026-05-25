@@ -94,6 +94,11 @@ struct llama_hparams {
 
     bool kv_only_nextn = false; // if true, only the last nextn_predict_layers blocks have a KV cache (MTP head arches)
 
+    // EAGLE3 speculative decode
+    std::array<int, 3> eagle3_extract_layers = {0, 0, 0};
+    uint32_t eagle3_target_hidden_size = 0;
+    bool     eagle3_norm_before_residual = false;
+
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;

@@ -290,6 +290,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_step35(params);
         case LLM_ARCH_ZAYA:
             return new llama_model_zaya(params);
+        case LLM_ARCH_EAGLE3:
+            return new llama_model_eagle3(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -2343,6 +2345,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_EAGLE3:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -2623,4 +2626,32 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
         layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);
     }
+}
+
+//
+// EAGLE3 public API
+//
+
+int32_t llama_model_eagle3_n_aux_layers(const struct llama_model * model) {
+    if (!model || model->arch != LLM_ARCH_EAGLE3) {
+        return 0;
+    }
+    int32_t n = 0;
+    for (int i = 0; i < 3; i++) {
+        if (model->hparams.eagle3_extract_layers[i] >= 0) n++;
+    }
+    return (n > 0) ? n : 3;
+}
+
+int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float * buf, int64_t buf_size) {
+    if (!model || model->arch != LLM_ARCH_EAGLE3 || !model->fc) {
+        return 0;
+    }
+    const int64_t fc_input_size = model->fc->ne[0]; // rows of fc.weight
+    const int64_t n_elements    = ggml_nelements(model->fc);
+    if (buf_size < n_elements) {
+        return 0;
+    }
+    ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
+    return fc_input_size;
 }

@@ -76,6 +76,30 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
+// EAGLE3 support - stores intermediate features from target model
+struct llama_eagle3 {
+    // Configuration: which layers to extract from target model
+    std::vector<int> extract_layer_indices;
+
+    // Extracted features from target model (for encoder input)
+    // Layout: [layer0: n_embd*n_tokens, layer1: n_embd*n_tokens, layer2: n_embd*n_tokens]
+    std::vector<float> target_features;
+    int32_t n_tokens_last_batch = 0;  // number of tokens in last extraction batch
+
+    // Encoder output (for decoder input)
+    std::vector<float> g_embeddings;
+
+    // Tensor references for feature extraction from target model
+    std::vector<ggml_tensor *> extract_tensors;
+
+    void clear() {
+        target_features.clear();
+        g_embeddings.clear();
+        extract_tensors.clear();
+        n_tokens_last_batch = 0;
+    }
+};
+
 struct llm_graph_params;
 
 //
@@ -276,6 +300,20 @@ public:
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
 
     const llama_cross * cross;
+};
+
+class llm_graph_input_eagle3_g_embd : public llm_graph_input_i {
+public:
+    llm_graph_input_eagle3_g_embd(
+            const llama_eagle3 * eagle3, int64_t n_embd) : eagle3(eagle3), n_embd(n_embd) {}
+    virtual ~llm_graph_input_eagle3_g_embd() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * g_embd = nullptr; // F32 [n_embd, n_tokens]
+
+    const llama_eagle3 * eagle3;
+    const int64_t n_embd;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -564,6 +602,7 @@ struct llm_graph_params {
     const std::vector<llama_sidecar_handler_ptr> * sidecars;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    llama_eagle3                 * eagle3 = nullptr;
 
     // gemma4-assistant external-MTP: the target (backbone) context this graph
     // borrows hidden state + foreign K/V from, and the seq_id its KV cells were
@@ -663,6 +702,7 @@ struct llm_graph_params {
             loras   == other.loras   &&
             sidecars == other.sidecars &&
             cross   == other.cross   &&
+            cparams.eagle3_extract_enabled == other.cparams.eagle3_extract_enabled &&
             // gemma4-assistant: attaching/detaching a target context changes the
             // graph topology (degenerate fast-path vs. full foreign-KV attention).
             mtp_target_ctx == other.mtp_target_ctx;
@@ -807,6 +847,7 @@ struct llm_graph_context {
     const std::vector<llama_sidecar_handler_ptr> * sidecars;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    llama_eagle3                 * eagle3;
 
     // gemma4-assistant external-MTP: copied from llm_graph_params; the assistant
     // graph builder reads foreign K/V + hidden state from this target context.
@@ -948,6 +989,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_cls() const;
 
     ggml_tensor * build_inp_cross_embd() const;
+    ggml_tensor * build_inp_eagle3_g_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;

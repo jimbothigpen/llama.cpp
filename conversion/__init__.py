@@ -125,6 +125,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Llama4ForConditionalGeneration": "llama",
     "LlamaBidirectionalModel": "llama",
     "LlamaForCausalLM": "llama",
+    "LlamaForCausalLMEagle3": "eagle3",
     "LlamaModel": "llama",
     "LlavaForConditionalGeneration": "llama",
     "LlavaStableLMEpochForCausalLM": "stablelm",

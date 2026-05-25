@@ -249,6 +249,11 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class Eagle3:
+        EXTRACT_LAYERS         = "{arch}.eagle3.extract_layers"
+        TARGET_HIDDEN_SIZE     = "{arch}.eagle3.target_hidden_size"
+        NORM_BEFORE_RESIDUAL   = "{arch}.eagle3.norm_before_residual"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -516,6 +521,7 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
     ZAYA             = auto()
+    EAGLE3           = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -932,6 +938,10 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # eagle3 speculative decode
+    EAGLE3_FC              = auto()
+    EAGLE3_HIDDEN_NORM     = auto()
+    EAGLE3_D2T             = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1064,6 +1074,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.ZAYA:             "zaya",
+    MODEL_ARCH.EAGLE3:           "eagle3",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1479,6 +1490,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    # EAGLE3 speculative decode
+    MODEL_TENSOR.EAGLE3_FC:                 "fc",
+    MODEL_TENSOR.EAGLE3_HIDDEN_NORM:        "blk.{bid}.hidden_norm",
+    MODEL_TENSOR.EAGLE3_D2T:                "d2t",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -4158,6 +4173,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
+    ],
+    MODEL_ARCH.EAGLE3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.EAGLE3_FC,
+        MODEL_TENSOR.EAGLE3_HIDDEN_NORM,
+        MODEL_TENSOR.EAGLE3_D2T,
     ],
     # TODO
 }

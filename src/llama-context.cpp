@@ -1166,6 +1166,23 @@ void llama_context::set_warmup(bool value) {
     //sched_need_reserve = true;
 }
 
+void llama_context::set_eagle3(const int * extract_layers, int32_t n_layers) {
+    eagle3_state.extract_layer_indices.assign(extract_layers, extract_layers + n_layers);
+    eagle3_state.extract_tensors.assign(n_layers, nullptr);
+    cparams.eagle3_extract_enabled = n_layers > 0;
+    sched_need_reserve = true;
+}
+
+const std::vector<float> & llama_context::get_eagle3_target_features() const {
+    return eagle3_state.target_features;
+}
+
+void llama_context::set_eagle3_g_embeddings(const float * data, int32_t n_tokens) {
+    const int64_t n_embd = model.hparams.n_embd;
+    eagle3_state.g_embeddings.assign(data, data + n_embd * n_tokens);
+    eagle3_state.n_tokens_last_batch = n_tokens;
+}
+
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (!sampler && sampling.samplers.count(seq_id) == 0) {
         return true;
@@ -1366,6 +1383,23 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    // EAGLE3: extract intermediate hidden states from the target model after each decode
+    if (cparams.eagle3_extract_enabled && !eagle3_state.extract_tensors.empty()) {
+        const int64_t n_embd = model.hparams.n_embd;
+        const int32_t n_tok  = (int32_t) ubatch.n_tokens;
+
+        eagle3_state.target_features.resize(eagle3_state.extract_tensors.size() * n_embd * n_tok);
+        eagle3_state.n_tokens_last_batch = n_tok;
+
+        for (size_t i = 0; i < eagle3_state.extract_tensors.size(); ++i) {
+            ggml_tensor * t = eagle3_state.extract_tensors[i];
+            if (t) {
+                float * dst = eagle3_state.target_features.data() + i * n_embd * n_tok;
+                ggml_backend_tensor_get(t, dst, 0, n_embd * n_tok * sizeof(float));
+            }
+        }
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -2343,6 +2377,7 @@ llm_graph_params llama_context::graph_params(
         /*.sidecars    =*/ sidecars.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.eagle3      =*/ const_cast<llama_eagle3 *>(&eagle3_state),
         /*.mtp_target_ctx    =*/ mtp_target_ctx,
         /*.mtp_target_seq_id =*/ mtp_target_seq_id,
         /*.samplers    =*/ sampling.samplers,
@@ -3581,6 +3616,35 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);
+}
+
+void llama_set_eagle3(llama_context * ctx_tgt, const llama_model * model_eagle3) {
+    const auto & hp = model_eagle3->hparams;
+    // Collect non-negative extract layer indices from the eagle3 model config
+    std::vector<int> layers;
+    for (int i = 0; i < 3; i++) {
+        if (hp.eagle3_extract_layers[i] >= 0) {
+            layers.push_back(hp.eagle3_extract_layers[i]);
+        }
+    }
+    if (layers.empty()) {
+        // Fallback: use first 3 even if zero-initialized
+        for (int i = 0; i < 3; i++) {
+            layers.push_back(hp.eagle3_extract_layers[i]);
+        }
+    }
+    ctx_tgt->set_eagle3(layers.data(), (int32_t) layers.size());
+}
+
+const float * llama_get_eagle3_target_features(llama_context * ctx_tgt, int32_t * n_features) {
+    ctx_tgt->synchronize();
+    const auto & feats = ctx_tgt->get_eagle3_target_features();
+    if (n_features) *n_features = (int32_t) feats.size();
+    return feats.empty() ? nullptr : feats.data();
+}
+
+void llama_set_eagle3_g_embeddings(llama_context * ctx_eagle3, const float * data, int32_t n_tokens) {
+    ctx_eagle3->set_eagle3_g_embeddings(data, n_tokens);
 }
 
 void llama_synchronize(llama_context * ctx) {
