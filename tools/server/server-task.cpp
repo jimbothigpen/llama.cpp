@@ -307,9 +307,7 @@ task_params server_task::params_from_json_cmpl(
 
     params.speculative = defaults.speculative;
 
-    // TODO: to keep things simple, we disable speculative parameter adjustments for now
-#if 0
-    // TODO: for now, be able to adjust only the draft-model based speculative parameters
+    // Allow per-request adjustment of draft-model speculative parameters
     params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
     params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
     params.speculative.draft.p_min = json_value(data, "speculative.p_min", defaults.speculative.draft.p_min);
@@ -318,17 +316,28 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
     params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
 
-    // for debugging and research purposes
-    params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
-
-    params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
-    params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
-    params.speculative.ngram_min_hits   = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
-
-    params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
-    params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
-    params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
-#endif
+    // spec_type: validate that the requested spec type matches the server's configured type.
+    // The speculative type is set at server startup (--spec-type flag) and cannot change per request;
+    // this field lets clients assert they expect DFlash (or another type) and get an error if misconfigured.
+    if (data.contains("spec_type")) {
+        const std::string requested = json_value(data, "spec_type", std::string(""));
+        if (!requested.empty()) {
+            const auto requested_types = common_speculative_types_from_names({requested});
+            bool found = false;
+            for (const auto & rt : requested_types) {
+                if (std::find(defaults.speculative.types.begin(), defaults.speculative.types.end(), rt)
+                        != defaults.speculative.types.end()) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw std::invalid_argument("spec_type '" + requested +
+                    "' is not active on this server (configured: " +
+                    common_speculative_type_name_str(defaults.speculative.types) + ")");
+            }
+        }
+    }
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
