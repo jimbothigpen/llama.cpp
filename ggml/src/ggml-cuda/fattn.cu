@@ -330,6 +330,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q1_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q1_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q1_0, GGML_TYPE_Q1_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q1_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q1_0)
 #else
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_F16)
@@ -337,6 +343,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q1_0, GGML_TYPE_Q1_0)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     // BF16 K × TURBOQ V asymmetric KV cache pairs
@@ -685,6 +692,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_TURBOQ2_0:
