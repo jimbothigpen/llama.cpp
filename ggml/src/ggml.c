@@ -894,6 +894,23 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_iq2_k,
         .from_float_ref           = (ggml_from_float_t) quantize_row_iq2_k_ref,
     },
+    // Phase 5b-2: no-row-meta 5/6-bit IK family (row_meta_size=0)
+    [GGML_TYPE_IQ5_K] = {
+        .type_name                = "iq5_k",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_iq5_k),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq5_k,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_iq5_k_ref,
+    },
+    [GGML_TYPE_IQ6_K] = {
+        .type_name                = "iq6_k",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_iq6_k),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq6_k,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_iq6_k_ref,
+    },
     // Phase 5b-1b: row-meta KS family (row_meta_size set; P0 infra required)
     [GGML_TYPE_IQ4_KS] = {
         .type_name                = "iq4_ks",
@@ -8035,6 +8052,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ3_KS:  result = quantize_iq3_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KSS: result = quantize_iq4_kss(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KT:  result = quantize_iq4_kt (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ5_K:   result = quantize_iq5_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ6_K:   result = quantize_iq6_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

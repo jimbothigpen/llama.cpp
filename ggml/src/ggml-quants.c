@@ -5565,7 +5565,9 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KT:
-            // IQK weight quant types: skip deep validation (non-standard block layout with row_meta)
+        case GGML_TYPE_IQ5_K:
+        case GGML_TYPE_IQ6_K:
+            // IQK weight quant types: skip deep validation (non-standard block layout)
             break;
         default:
             {

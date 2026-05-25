@@ -455,7 +455,10 @@ extern "C" {
         GGML_TYPE_IQ2_K   = 137, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
         GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: frankenturbo2 ID 59
         GGML_TYPE_IQ4_K   = 139, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
-        // slots 140–143 reserved for IK compat zone extensions (IQ5_K=140, IQ6_K=141, etc.)
+        // Phase 5b-2: no-row-meta 5/6-bit IK family (row_meta_size=0)
+        GGML_TYPE_IQ5_K   = 140, // ik_llama IQK 5-bit imatrix-aware weight quant (5.50 bpw) — source: ikllama/main
+        GGML_TYPE_IQ6_K   = 141, // ik_llama IQK 6-bit imatrix-aware weight quant (6.625 bpw) — source: ikllama/ik/iq6_k
+        // slots 142–143 reserved for IK compat zone extensions
         // Phase 5b-1b: row-meta KS family (requires row_meta_size infra)
         GGML_TYPE_IQ4_KS  = 144, // ik_llama IQK 4-bit small (4.25 bpw, row_meta=4) — source: frankenturbo2 ID 61
         // slot 145 reserved (IQ2_KS in ik_llama compat zone)
