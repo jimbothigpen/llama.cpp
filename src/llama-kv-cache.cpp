@@ -1417,13 +1417,15 @@ ggml_type llama_kv_cache::type_v() const {
 }
 
 ggml_tensor * llama_kv_cache::get_layer_k_raw(int32_t il) const {
-    const int32_t ikv = map_layer_ids.at(il);
-    return layers[ikv].k;
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) return nullptr;
+    return layers[it->second].k;
 }
 
 ggml_tensor * llama_kv_cache::get_layer_v_raw(int32_t il) const {
-    const int32_t ikv = map_layer_ids.at(il);
-    return layers[ikv].v;
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) return nullptr;
+    return layers[it->second].v;
 }
 
 uint32_t llama_kv_cache::get_n_used() const {
