@@ -2658,3 +2658,32 @@ int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float
     ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
     return fc_input_size;
 }
+
+//
+// DFlash drafter model public API
+//
+
+int32_t llama_model_dflash_block_size(const struct llama_model * model) {
+    return (int32_t) model->hparams.dflash_block_size;
+}
+
+int32_t llama_model_dflash_mask_token_id(const struct llama_model * model) {
+    return (int32_t) model->hparams.dflash_mask_token_id;
+}
+
+int32_t llama_model_dflash_n_target_layers(const struct llama_model * model) {
+    return (int32_t) model->hparams.dflash_n_target_layers;
+}
+
+int32_t llama_model_dflash_n_target_features(const struct llama_model * model) {
+    return (int32_t) model->hparams.dflash_n_target_features;
+}
+
+int32_t llama_model_dflash_target_layer_ids(const struct llama_model * model, int32_t * layer_ids, int32_t capacity) {
+    int32_t n = (int32_t) model->hparams.dflash_n_target_layers;
+    int32_t ret = std::min(n, capacity);
+    for (int32_t i = 0; i < ret; ++i) {
+        layer_ids[i] = (int32_t) model->hparams.dflash_target_layer_ids[i];
+    }
+    return ret;
+}

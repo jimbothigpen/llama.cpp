@@ -1118,6 +1118,55 @@ extern "C" {
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
+    // -------------------------------------------------------------------------
+    // DFlash: block-diffusion speculative decoding
+    // -------------------------------------------------------------------------
+
+    enum {
+        LLAMA_DFLASH_MAX_VERIFY_TOKENS = 25,  // must be >= draft_max + 1
+        LLAMA_DFLASH_MAX_SLOTS         = 8,
+        LLAMA_DFLASH_PER_SLOT_CTX      = 512, // must match common_speculative_impl_dflash::ctx_window
+    };
+
+    // DFlash drafter model hyperparameters (from GGUF metadata)
+    LLAMA_API int32_t llama_model_dflash_block_size       (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_mask_token_id    (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_layers  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_features(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_target_layer_ids (const struct llama_model * model, int32_t * layer_ids, int32_t capacity);
+
+    // DFlash: configure the target context to capture hidden states from specified layers
+    LLAMA_API void llama_set_dflash_capture(struct llama_context * ctx, const int32_t * layer_ids, int32_t n_layers);
+
+    // DFlash: set the cross-attention data (drafter context receives target hidden states)
+    // n_embd = n_target_features, n_enc = cross_len (number of context tokens)
+    LLAMA_API void llama_set_cross_data(struct llama_context * ctx, const float * data, int64_t n_embd, int64_t n_enc);
+
+    // DFlash: read captured layer hidden states from the target context
+    LLAMA_API int32_t llama_get_n_layer_hiddens     (const struct llama_context * ctx);
+    LLAMA_API float * llama_get_layer_hidden         (      struct llama_context * ctx, int layer_idx);
+    LLAMA_API int64_t llama_get_layer_hidden_n_tokens(const struct llama_context * ctx, int layer_idx);
+    LLAMA_API int64_t llama_get_layer_hidden_n_embd  (const struct llama_context * ctx, int layer_idx);
+
+    // DFlash: slot selection for multi-slot batched drafting (stub — single slot in S2)
+    LLAMA_API void llama_dflash_set_active_slot(struct llama_context * ctx, int slot_idx);
+
+    // DFlash: GPU cross-attention ring buffer (stubs — return nullptr/no-op in S2; GPU ring deferred to S3)
+    LLAMA_API void * llama_dflash_cross_ring_gpu_init     (struct llama_context * ctx, int n_layers, int n_embd, int ring_size);
+    LLAMA_API void   llama_dflash_cross_ring_gpu_free     (void * handle);
+    LLAMA_API void   llama_dflash_cross_ring_gpu_write    (void * handle, int layer, int ring_pos, const float * data, int n_tokens, int n_embd);
+    LLAMA_API void   llama_dflash_cross_ring_gpu_set_cross(struct llama_context * ctx, void * handle, llama_seq_id seq_id, int ring_write_pos, int ring_filled, int n_layers, int n_embd, int ctx_window);
+
+    // DFlash: drafter sampling configuration (stubs — no-ops in S2)
+    LLAMA_API void llama_set_dflash_topk       (struct llama_context * ctx, int k);
+    LLAMA_API void llama_set_dflash_sample_temp(struct llama_context * ctx, float temp);
+    LLAMA_API void llama_set_dflash_n_slots    (struct llama_context * ctx, int n);
+
+    // DFlash: GPU argmax for top-K drafting (stubs — return nullptr, forces CPU fallback in S2)
+    LLAMA_API int32_t * llama_get_logits_argmax      (struct llama_context * ctx);
+    LLAMA_API float   * llama_get_logits_argmax_probs(struct llama_context * ctx);
+    LLAMA_API int32_t   llama_get_logits_argmax_k    (struct llama_context * ctx);
+
     //
     // backend sampling API [EXPERIMENTAL]
     // note: use only if the llama_context was created with at least one llama_sampler_seq_config
