@@ -522,6 +522,7 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     ZAYA             = auto()
     EAGLE3           = auto()
+    DFLASH_DRAFT     = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -942,6 +943,9 @@ class MODEL_TENSOR(IntEnum):
     EAGLE3_FC              = auto()
     EAGLE3_HIDDEN_NORM     = auto()
     EAGLE3_D2T             = auto()
+    # dflash speculative decode
+    DFLASH_FC              = auto()
+    DFLASH_HIDDEN_NORM     = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1075,6 +1079,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.ZAYA:             "zaya",
     MODEL_ARCH.EAGLE3:           "eagle3",
+    MODEL_ARCH.DFLASH_DRAFT:     "dflash-draft",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1494,6 +1499,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.EAGLE3_FC:                 "fc",
     MODEL_TENSOR.EAGLE3_HIDDEN_NORM:        "blk.{bid}.hidden_norm",
     MODEL_TENSOR.EAGLE3_D2T:                "d2t",
+    # DFlash speculative decode
+    MODEL_TENSOR.DFLASH_FC:                 "dflash_fc",
+    MODEL_TENSOR.DFLASH_HIDDEN_NORM:        "dflash_hidden_norm",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -4191,6 +4199,26 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.EAGLE3_FC,
         MODEL_TENSOR.EAGLE3_HIDDEN_NORM,
         MODEL_TENSOR.EAGLE3_D2T,
+    ],
+    MODEL_ARCH.DFLASH_DRAFT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.DFLASH_FC,
+        MODEL_TENSOR.DFLASH_HIDDEN_NORM,
     ],
     # TODO
 }
