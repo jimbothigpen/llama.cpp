@@ -296,3 +296,78 @@ static __device__ __forceinline__ void dequantize_iq2_k(const void * vx, const i
     v.x = dl * (float)values[idx0];
     v.y = dl * (float)values[idx1];
 }
+
+// IQ5_K: 256-element superblock, 4 sub-blocks of 64, four 6-bit signed scales per sub-block.
+// 5-bit index = 4 low bits (qs nibble) | 1 high bit (qh). extra bit selects shifted (+32) codebook.
+static __device__ __forceinline__ void dequantize_iq5_k(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_iq5_k * x = (const block_iq5_k *) vx + ib;
+    const float d = __half2float(x->d);
+
+    const int ib64   = iqs >> 6;          // 0..3: 64-element group
+    const int quarter = (iqs >> 4) & 3;   // 0..3: 16-element quarter within group
+    const int j      = iqs & 15;          // 0..14 (even): position within quarter
+
+    const uint8_t sl0 = x->scales_l[2*ib64+0];
+    const uint8_t sl1 = x->scales_l[2*ib64+1];
+    const uint8_t sh  = x->scales_h[ib64];
+    const int dl_int = (quarter == 0) ? (int)((sl0 & 0xf) | ((sh << 4) & 0x30)) - 32 :
+                       (quarter == 1) ? (int)((sl0 >>  4) | ((sh << 2) & 0x30)) - 32 :
+                       (quarter == 2) ? (int)((sl1 & 0xf) | ((sh >> 0) & 0x30)) - 32 :
+                                        (int)((sl1 >>  4) | ((sh >> 2) & 0x30)) - 32;
+    const float dl = d * (float)dl_int;
+
+    const int extra_bit = (x->extra >> (4*ib64 + quarter)) & 1;
+    const int8_t * values = iq5nl_values_dev + (extra_bit ? 32 : 0);
+
+    const int use_upper = quarter >> 1;          // 0=lower nibble, 1=upper nibble
+    const int qh_shift  = iqs >> 5;              // 0..7: all ib64 groups share qh[0..31], diff bits
+    const int qs_base   = 32*ib64 + (quarter & 1)*16 + j;
+    const int qh_base   =           (quarter & 1)*16 + j; // all ib64 share qh[0..31]
+
+    const uint8_t qs0 = x->qs[qs_base];
+    const uint8_t qs1 = x->qs[qs_base + 1];
+    const uint8_t qh0 = x->qh[qh_base];
+    const uint8_t qh1 = x->qh[qh_base + 1];
+
+    const int idx0 = (use_upper ? (qs0 >> 4) : (qs0 & 0xf)) | (((qh0 >> qh_shift) & 1) << 4);
+    const int idx1 = (use_upper ? (qs1 >> 4) : (qs1 & 0xf)) | (((qh1 >> qh_shift) & 1) << 4);
+
+    v.x = dl * (float)values[idx0];
+    v.y = dl * (float)values[idx1];
+}
+
+// IQ6_K: 256-element superblock, 4 sub-blocks of 64, four direct int8 scales per sub-block.
+// 6-bit index = 4 low bits (qs nibble) | 2 high bits (qh). extra bit selects shifted (+64) codebook.
+static __device__ __forceinline__ void dequantize_iq6_k(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_iq6_k * x = (const block_iq6_k *) vx + ib;
+    const float d = __half2float(x->d);
+
+    const int ib64   = iqs >> 6;          // 0..3: 64-element group
+    const int quarter = (iqs >> 4) & 3;   // 0..3: 16-element quarter within group
+    const int j      = iqs & 15;          // 0..14 (even): position within quarter
+
+    const float dl = d * (float)x->scales[4*ib64 + quarter];
+
+    const int extra_bit = (x->extra >> (4*ib64 + quarter)) & 1;
+    const int8_t * values = iq6nl_values_dev + (extra_bit ? 64 : 0);
+
+    const int use_upper = quarter >> 1;          // 0=lower nibble, 1=upper nibble
+    const int qh_base   = (ib64 >> 1)*32 + (quarter & 1)*16 + j;
+    const int qh_shift  = (ib64 & 1)*4;          // 0 for ib64 0,2; 4 for ib64 1,3
+    const int qs_base   = 32*ib64 + (quarter & 1)*16 + j;
+
+    const uint8_t qs0 = x->qs[qs_base];
+    const uint8_t qs1 = x->qs[qs_base + 1];
+    const uint8_t qh0 = x->qh[qh_base];
+    const uint8_t qh1 = x->qh[qh_base + 1];
+
+    const int idx0 = use_upper ?
+        ((qs0 >> 4) | (((qh0 >> qh_shift) & 0x0c) << 2)) :
+        ((qs0 & 0xf) | (((qh0 >> qh_shift) & 0x03) << 4));
+    const int idx1 = use_upper ?
+        ((qs1 >> 4) | (((qh1 >> qh_shift) & 0x0c) << 2)) :
+        ((qs1 & 0xf) | (((qh1 >> qh_shift) & 0x03) << 4));
+
+    v.x = dl * (float)values[idx0];
+    v.y = dl * (float)values[idx1];
+}

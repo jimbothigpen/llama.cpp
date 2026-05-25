@@ -1018,6 +1018,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_block_cont_cuda<QK_K, QR_IQ3_K, dequantize_iq3_k>;
         case GGML_TYPE_IQ2_K:
             return dequantize_block_cont_cuda<QK_K, QR_IQ2_K, dequantize_iq2_k>;
+        case GGML_TYPE_IQ5_K:
+            return dequantize_block_cont_cuda<QK_K, QR_IQ5_K, dequantize_iq5_k>;
+        case GGML_TYPE_IQ6_K:
+            return dequantize_block_cont_cuda<QK_K, QR_IQ6_K, dequantize_iq6_k>;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -1085,6 +1089,10 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_block_cont_cuda<QK_K, QR_IQ3_K, dequantize_iq3_k>;
         case GGML_TYPE_IQ2_K:
             return dequantize_block_cont_cuda<QK_K, QR_IQ2_K, dequantize_iq2_k>;
+        case GGML_TYPE_IQ5_K:
+            return dequantize_block_cont_cuda<QK_K, QR_IQ5_K, dequantize_iq5_k>;
+        case GGML_TYPE_IQ6_K:
+            return dequantize_block_cont_cuda<QK_K, QR_IQ6_K, dequantize_iq6_k>;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:
@@ -1122,6 +1130,10 @@ to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK_K, QR_IQ3_K, dequantize_iq3_k>;
         case GGML_TYPE_IQ2_K:
             return dequantize_block_cuda<QK_K, QR_IQ2_K, dequantize_iq2_k>;
+        case GGML_TYPE_IQ5_K:
+            return dequantize_block_cuda<QK_K, QR_IQ5_K, dequantize_iq5_k>;
+        case GGML_TYPE_IQ6_K:
+            return dequantize_block_cuda<QK_K, QR_IQ6_K, dequantize_iq6_k>;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16>;
         default:
@@ -1182,6 +1194,10 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK_K, QR_IQ3_K, dequantize_iq3_k>;
         case GGML_TYPE_IQ2_K:
             return dequantize_block_cuda<QK_K, QR_IQ2_K, dequantize_iq2_k>;
+        case GGML_TYPE_IQ5_K:
+            return dequantize_block_cuda<QK_K, QR_IQ5_K, dequantize_iq5_k>;
+        case GGML_TYPE_IQ6_K:
+            return dequantize_block_cuda<QK_K, QR_IQ6_K, dequantize_iq6_k>;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16, float>;
         default:

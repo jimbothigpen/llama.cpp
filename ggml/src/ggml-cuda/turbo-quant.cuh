@@ -22,6 +22,10 @@
 #define QR_IQ3_K 1   // ik_llama IQ3_K (256-element superblock, 3.44 bpw)
 #define QR_IQ2_K 1   // ik_llama IQ2_K (256-element superblock, 2.375 bpw)
 
+// ---- Phase 5b-2: ik_llama no-row-meta 5/6-bit types ----
+#define QR_IQ5_K 1   // ik_llama IQ5_K (256-element superblock, 5.50 bpw)
+#define QR_IQ6_K 1   // ik_llama IQ6_K (256-element superblock, 6.625 bpw)
+
 // IQ4_K centroid table — first 16 are standard iq4nl values, second 16 are "shifted" variant
 static __constant__ int8_t iq4k_values[32] = {
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
@@ -38,6 +42,26 @@ static __constant__ int8_t iq3nl_values_dev[16] = {
 static __constant__ int8_t iq2nl_values_dev[8] = {
     -31, -13,  1, 17,
     -26,  -8,  6, 22,
+};
+
+// IQ5_K centroid table — 32 standard + 32 shifted values (source: ikllama/main ggml-common.h)
+static __constant__ int8_t iq5nl_values_dev[64] = {
+    -126, -114, -103,  -92,  -83,  -74,  -65,  -57,  -50,  -43,  -36,  -30,  -24,  -18,  -12,   -6,
+      -1,    5,   11,   17,   23,   29,   36,   43,   51,   59,   68,   77,   87,   97,  109,  121,
+    -124, -112, -101,  -90,  -81,  -72,  -63,  -55,  -48,  -41,  -34,  -28,  -22,  -16,  -10,   -4,
+       1,    7,   13,   19,   25,   31,   38,   45,   53,   61,   70,   79,   89,   99,  111,  123,
+};
+
+// IQ6_K centroid table — 64 standard + 64 shifted values (+1) (source: ikllama/main ggml-common.h)
+static __constant__ int8_t iq6nl_values_dev[128] = {
+    -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
+     -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
+      -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
+      47,   51,   55,   59,   63,   68,   72,   77,   82,   87,   92,   98,  103,  109,  115,  121,
+    -126, -120, -114, -108, -103,  -97,  -92,  -87,  -83,  -78,  -73,  -69,  -65,  -61,  -57,  -53,
+     -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
+      -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
+      48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122,
 };
 
 // ---- 2-bit centroids (Lloyd-Max for N(0, 1/128)) ----

@@ -5275,6 +5275,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ3_KS:
                     case GGML_TYPE_IQ4_KSS:
                     case GGML_TYPE_IQ4_KT:
+                    // Phase 5b-2: no-row-meta 5/6-bit IK family
+                    case GGML_TYPE_IQ5_K:
+                    case GGML_TYPE_IQ6_K:
                         return true;
                     default:
                         return false;

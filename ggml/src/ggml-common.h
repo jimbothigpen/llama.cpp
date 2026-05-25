@@ -464,6 +464,33 @@ typedef struct {
 } block_iq4_k;
 static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + 3*QK_K/64, "wrong iq4_k block size/padding");
 
+// IQ5_K: ik_llama.cpp 5-bit imatrix quantization (5.50 bpw) — source: ikllama/main iqk_quantize.cpp
+// 256-element superblock, 4 groups of 64. Same scale layout as IQ4_K (scales_h + scales_l).
+// extra: 16-bit field, 1 bit per 16-element group selects codebook.
+// qs: 4 low bits of 5-bit index. qh: 1 high bit per element (packed 8 per byte, 2 bits per ib64).
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    uint8_t   scales_h[QK_K/64];  // 4 bytes: 2-bit high parts of scales
+    uint8_t   scales_l[QK_K/32];  // 8 bytes: 4-bit low parts of scales
+    uint8_t   qs[QK_K/2];         // 128 bytes: 4 low bits of 5-bit index
+    uint8_t   qh[QK_K/8];         // 32 bytes: 1 high bit per element
+} block_iq5_k;
+static_assert(sizeof(block_iq5_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/8 + 3*QK_K/64, "wrong iq5_k block size/padding");
+
+// IQ6_K: ik_llama.cpp 6-bit imatrix quantization (6.625 bpw) — source: ikllama/ik/iq6_k iqk_quantize.cpp
+// 256-element superblock, 4 groups of 64. Direct int8 scale per 16-element group.
+// extra: 16-bit field, 1 bit per 16-element group selects shifted codebook (+1).
+// qs: 4 low bits. qh: 2 high bits per element (packed 4 per byte, 4 bits per ib64).
+typedef struct {
+    ggml_half d;
+    uint16_t  extra;
+    int8_t    scales[QK_K/16];    // 16 bytes: direct int8 scale per 16-element group
+    uint8_t   qs[QK_K/2];         // 128 bytes: 4 low bits of 6-bit index
+    uint8_t   qh[QK_K/4];         // 64 bytes: 2 high bits per element
+} block_iq6_k;
+static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/4 + QK_K/16, "wrong iq6_k block size/padding");
+
 // IQ3_K: ik_llama.cpp 3-bit imatrix quantization (3.4375 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
 // 256-element block, 8 sub-blocks of 32, with per-16-element scales.
 typedef struct {

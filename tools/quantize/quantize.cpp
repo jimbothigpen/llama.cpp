@@ -56,6 +56,8 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "IQ3_KS",   LLAMA_FTYPE_MOSTLY_IQ3_KS,   " 3.1875 bpw ik_llama row-meta",     },
     { "IQ4_KSS",  LLAMA_FTYPE_MOSTLY_IQ4_KSS,  " 4.0 bpw ik_llama row-meta ss",     },
     { "IQ4_KT",   LLAMA_FTYPE_MOSTLY_IQ4_KT,   " 4.0 bpw ik_llama row-meta trellis",},
+    { "IQ5_K",    LLAMA_FTYPE_MOSTLY_IQ5_K,    " 5.50 bpw ik_llama 5-bit",          },
+    { "IQ6_K",    LLAMA_FTYPE_MOSTLY_IQ6_K,    " 6.625 bpw ik_llama 6-bit",         },
     { "Q2_K",     LLAMA_FTYPE_MOSTLY_Q2_K,     " 2.96G, +3.5199 ppl @ Llama-3-8B",  },
     { "Q2_K_S",   LLAMA_FTYPE_MOSTLY_Q2_K_S,   " 2.96G, +3.1836 ppl @ Llama-3-8B",  },
     { "IQ3_XXS",  LLAMA_FTYPE_MOSTLY_IQ3_XXS,  " 3.06 bpw quantization",            },
