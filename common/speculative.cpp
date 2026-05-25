@@ -368,27 +368,170 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     }
 };
 
+// EAGLE3 speculative decoding: extract target hidden states → CPU FC encode → decode+sample loop
 struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
-    //common_params_speculative_eagle3 params;
+    common_params_speculative_draft params;
 
-    common_speculative_impl_draft_eagle3(const common_params_speculative & /*params*/, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq) {}
+    llama_batch batch;
 
-    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
-        // noop
+    std::vector<common_sampler_ptr> smpls;
+
+    // FC weight dequantized to host F32 for CPU matmul
+    std::vector<float> fc_weight_f32;
+    int64_t n_embd;        // EAGLE3 hidden dim
+    int64_t fc_input_size; // n_aux_layers × n_embd_tgt
+
+    common_speculative_impl_draft_eagle3(const common_params_speculative & sparams, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
+        , params(sparams.draft)
+    {
+        auto * ctx_tgt = params.ctx_tgt;
+        auto * ctx_dft = params.ctx_dft;
+        const auto * model_eagle3 = llama_get_model(ctx_dft);
+        const auto * model_tgt    = llama_get_model(ctx_tgt);
+
+        n_embd = llama_model_n_embd(model_eagle3);
+        const int32_t n_aux   = llama_model_eagle3_n_aux_layers(model_eagle3);
+        const int64_t n_embd_tgt = llama_model_n_embd(model_tgt);
+        fc_input_size = n_aux * n_embd_tgt;
+
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+
+        smpls.resize(n_seq);
+        for (auto & smpl : smpls) {
+            common_params_sampling sp;
+            sp.no_perf = false;
+            sp.top_k   = 10;
+            sp.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+            smpl.reset(common_sampler_init(model_eagle3, sp));
+        }
+
+        // EAGLE3 shares vocab with target — skip compat check
+        // Enable target hidden state extraction
+        llama_set_eagle3(ctx_tgt, model_eagle3);
+
+        // Enable embeddings output on decoder for autoregressive recurrence
+        llama_set_embeddings(ctx_dft, true);
+
+        // Dequantize fc.weight to host F32
+        const int64_t n_elements = n_embd * fc_input_size;
+        fc_weight_f32.resize(n_elements);
+        int64_t fc_in = llama_model_eagle3_get_fc_weight(model_eagle3, fc_weight_f32.data(), n_elements);
+        GGML_ASSERT(fc_in == fc_input_size && "eagle3 fc.weight dimension mismatch");
+
+        LOG_INF("%s: EAGLE3 initialized (n_embd=%lld, fc_in=%lld, n_aux=%d)\n",
+                __func__, (long long)n_embd, (long long)fc_input_size, n_aux);
     }
 
-    bool process(const llama_batch & /*batch*/) override {
-        // TODO: implement
+    ~common_speculative_impl_draft_eagle3() override {
+        llama_batch_free(batch);
+    }
+
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
+        // noop — target extraction configured in constructor
+    }
+
+    bool process(const llama_batch & /*tgt_batch*/) override {
+        // EAGLE3 draft doesn't mirror the target batch; extraction happens passively
+        // in process_ubatch after the target decode. Just return true.
         return true;
     }
 
-    void draft(common_speculative_draft_params_vec & /*dparams*/) override {
-        // TODO: implement
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto * ctx_tgt = params.ctx_tgt;
+        auto * ctx_dft = params.ctx_dft;
+
+        // Retrieve target hidden states extracted during last target decode
+        int32_t n_features = 0;
+        const float * all_features = llama_get_eagle3_target_features(ctx_tgt, &n_features);
+
+        if (!all_features || n_features == 0) {
+            LOG_DBG("%s: no target features available\n", __func__);
+            return;
+        }
+
+        const int n_aux = (int)(fc_input_size / n_embd);
+        const int n_tokens_batch = n_features / (n_aux * n_embd);
+        if (n_tokens_batch <= 0 || n_features != n_aux * n_embd * n_tokens_batch) {
+            LOG_WRN("%s: feature layout mismatch (n_features=%d)\n", __func__, n_features);
+            return;
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) continue;
+
+            // Gather features for last token, all aux layers → feat_concat
+            const int last_tok_idx = n_tokens_batch - 1;
+            std::vector<float> feat_concat(fc_input_size);
+            for (int layer = 0; layer < n_aux; layer++) {
+                const float * layer_data = all_features + layer * n_embd * n_tokens_batch;
+                memcpy(feat_concat.data() + layer * n_embd,
+                       layer_data + last_tok_idx * n_embd,
+                       n_embd * sizeof(float));
+            }
+
+            // CPU FC projection: g_embd = fc_weight × feat_concat
+            std::vector<float> g_embd(n_embd, 0.0f);
+            for (int64_t i = 0; i < n_embd; i++) {
+                float sum = 0.0f;
+                const float * row = fc_weight_f32.data() + i * fc_input_size;
+                for (int64_t j = 0; j < fc_input_size; j++) {
+                    sum += row[j] * feat_concat[j];
+                }
+                g_embd[i] = sum;
+            }
+
+            // Seed decoder with g_embd from FC and last target token
+            llama_set_eagle3_g_embeddings(ctx_dft, g_embd.data(), 1);
+
+            common_batch_clear(batch);
+            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+
+            if (llama_decode(ctx_dft, batch) != 0) {
+                LOG_WRN("%s: eagle3 decoder failed (seq=%d)\n", __func__, (int) seq_id);
+                return;
+            }
+
+            auto * smpl = smpls[seq_id].get();
+            common_sampler_reset(smpl);
+
+            for (int i = 0; i < params.n_max; ++i) {
+                common_sampler_sample(smpl, ctx_dft, 0, true);
+                const auto * cur_p = common_sampler_get_candidates(smpl, true);
+                const llama_token id = cur_p->data[0].id;
+
+                common_sampler_accept(smpl, id, true);
+                dp.result->push_back(id);
+
+                if (params.n_max <= (int) dp.result->size()) break;
+                if (cur_p->data[0].p < params.p_min)          break;
+
+                // Autoregressive: prenorm output becomes next g_embd
+                const float * embd = llama_get_embeddings_ith(ctx_dft, -1);
+                if (!embd) {
+                    LOG_WRN("%s: no embeddings at step %d\n", __func__, i);
+                    break;
+                }
+                llama_set_eagle3_g_embeddings(ctx_dft, embd, 1);
+
+                common_batch_clear(batch);
+                common_batch_add(batch, id, dp.n_past + 1 + i, { seq_id }, true);
+
+                if (llama_decode(ctx_dft, batch) != 0) {
+                    LOG_WRN("%s: eagle3 decoder failed at step %d\n", __func__, i);
+                    break;
+                }
+            }
+
+            if ((int) dp.result->size() < params.n_min) {
+                dp.result->clear();
+            }
+        }
     }
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
-        // noop
+        // noop — KV rollback handled by the outer accept loop
     }
 };
 
@@ -1476,7 +1619,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_mtp          = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) &&
+                                params.draft.ctx_dft != nullptr &&
+                                llama_model_eagle3_n_aux_layers(llama_get_model(params.draft.ctx_dft)) > 0;
 
         bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));

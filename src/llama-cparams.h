@@ -42,6 +42,7 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+    bool eagle3_extract_enabled = false;
 
     enum llama_context_type ctx_type    = LLAMA_CONTEXT_TYPE_DEFAULT;
     // derived from ctx_type; kept for src/models/qwen35*.cpp until Phase B lands

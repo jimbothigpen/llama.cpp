@@ -1036,6 +1036,39 @@ extern "C" {
     LLAMA_API float * llama_get_mtp_chain_logits_ith(struct llama_context * ctx, int32_t chain_depth, int32_t i);
     LLAMA_API int32_t llama_get_mtp_chain_depth     (struct llama_context * ctx);
 
+    // EAGLE3 speculative decoding API [EXPERIMENTAL]
+
+    // Configure target context for EAGLE3 feature extraction.
+    // After calling this, forward passes through ctx_tgt will extract hidden states
+    // at the layers specified by the EAGLE3 model's aux_layers config.
+    LLAMA_API void llama_set_eagle3(
+            struct llama_context * ctx_tgt,
+       const struct llama_model  * model_eagle3);
+
+    // Get extracted target features after a target model forward pass.
+    // Returns pointer to concatenated hidden states [n_aux_layers * n_embd * n_tokens].
+    // The pointer is valid until the next call to llama_decode() on ctx_tgt.
+    LLAMA_API const float * llama_get_eagle3_target_features(
+            struct llama_context * ctx_tgt,
+                         int32_t * n_features);
+
+    // Set g_embeddings for an EAGLE3 decoder context before decode.
+    // data points to [n_embd * n_tokens] floats from the encoder output.
+    LLAMA_API void llama_set_eagle3_g_embeddings(
+            struct llama_context * ctx_eagle3,
+                     const float * data,
+                         int32_t   n_tokens);
+
+    // EAGLE3 model info: number of auxiliary extraction layers in this model.
+    LLAMA_API int32_t llama_model_eagle3_n_aux_layers(const struct llama_model * model);
+
+    // EAGLE3 model info: copy fc.weight to host F32 buffer; buf must hold n_embd * fc_input_size floats.
+    // Returns fc_input_size (= n_aux_layers * target_n_embd), or 0 on error.
+    LLAMA_API int64_t llama_model_eagle3_get_fc_weight(
+            const struct llama_model * model,
+                               float * buf,
+                             int64_t   buf_size);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
