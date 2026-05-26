@@ -6,7 +6,7 @@
  *   - kv->get_used_n_kv() → kv->get_n_used()
  *   - Removed Phase 3B indirection (has_indirection, get_active_kv_real_len)
  *   - tria_get_kv_positions: simplified sequential for single-seq AR decode
- *   - tria_compact_kv: stubbed (Phase B)
+ *   - tria_compact_kv: Phase B — legacy physical compaction via triattention_compact
  */
 
 #include "llama.h"
@@ -14,6 +14,7 @@
 #include "llama-memory-hybrid.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <numeric>
 #include <vector>
 
@@ -91,11 +92,88 @@ int tria_get_kv_positions(void * ctx_void, int * positions, int max_positions) {
 }
 
 int tria_compact_kv(struct tria_runtime * rt, void * ctx_void) {
-    /* Phase A stub: physical KV compaction deferred to Phase B.
-     * Returns 0 so scoring continues without compaction. */
-    (void)rt;
-    (void)ctx_void;
-    return 0;
+    auto * ctx = (llama_context *)ctx_void;
+    if (!rt || !ctx || !rt->global_scores || rt->global_budget <= 0) {
+        return 0;
+    }
+
+    auto * kv = get_kv(ctx_void);
+    if (!kv) return 0;
+
+    const int n_kv = (int) kv->get_n_used();
+    const int n_old = n_kv - rt->window;
+    if (n_old <= 0) {
+        return 0;
+    }
+
+    int budget = rt->global_budget;
+    budget = std::max(1, std::min(budget, n_old));
+
+    /* Skip eviction if cache is already within budget */
+    if (n_old <= budget) {
+        return 0;
+    }
+
+    /* Protect sink/prefix tokens — always keep at least the first `prefix` tokens */
+    int prefix = rt->sink > 0 ? rt->sink : 128;
+    if (prefix > n_old) prefix = n_old;
+
+    /* Budget must cover at least the protected prefix */
+    if (budget < prefix) budget = prefix;
+
+    /* Build keep set: prefix tokens + top-scoring non-prefix + window */
+    std::vector<uint32_t> keep_positions;
+    keep_positions.reserve(budget + rt->window);
+
+    for (int i = 0; i < prefix; i++) {
+        keep_positions.push_back((uint32_t)i);
+    }
+
+    int remaining_budget = budget - (int)keep_positions.size();
+    if (remaining_budget > 0 && prefix < n_old) {
+        std::vector<uint32_t> ranked;
+        ranked.reserve(n_old - prefix);
+        for (int i = prefix; i < n_old; i++) {
+            ranked.push_back((uint32_t)i);
+        }
+
+        std::stable_sort(ranked.begin(), ranked.end(), [&](uint32_t a, uint32_t b) {
+            if (rt->global_scores[a] == rt->global_scores[b]) return a < b;
+            return rt->global_scores[a] > rt->global_scores[b];
+        });
+
+        int take = std::min(remaining_budget, (int)ranked.size());
+        ranked.resize(take);
+        std::sort(ranked.begin(), ranked.end());
+        keep_positions.insert(keep_positions.end(), ranked.begin(), ranked.end());
+    }
+
+    /* Window tokens are always kept */
+    for (int pos = n_old; pos < n_kv; ++pos) {
+        keep_positions.push_back((uint32_t)pos);
+    }
+
+    if ((int)keep_positions.size() >= n_kv) {
+        return 0;
+    }
+
+    llama_synchronize(ctx);
+
+    /* Log on first eviction call so smoke tests can confirm the evictor fired */
+    static bool tria_first_evict = true;
+    if (tria_first_evict) {
+        fprintf(stderr, "tria: Phase B evictor first call — n_kv=%d keep=%d evict=%d budget=%d window=%d\n",
+                n_kv, (int)keep_positions.size(),
+                n_kv - (int)keep_positions.size(),
+                budget, rt->window);
+        tria_first_evict = false;
+    }
+
+    if (!kv->triattention_compact(keep_positions)) {
+        return 0;
+    }
+
+    return n_kv - (int)keep_positions.size();
 }
 
 } /* extern "C" */
