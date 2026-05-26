@@ -726,24 +726,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
         }
 
+        // single bulk GPU→CPU sync: one call forces host sync for all tgt embeddings;
+        // subsequent rows read from this pointer with offset arithmetic (no extra sync per row).
         // shift the tgt embeddings to the right by one position
         // assumes that the tokens in the batch are sequential for each sequence
         // i.e. we cannot have seq_id like this: [0, 0, 0, 1, 1, 0, 1, 1]
         //                                                       ^--- this is a problem
         // TODO:this is generally true, but would be nice to assert it
-        {
-            const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
-            std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
-
-            //{
-            //    // string with seq_ids in the batch
-            //    std::stringstream ss;
-            //    for (int i = 0; i < n_tokens; ++i) {
-            //        ss << batch_in.seq_id[i][0] << ",";
-            //    }
-            //    LOG_WRN("%s: batch_in.seq_id = %s\n", __func__, ss.str().c_str());
-            //}
-        }
+        const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
+        std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
 
         // fill the pending embeddings from a previous run
         auto set_h = [&](int idx, const float * h_row) {
@@ -774,7 +765,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = llama_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const float * h = h_tgt + (size_t)(i_batch_beg[seq_id] + i) * n_embd;
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
@@ -1100,12 +1091,12 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
         }
 
+        // single bulk GPU→CPU sync: one call forces host sync for all tgt embeddings;
+        // subsequent rows read from this pointer with offset arithmetic (no extra sync per row).
         // shift the tgt embeddings to the right by one position
         // assumes that the tokens in the batch are sequential for each sequence
-        {
-            const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
-            std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
-        }
+        const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
+        std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
 
         auto set_h = [&](int idx, const float * h_row) {
             std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
@@ -1135,7 +1126,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = llama_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const float * h = h_tgt + (size_t)(i_batch_beg[seq_id] + i) * n_embd;
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
