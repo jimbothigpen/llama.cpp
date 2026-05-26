@@ -310,6 +310,28 @@ if (CUDAToolkit_FOUND)
 
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
+    # flashprefill.cu uses BF16 WMMA (nvcuda::wmma + __nv_bfloat16) which requires SM80+.
+    # If no SM80+ arch is in the build, stub out k_sparse_flash_forward so the file compiles
+    # on SM75 targets (e.g. Kaggle T4 builds with CMAKE_CUDA_ARCHITECTURES=75).
+    set(_ggml_cuda_has_sm80 FALSE)
+    if (CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
+        set(_ggml_cuda_has_sm80 TRUE)
+    else()
+        foreach(_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+            string(REGEX MATCH "^([0-9]+)" _arch_num "${_arch}")
+            if (NOT _arch_num STREQUAL "" AND _arch_num GREATER_EQUAL 80)
+                set(_ggml_cuda_has_sm80 TRUE)
+                break()
+            endif()
+        endforeach()
+    endif()
+    if (NOT _ggml_cuda_has_sm80)
+        add_compile_definitions(GGML_CUDA_FLASHPREFILL_SM75_STUB)
+        message(STATUS "flashprefill: no SM80+ arch — BF16 WMMA kernel stubbed (GGML_CUDA_FLASHPREFILL_SM75_STUB)")
+    endif()
+    unset(_ggml_cuda_has_sm80)
+    unset(_arch_num)
+
     if (GGML_CUDA_GRAPHS)
         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
     endif()

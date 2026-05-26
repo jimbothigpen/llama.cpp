@@ -192,6 +192,7 @@ __global__ static void k_sparse_flash_forward(
         const int n_kv_blocks,
         const float scale) {
 
+#if __CUDA_ARCH__ >= 800
     const int cta_idx  = blockIdx.x;
     const int head     = blockIdx.y;
     const int kv_head  = head / (n_heads / n_kv_heads);
@@ -359,6 +360,7 @@ __global__ static void k_sparse_flash_forward(
         int pos = q_start + qi;
         O[((size_t)pos * n_heads + head) * D_HEAD + d] = __float2bfloat16(val);
     }
+#endif // __CUDA_ARCH__ >= 800
 }
 
 FlashPrefillBuffers flash_prefill_alloc(int seq_len, int n_heads, int n_kv_heads, int block_size) {
@@ -389,6 +391,13 @@ void flash_prefill_forward_bf16(
         FlashPrefillBuffers * bufs,
         void * stream_ptr) {
 
+#ifdef GGML_CUDA_FLASHPREFILL_SM75_STUB
+    (void)Q; (void)K; (void)V; (void)O;
+    (void)seq_len; (void)n_heads; (void)n_kv_heads; (void)d_head;
+    (void)scale; (void)cfg; (void)bufs; (void)stream_ptr;
+    fprintf(stderr, "%s: SM80+ required for BF16 WMMA; this build has no SM80+ target\n", __func__);
+    return;
+#endif
     (void)d_head;
     cudaStream_t stream = (cudaStream_t)stream_ptr;
 
