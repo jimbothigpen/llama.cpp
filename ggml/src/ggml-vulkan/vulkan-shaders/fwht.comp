@@ -1,0 +1,49 @@
+#version 450
+
+layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint n_rows;
+    uint n;
+} p;
+
+layout (binding = 0) readonly  buffer A { float data_a[]; };
+layout (binding = 1) writeonly buffer D { float data_d[]; };
+
+shared float x[512];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint row = gl_WorkGroupID.z * 262144u + gl_WorkGroupID.y * 512u + gl_WorkGroupID.x;
+
+    if (row >= p.n_rows) return;
+
+    const uint base  = row * p.n;
+    const float scale = inversesqrt(float(p.n));
+
+    // Each thread loads p.n/32 elements (strided load)
+    for (uint k = tid; k < p.n; k += 32u) {
+        x[k] = data_a[base + k] * scale;
+    }
+    barrier();
+
+    // Butterfly stages: for each stage h, process non-overlapping pairs (i, i+h)
+    for (uint h = 1u; h < p.n; h <<= 1u) {
+        for (uint k = tid; k < p.n / 2u; k += 32u) {
+            uint grp = k / h;
+            uint off = k - grp * h;
+            uint i   = grp * 2u * h + off;
+            uint j   = i + h;
+            float a = x[i];
+            float b = x[j];
+            x[i] = a + b;
+            x[j] = a - b;
+        }
+        barrier();
+    }
+
+    // Write output (strided)
+    for (uint k = tid; k < p.n; k += 32u) {
+        data_d[base + k] = x[k];
+    }
+}

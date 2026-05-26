@@ -824,6 +824,7 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_leaky_relu_f32;
     vk_pipeline pipeline_silu_back_f32;
+    vk_pipeline pipeline_fwht;
     vk_pipeline pipeline_turbo_wht;
     vk_pipeline pipeline_diag_mask_inf_f32;
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
@@ -4924,6 +4925,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_leaky_relu_f32, "leaky_relu_f32", leaky_relu_f32_len, leaky_relu_f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_fwht, "fwht", fwht_len, fwht_data, "main", 2, 2 * sizeof(uint32_t), {32, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_turbo_wht, "turbo_wht", turbo_wht_len, turbo_wht_data, "main", 2, 3 * sizeof(uint32_t), {128, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_diag_mask_inf_f32, "diag_mask_inf_f32", diag_mask_inf_f32_len, diag_mask_inf_f32_data, "main", 2, sizeof(vk_op_diag_mask_push_constants), {1, 512, 1}, {}, 1, true);
@@ -11605,6 +11607,30 @@ static void ggml_vk_silu_back(ggml_backend_vk_context * ctx, vk_context& subctx,
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_SILU_BACK, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f, 0.0f, 0.0f });
 }
 
+static void ggml_vk_fwht(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    struct { uint32_t n_rows; uint32_t n; } pc = {
+        (uint32_t)ggml_nrows(src0), (uint32_t)src0->ne[0],
+    };
+    vk_pipeline pipeline = ctx->device->pipeline_fwht;
+    GGML_ASSERT(pipeline != nullptr);
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    vk_subbuffer src_buf = ggml_vk_tensor_subbuffer(ctx, src0, false);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst,  false);
+    const uint32_t n_rows = pc.n_rows;
+    std::array<uint32_t, 3> elements;
+    if (n_rows > 262144u) {
+        elements = { 512u, 512u, CEIL_DIV(n_rows, 262144u) };
+    } else if (n_rows > 512u) {
+        elements = { 512u, CEIL_DIV(n_rows, 512u), 1u };
+    } else {
+        elements = { n_rows, 1u, 1u };
+    }
+    // Each workgroup has 32 threads; elements[] counts workgroups (one per row).
+    // Multiply x-dim by 32 so ggml_vk_dispatch_pipeline divides by wg_denoms[0]=32.
+    elements[0] *= 32u;
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src_buf, dst_buf }, pc, elements);
+}
+
 static void ggml_vk_turbo_wht(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     int direction, group_size;
     memcpy(&direction,  dst->op_params + 0,            sizeof(int));
@@ -13876,6 +13902,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_SILU_BACK:
         ggml_vk_silu_back(ctx, compute_ctx, src0, src1, node);
+
+        break;
+    case GGML_OP_FWHT:
+        ggml_vk_fwht(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_TURBO_WHT:
@@ -16556,6 +16586,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     default:
                         return false;
                 }
+            }
+        case GGML_OP_FWHT:
+            {
+                const int64_t n = op->src[0]->ne[0];
+                return op->src[0]->type == GGML_TYPE_F32 &&
+                       (n == 64 || n == 128 || n == 256 || n == 512);
             }
         case GGML_OP_TURBO_WHT:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] % 128 == 0;

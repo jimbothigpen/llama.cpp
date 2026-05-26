@@ -624,6 +624,7 @@ extern "C" {
 
         GGML_OP_GLU,
         GGML_OP_FLASH_ATTN_SPARSE,
+        GGML_OP_FWHT,
         GGML_OP_TURBO_WHT,
 
         GGML_OP_COUNT,
@@ -2625,6 +2626,13 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state);
+
+    // Fast Walsh-Hadamard Transform (plain FWHT, no sign matrices)
+    // N = a->ne[0] must be a power of 2 in {64, 128, 256, 512}
+    // Output is normalized by 1/sqrt(N)
+    GGML_API struct ggml_tensor * ggml_fwht(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
 
     // TurboQuant Walsh-Hadamard Transform (O(d log d) rotation for KV cache compression)
     // Applies WHT rotation to 128-element groups along ne[0]: sign1 -> butterfly -> sign2 -> normalize

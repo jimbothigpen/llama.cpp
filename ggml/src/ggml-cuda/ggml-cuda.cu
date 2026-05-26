@@ -2670,8 +2670,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
     if (hint == GGML_HINT_SRC0_IS_HADAMARD) {
         GGML_ASSERT(!split);
-        ggml_cuda_op_fwht(ctx, src1, dst);
-        return;
+        if (ggml_cuda_op_fwht(ctx, src1, dst)) {
+            return;
+        }
+        // Fall through to regular matmul if FWHT not applicable (non-contiguous or unsupported size).
     }
 
     if (!split && use_mul_mat_vec_f) {
@@ -2889,6 +2891,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_SET_ROWS:
             ggml_cuda_op_set_rows(ctx, dst);
+            break;
+        case GGML_OP_FWHT:
+            ggml_cuda_op_fwht(ctx, dst->src[0], dst);
             break;
         case GGML_OP_TURBO_WHT:
             ggml_cuda_turbo_wht(ctx, dst);
@@ -5544,6 +5549,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #else
             return true;
 #endif // GGML_USE_MUSA
+        case GGML_OP_FWHT:
+            {
+                const int64_t n = op->src[0]->ne[0];
+                return op->src[0]->type == GGML_TYPE_F32 &&
+                       (n == 64 || n == 128 || n == 256 || n == 512);
+            }
         case GGML_OP_TURBO_WHT:
             return op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[0]->ne[0] % 128 == 0;  // turboq3/turboq4 use 128-element WHT groups
