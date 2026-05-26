@@ -50,10 +50,12 @@ int main(int argc, char ** argv) {
     llama_model_ptr model_dft;
     llama_context_ptr ctx_dft;
 
-    // Phase B: --mtp with no separate draft model path => create a second context on the
+    // --spec-type draft-mtp with no separate draft model path => create a second context on the
     // same loaded model with ctx_type=MTP.  The graph_mtp inner-class on qwen35/qwen35moe
     // handles the MTP tail block; no override_arch needed.
-    if (params.has_mtp && params.speculative.draft.mparams.path.empty()) {
+    const bool want_mtp = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    if (want_mtp && params.speculative.draft.mparams.path.empty()) {
         char trunk_arch[64] = {0};
         llama_model_meta_val_str(model_tgt, "general.architecture", trunk_arch, sizeof(trunk_arch));
 
