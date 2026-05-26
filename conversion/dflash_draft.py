@@ -167,4 +167,10 @@ class DFlashDraftModel(TextModel):
             yield ("dflash_hidden_norm.weight", data_torch)
             return
 
+        # base class maps post_attention_layernorm → ffn_norm but DFlash loader
+        # requires it as attn_post_norm (blk.X.post_attention_norm)
+        if bid is not None and "post_attention_layernorm" in name:
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_POST_NORM, bid=bid), data_torch)
+            return
+
         yield from super().modify_tensors(data_torch, name, bid)
