@@ -1386,9 +1386,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--mtp", "--multi-token-prediction"},
         {"--no-mtp", "--no-multi-token-prediction"},
-        string_format("enable Multi-Token Prediction speculative decoding when the model has MTP/NextN tail layers (default: %s)", params.has_mtp ? "true" : "false"),
+        "DEPRECATED: use --spec-type draft-mtp instead",
         [](common_params & params, bool value) {
-            params.has_mtp = value;
+            if (value) {
+                LOG_WRN("%s\n", "--mtp / --multi-token-prediction is deprecated; use --spec-type draft-mtp");
+                if (std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                              COMMON_SPECULATIVE_TYPE_DRAFT_MTP) == params.speculative.types.end()) {
+                    params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+                }
+            }
         }
     ).set_env("LLAMA_ARG_MTP"));
     add_opt(common_arg(

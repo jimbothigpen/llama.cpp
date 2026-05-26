@@ -188,8 +188,6 @@ llama_context::llama_context(
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_DEFAULT;
     }
 
-    cparams.mtp = (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP);
-
     // initialized later
     cparams.pipeline_parallel = false;
 
@@ -1960,22 +1958,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 if (!sidecars->empty()) {
                     sidecars_post_compute_pending = true;
                 }
-            }
-        }
-
-        // extract MTP chain logits (E3b Phase 2-Extend-C: only in MTP context graph_mtp decodes)
-        if (cparams.mtp && res->t_logits_mtp_chain[0] != nullptr && n_outputs > 0) {
-            mtp_chain_depth = 0;
-            for (int k = 0; k < llm_graph_result::MTP_CHAIN_MAX; ++k) {
-                ggml_tensor * t_chain = res->t_logits_mtp_chain[k];
-                if (!t_chain) { break; }
-                ggml_backend_t backend_chain = ggml_backend_sched_get_tensor_backend(sched.get(), t_chain);
-                if (!backend_chain) { break; }
-                const int64_t chain_n_tok = t_chain->ne[1];
-                mtp_chain_logits[k].resize(n_vocab * chain_n_tok);
-                ggml_backend_tensor_get_async(backend_chain, t_chain,
-                    mtp_chain_logits[k].data(), 0, n_vocab * chain_n_tok * sizeof(float));
-                mtp_chain_depth = k + 1;
             }
         }
 

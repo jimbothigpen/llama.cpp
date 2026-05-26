@@ -404,7 +404,7 @@ private:
 
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
-    // MTP: when (cparams.mtp && hparams.nextn_predict_layers > 0), the embd buffer is laid
+    // MTP: when ctx_type == LLAMA_CONTEXT_TYPE_MTP and nextn_predict_layers > 0, the embd buffer is laid
     // out per-batch-token (one row per ubatch token), not per-output. Tracked separately so
     // get_embeddings_ith() can address the right row, and so output_reserve() can size the
     // buffer accordingly. Equals n_outputs in the non-MTP case.
