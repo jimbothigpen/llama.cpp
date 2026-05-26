@@ -5302,6 +5302,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_WHT3_0:
                     case GGML_TYPE_TURBOQ3_TCQ:
                     case GGML_TYPE_TURBOQ2_TCQ:
+                    case GGML_TYPE_KV_OSCAR_INT2:
                         return true;
                     default:
                         return false;
@@ -5325,6 +5326,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if ((op->type == GGML_TYPE_TURBOQ2_TCQ || op->type == GGML_TYPE_TURBOQ3_TCQ) && op->src[0]->ne[0] % 128 != 0) {
                     return false;
                 }
+                // oscar_int2 block size is 128, head_dim must be divisible by 128
+                if (op->type == GGML_TYPE_KV_OSCAR_INT2 && op->src[0]->ne[0] % 128 != 0) {
+                    return false;
+                }
                 // turboq{2,3,4}_innerq block size is 128, head_dim must be divisible by 128
                 if ((op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ || op->type == GGML_TYPE_TURBOQ4_INNERQ) && op->src[0]->ne[0] % 128 != 0) {
                     return false;
@@ -5342,7 +5347,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                        op->type == GGML_TYPE_TURBOQ2_TCQ || op->type == GGML_TYPE_TURBOQ3_TCQ ||
                        op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ || op->type == GGML_TYPE_TURBOQ4_INNERQ ||
                        op->type == GGML_TYPE_RQ_PLANAR3_0 || op->type == GGML_TYPE_RQ_PLANAR4_0 ||
-                       op->type == GGML_TYPE_RQ_ISO3_0    || op->type == GGML_TYPE_RQ_ISO4_0) &&
+                       op->type == GGML_TYPE_RQ_ISO3_0    || op->type == GGML_TYPE_RQ_ISO4_0 ||
+                       op->type == GGML_TYPE_KV_OSCAR_INT2) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
             } break;

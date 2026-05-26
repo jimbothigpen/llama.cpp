@@ -418,6 +418,7 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_RQ_PLANAR4_0,
     GGML_TYPE_RQ_ISO3_0,
     GGML_TYPE_RQ_ISO4_0,
+    GGML_TYPE_KV_OSCAR_INT2,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {

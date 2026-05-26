@@ -454,6 +454,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
+    [GGML_TYPE_KV_OSCAR_INT2] = {
+        .from_float               = (ggml_from_float_t) quantize_row_kv_oscar_int2_ref,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_TURBOQ3_TCQ] = {
         .from_float               = (ggml_from_float_t) quantize_row_turboq3_tcq_ref,
         .vec_dot                  = NULL,

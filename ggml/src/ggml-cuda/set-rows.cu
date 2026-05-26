@@ -1873,6 +1873,165 @@ static void set_rows_cuda_turboq2_tcq(
 }
 
 
+// k_set_rows_oscar_int2: OScaR 2-bit KV encode: plain FHT + per-block min-max uniform INT2
+// 128 threads per block (one thread per element).
+template<typename idx_t>
+static __global__ void k_set_rows_oscar_int2(
+        const float * __restrict__ src0,
+        const idx_t * __restrict__ src1,
+        block_kv_oscar_int2 * __restrict__ dst,
+        const int64_t ne00,
+        const int64_t ne01,
+        const int64_t ne10,
+        const int64_t ne11,
+        const int64_t ne12,
+        const int64_t ne13,
+        const int64_t s01,
+        const int64_t s02,
+        const int64_t s03,
+        const int64_t s10,
+        const int64_t s11,
+        const int64_t s12,
+        const int64_t s1,
+        const int64_t s2,
+        const int64_t s3) {
+
+    const int j = threadIdx.x; // 0..127
+
+    // Decode blockIdx.x → (i_blk, i01, i02, i03)
+    const int64_t n_blocks_per_row = ne00 / QK_OSCAR_INT2;
+    const int64_t g   = blockIdx.x;
+    const int64_t i_blk = g % n_blocks_per_row;
+    int64_t       tmp   = g / n_blocks_per_row;
+    const int64_t i01   = tmp % ne01;
+    tmp                 = tmp / ne01;
+    const int64_t i02   = tmp % ne12;
+    const int64_t i03   = tmp / ne12;
+
+    const int64_t i12 = i02;
+    const int64_t i11 = i01 % ne11;
+    const int64_t i10 = i01;
+
+    const int64_t dst_row = *(src1 + i10*s10 + i11*s11 + i12*s12);
+    const float * src_row = src0 + i01*s01 + i02*s02 + i03*s03;
+    block_kv_oscar_int2 * dst_row_ptr = (block_kv_oscar_int2 *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3);
+    block_kv_oscar_int2 * blk = dst_row_ptr + i_blk;
+
+    // Step 1: Load into shared memory
+    __shared__ float x[QK_OSCAR_INT2];
+    x[j] = src_row[i_blk * QK_OSCAR_INT2 + j];
+    __syncthreads();
+
+    // Step 2: Plain FHT (no sign matrices — OScaR uses standard Hadamard)
+#define OSCAR_WHT_STAGE(h) \
+    if ((j / (h)) % 2 == 0) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
+    __syncthreads();
+
+    OSCAR_WHT_STAGE(1)
+    OSCAR_WHT_STAGE(2)
+    OSCAR_WHT_STAGE(4)
+    OSCAR_WHT_STAGE(8)
+    OSCAR_WHT_STAGE(16)
+    OSCAR_WHT_STAGE(32)
+    OSCAR_WHT_STAGE(64)
+#undef OSCAR_WHT_STAGE
+
+    constexpr float inv_sqrt_128 = 0.08838834764831845f;
+    x[j] *= inv_sqrt_128;
+    __syncthreads();
+
+    // Step 3: Parallel min/max reduction
+    constexpr int n_warps = QK_OSCAR_INT2 / WARP_SIZE;
+    __shared__ float warp_min[n_warps];
+    __shared__ float warp_max[n_warps];
+
+    float v = x[j];
+    float vmin = v, vmax = v;
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        vmin = fminf(vmin, __shfl_xor_sync(0xffffffff, vmin, offset, WARP_SIZE));
+        vmax = fmaxf(vmax, __shfl_xor_sync(0xffffffff, vmax, offset, WARP_SIZE));
+    }
+    if (j % WARP_SIZE == 0) {
+        warp_min[j / WARP_SIZE] = vmin;
+        warp_max[j / WARP_SIZE] = vmax;
+    }
+    __syncthreads();
+
+    __shared__ float s_min, s_max;
+    if (j == 0) {
+        float gmin = warp_min[0], gmax = warp_max[0];
+        for (int w = 1; w < n_warps; w++) {
+            gmin = fminf(gmin, warp_min[w]);
+            gmax = fmaxf(gmax, warp_max[w]);
+        }
+        s_min = gmin;
+        s_max = gmax;
+    }
+    __syncthreads();
+
+    const float bmin  = s_min;
+    const float range = s_max - bmin;
+    const float bd    = (range > 1e-10f) ? range / 3.0f : 1.0f;
+    const float inv_d = 1.0f / bd;
+
+    // Step 4: Quantize element j to 2-bit
+    const int q = min(3, max(0, (int)(__float2int_rn((x[j] - bmin) * inv_d))));
+
+    // Step 5: Pack 4 elements per byte using warp shuffle
+    const uint8_t my_q = (uint8_t)(q & 0x3);
+    const int lane = j % WARP_SIZE;
+    const uint8_t q1 = __shfl_sync(0xffffffff, my_q, lane ^ 1, WARP_SIZE);
+    const uint8_t q2 = __shfl_sync(0xffffffff, my_q, lane ^ 2, WARP_SIZE);
+    const uint8_t q3 = __shfl_sync(0xffffffff, my_q, lane ^ 3, WARP_SIZE);
+    if (j % 4 == 0) {
+        blk->qs[j / 4] = my_q | (q1 << 2) | (q2 << 4) | (q3 << 6);
+    }
+
+    // Step 6: Write per-block d and m (one thread)
+    if (j == 0) {
+        blk->d = __float2half(bd);
+        blk->m = __float2half(bmin);
+    }
+
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne13);
+    GGML_UNUSED(v);
+}
+
+template<typename idx_t>
+static void set_rows_cuda_oscar_int2(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+
+    const float * src0_d = (const float *)src0->data;
+    const idx_t * src1_d = (const idx_t *)src1->data;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_OSCAR_INT2 == 0);
+
+    cudaStream_t stream = ctx.stream();
+
+    const int64_t n_blocks = ne00 / QK_OSCAR_INT2;
+    const int64_t s01 = nb01/sizeof(float);
+    const int64_t s02 = nb02/sizeof(float);
+    const int64_t s03 = nb03/sizeof(float);
+    const int64_t s10 = nb10/sizeof(idx_t);
+    const int64_t s11 = nb11/sizeof(idx_t);
+    const int64_t s12 = nb12/sizeof(idx_t);
+
+    if (n_blocks > 0) {
+        const int64_t ne_total = n_blocks * ne01 * ne02 * ne03;
+        k_set_rows_oscar_int2<idx_t><<<(int)ne_total, QK_OSCAR_INT2, 0, stream>>>(
+            src0_d, src1_d, (block_kv_oscar_int2 *)dst->data,
+            ne00, ne01, ne10, ne11, ne12, ne13,
+            s01, s02, s03, s10, s11, s12,
+            nb1, nb2, nb3);
+    }
+}
+
+
 template<typename src_t, typename idx_t>
 static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const src_t * src0_d = (const src_t *)src0->data;
@@ -2023,6 +2182,8 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
         set_rows_cuda_turboq3_tcq<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ2_TCQ) {
         set_rows_cuda_turboq2_tcq<idx_t>(ctx, src0, src1, dst);
+    } else if (dst->type == GGML_TYPE_KV_OSCAR_INT2) {
+        set_rows_cuda_oscar_int2<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ2_INNERQ) {
         // set_rows_cuda_turboq2 does not call turbo_innerq_check_finalize; must call explicitly.
         turbo_innerq_check_finalize(QK_TURBOQ2, ne00);

@@ -294,7 +294,11 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q1_0-f16.cu
             template-instances/fattn-vec-instance-q1_0-q1_0.cu
             template-instances/fattn-vec-instance-q1_0-q8_0.cu
-            template-instances/fattn-vec-instance-q8_0-q1_0.cu)
+            template-instances/fattn-vec-instance-q8_0-q1_0.cu
+            # OScaR KV INT2 Phase 1: D=128 only
+            template-instances/fattn-vec-instance-kv_oscar_int2-f16.cu
+            template-instances/fattn-vec-instance-kv_oscar_int2-bf16.cu
+            template-instances/fattn-vec-instance-kv_oscar_int2-q8_0.cu)
     endif()
 
     ggml_add_backend_library(ggml-cuda

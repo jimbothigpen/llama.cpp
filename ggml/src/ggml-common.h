@@ -328,6 +328,16 @@ typedef struct {
 } block_turboq2_tcq;                    // 36 bytes total for 128 values (2.25 bpv)
 static_assert(sizeof(block_turboq2_tcq) == sizeof(ggml_half) + 34, "wrong turboq2_tcq block size/padding");
 
+// OScaR KV INT2: FHT-rotated K with per-block min-max uniform 2-bit quantization
+// Phase 1 CUDA prototype — calibration-free online FHT + min-max INT2 (arXiv:2605.19660)
+#define QK_OSCAR_INT2 128
+typedef struct {
+    ggml_half  d;                          //  2 bytes: step = (max − min) / 3
+    ggml_half  m;                          //  2 bytes: min
+    uint8_t    qs[QK_OSCAR_INT2 / 4];     // 32 bytes: 128 × 2-bit uniform INT2
+} block_kv_oscar_int2;                     // 36 bytes total, 2.25 bpv
+static_assert(sizeof(block_kv_oscar_int2) == 2*sizeof(ggml_half) + QK_OSCAR_INT2/4, "wrong oscar_int2 block size");
+
 // TurboQuant 3-bit: 2-bit PolarQuant indices + 1-bit QJL signs
 // Block size = 128 (one block per rotation group, eliminates redundant norms)
 // Per block: norm(fp16) + 2-bit indices (32 bytes) + 1-bit signs (16 bytes)

@@ -538,6 +538,56 @@ size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRIC
     return nrows * row_size;
 }
 
+/* ---------- KV_OSCAR_INT2: OScaR 2-bit KV (FHT + min-max uniform INT2) — CPU stub ---------- */
+
+void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k) {
+    /* CPU stub — CUDA kernel handles FHT + min-max encode. CPU path does zero-code min-max only. */
+    assert(k % QK_OSCAR_INT2 == 0);
+    const int nb = k / QK_OSCAR_INT2;
+    for (int i = 0; i < nb; i++) {
+        const float * blk = x + i * QK_OSCAR_INT2;
+        float mn = blk[0], mx = blk[0];
+        for (int j = 1; j < QK_OSCAR_INT2; j++) {
+            if (blk[j] < mn) mn = blk[j];
+            if (blk[j] > mx) mx = blk[j];
+        }
+        const float range = mx - mn;
+        const float d = (range > 1e-10f) ? range / 3.0f : 1.0f;
+        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].m = GGML_FP32_TO_FP16(mn);
+        memset(y[i].qs, 0, QK_OSCAR_INT2 / 4);
+    }
+}
+
+void dequantize_row_kv_oscar_int2(const block_kv_oscar_int2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_OSCAR_INT2 == 0);
+    const int nb = k / QK_OSCAR_INT2;
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        const float m = GGML_FP16_TO_FP32(x[i].m);
+        for (int j = 0; j < QK_OSCAR_INT2; j++) {
+            const uint8_t byte = x[i].qs[j / 4];
+            const int q = (byte >> (2 * (j % 4))) & 0x3;
+            y[i * QK_OSCAR_INT2 + j] = d * q + m;
+        }
+    }
+}
+
+size_t quantize_kv_oscar_int2(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                              int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_OSCAR_INT2 == 0);
+    size_t row_size = (n_per_row / QK_OSCAR_INT2) * sizeof(block_kv_oscar_int2);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_kv_oscar_int2_ref(
+            src + row * n_per_row,
+            (block_kv_oscar_int2 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
 /* ---------- TURBOQ4_0: 4-bit PolarQuant (default) / 3-bit + QJL (legacy) ---------- */
 
 void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 * GGML_RESTRICT y, int64_t k) {

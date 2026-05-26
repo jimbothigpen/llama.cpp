@@ -1690,6 +1690,10 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_rq_iso4_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_RQ_PLANAR4_0) {
         return vec_dot_fattn_vec_KQ_rq_planar4_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_KV_OSCAR_INT2) {
+        // OScaR INT2: handled via the K_is_turbo inline branch in flash_attn_ext_vec;
+        // vec_dot_KQ function pointer is never called for this type.
+        return nullptr;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
