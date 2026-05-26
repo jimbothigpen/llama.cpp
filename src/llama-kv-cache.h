@@ -165,6 +165,11 @@ public:
     uint32_t      get_n_used()    const;
     bool          get_v_trans()   const;
 
+    // TriAttention Phase B: physically compact the KV cache to only keep_positions rows.
+    // keep_positions must be sorted ascending and contain valid, non-empty physical indices.
+    // Returns true on success; false if unsupported (multi-stream) or invalid input.
+    bool triattention_compact(const std::vector<uint32_t> & keep_positions);
+
     ggml_tensor * get_turbo_innerq_scale_inv() const;
 
     //
