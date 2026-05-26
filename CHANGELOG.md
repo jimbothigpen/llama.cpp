@@ -33,6 +33,30 @@ Conditional gate in speculative loader now respects explicit `--spec-type` selec
 preventing `draft-simple` from overriding user intent when another speculator is active.
 Closes TODO 120.
 
+### Added — DFlash converter: safetensors→GGUF DFlashDraftModel port (2026-05-26, `ba61a9d39`)
+
+Ported `DFlashDraftModel` from Anbeeld/beellama.cpp with safetensors loader and GGUF converter.
+Enables end-to-end DFlash spec-decode workflow with externally-defined draft models.
+Closes TODO 122 (phase 1).
+
+### Fixed — DFlash converter: post_attention_layernorm → attn_post_norm mapping (2026-05-26, `a2c9c8c49`)
+
+Safetensors key `post_attention_layernorm` maps to internal field `attn_post_norm`
+in DFlash layer struct; converter now applies correct field remapping per Anbeeld design.
+Closes TODO 122 (follow-on).
+
+### Added — GGML_OP_FWHT: Walsh-Hadamard Transform standalone op (2026-05-26, `3d37eb55c`)
+
+New CPU/CUDA/HIP/Vulkan implementation of the Walsh-Hadamard Transform (FWHT) as a
+standalone GGML op (enum `GGML_OP_FWHT`, OScaR FOLLOWUP-A). CPU reference + CUDA/HIP
+kernels + Vulkan `fwht.comp` shader. Used by OScaR KV projection research track.
+Mainline alignment: we lead with the standalone op (PR #23690 is bug-fix only).
+
+### Fixed — Vulkan: register fwht.comp in vulkan-shaders-gen (2026-05-26, `de3953843`)
+
+Explicit `string_to_spv()` registration for `fwht.comp` in `vulkan-shaders-gen.cpp`.
+CMakeLists GLOB pattern alone does not auto-discover new .comp files; manual registration required.
+
 ### Fixed — MTP M-RoPE duplicate-impl regression (2026-05-25, `e8e767347`)
 
 Removed a duplicate `if (has_mtp) { configs.push_back(...DRAFT_MTP...) }` block at
