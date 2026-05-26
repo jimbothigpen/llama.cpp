@@ -57,6 +57,21 @@ Mainline alignment: we lead with the standalone op (PR #23690 is bug-fix only).
 Explicit `string_to_spv()` registration for `fwht.comp` in `vulkan-shaders-gen.cpp`.
 CMakeLists GLOB pattern alone does not auto-discover new .comp files; manual registration required.
 
+### Added — OScaR Phase 1: GGML_TYPE_KV_OSCAR_INT2 FHT-based INT2 KV cache (2026-05-26, `e1f3e7083`)
+
+New KV cache quantization type `GGML_TYPE_KV_OSCAR_INT2` (slot 71) combining
+Fast Hadamard Transform (FHT) projection with per-block min-max quantization to INT2.
+Phase 1 CUDA-only implementation. PPL gate PASS: 7.69 on Qwen3.5-9B-Q4_K_M
+(F16 baseline ~6.6; +1.09 PPL / +16.5% vs broken-codebook IQ2_KT baseline 35.5 PPL).
+Phase 2 (Vulkan/ROCm backends) and L2 sidecar architecture deferred.
+
+### Fixed — CUDA: add SM80+ arch guard to k_sparse_flash_forward in flashprefill.cu (2026-05-26, `54df8392d`)
+
+Closes Kaggle build saga. `flashprefill.cu` kernel body is now gated with `#if __CUDA_ARCH__ >= 800`
+so sm_75 devices see an empty valid kernel body. CMake macro `GGML_CUDA_FLASHPREFILL_SM75_STUB`
+auto-defined when `CMAKE_CUDA_ARCHITECTURES` lacks SM80+. Deprecates notebook sed-patch workaround.
+4/4 build cells GREEN.
+
 ### Fixed — MTP M-RoPE duplicate-impl regression (2026-05-25, `e8e767347`)
 
 Removed a duplicate `if (has_mtp) { configs.push_back(...DRAFT_MTP...) }` block at
