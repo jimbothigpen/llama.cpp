@@ -3323,7 +3323,8 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         k_type == GGML_TYPE_RQ_PLANAR3_0 || v_type == GGML_TYPE_RQ_PLANAR3_0 ||
         k_type == GGML_TYPE_RQ_PLANAR4_0 || v_type == GGML_TYPE_RQ_PLANAR4_0 ||
         k_type == GGML_TYPE_RQ_ISO3_0 || v_type == GGML_TYPE_RQ_ISO3_0 ||
-        k_type == GGML_TYPE_RQ_ISO4_0 || v_type == GGML_TYPE_RQ_ISO4_0) {
+        k_type == GGML_TYPE_RQ_ISO4_0 || v_type == GGML_TYPE_RQ_ISO4_0 ||
+        k_type == GGML_TYPE_KV_OSCAR_INT2 || v_type == GGML_TYPE_KV_OSCAR_INT2) {
         path = FA_SCALAR;
     }
 

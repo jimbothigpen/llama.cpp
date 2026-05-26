@@ -125,6 +125,11 @@ GGML_API void quantize_row_turboq2_tcq_ref(const float * GGML_RESTRICT x, block_
 GGML_API void dequantize_row_turboq2_tcq(const block_turboq2_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+// OScaR KV INT2: FHT + per-block min-max uniform 2-bit quantization — Phase 1 CUDA prototype (arXiv:2605.19660)
+GGML_API void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_kv_oscar_int2(const block_kv_oscar_int2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_kv_oscar_int2(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max)
 GGML_API void quantize_row_wht3_0_ref(const float * GGML_RESTRICT x, block_wht3_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_wht3_0(const block_wht3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);

@@ -405,6 +405,14 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ3_TCQ)
     // TURBOQ2_TCQ KV cache types
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ2_TCQ)
+
+    // OScaR KV INT2 Phase 1 CUDA: K=oscar_int2 × V=f16/bf16/q8_0 (D=128 and D=256)
+    FATTN_VEC_CASE(128, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_F16)
+    FATTN_VEC_CASE(128, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_BF16)
+    FATTN_VEC_CASE(128, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_F16)
+    FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_BF16)
+    FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_Q8_0)
     // Mixed TCQ3/TCQ2
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ2_TCQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ3_TCQ)
@@ -674,6 +682,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ
                 || t == GGML_TYPE_RQ_PLANAR3_0 || t == GGML_TYPE_RQ_PLANAR4_0
                 || t == GGML_TYPE_RQ_ISO3_0    || t == GGML_TYPE_RQ_ISO4_0
+                || t == GGML_TYPE_KV_OSCAR_INT2
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
                 || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1;
         };
@@ -709,6 +718,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
+        case GGML_TYPE_KV_OSCAR_INT2:
+            // OScaR INT2: VEC-only, Phase 1 instantiated for D=128 only.
+            if (K->ne[0] % 128 != 0) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            break;
         case GGML_TYPE_RQ_ISO3_0:
         case GGML_TYPE_RQ_PLANAR3_0:
         case GGML_TYPE_RQ_ISO4_0:
@@ -737,7 +752,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             || t == GGML_TYPE_RQ_ISO3_0    // VEC-only; bypass FATTN_KQ_STRIDE alignment check
             || t == GGML_TYPE_RQ_PLANAR3_0
             || t == GGML_TYPE_RQ_ISO4_0
-            || t == GGML_TYPE_RQ_PLANAR4_0;
+            || t == GGML_TYPE_RQ_PLANAR4_0
+            || t == GGML_TYPE_KV_OSCAR_INT2;  // OScaR INT2: VEC-only (Phase 1)
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
         const bool tcq_kv = K->type == GGML_TYPE_TURBOQ2_TCQ || K->type == GGML_TYPE_TURBOQ3_TCQ ||
