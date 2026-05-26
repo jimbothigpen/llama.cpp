@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7b, MTP Migration 0-3, NLD COMPLETE — **HEAD `e8e767347`** on
-`main` (post-mainline-rebase to `b9310`). Recent ships (2026-05-25 wave): mainline rebase onto `b9310` (`1191e48fc`); MTP M-RoPE duplicate-impl fix removing 248-error-per-sample regression (`e8e767347`); MTP→`draft-mtp` CLI rename + GGML op enum convergence to mainline (`763c79c9b`, `b3ec1f8e2`); IQ2_KT trellis 2-bit weight quant Phase P3a + IQ_KT-family template refactor (`0dac276d9`, `e9520caac`); IQ2/3/1_KT cluster-acceleration (8D base-3 hash, k=60) (`1e8501e46`); IQ2_KL + IQ5_K/IQ6_K Vulkan shaders (Phase 5b-2 S2 / 5b-2a S2) (`3723c1f61`, `0ade7ff86`); EAGLE3 fc dtype-aware read with BF16/F16→F32 conversion (`4c38845c4`); DFlash S2 dispatch (`ef80c728c`) + DFlash S3 GPU ring buffer + server spec_type wiring (`9b7ab4e83`) + mask_token_id u32 fix (`1436d1890`); TriAttention Phase A in-graph K/V capture harness (`6cbc9e06c`) + Gemma-4 ISWA capture fix (`cbd071632`). Prior 2026-05-24 wave: IQ5_K/IQ6_K Phase 5b-2 CPU+CUDA/HIP (`8e19be061`); IQ2_KL type-157 Phase 5b-1c (`f18a92a42`); EAGLE3 spec-decoder (`c0f3c1486`); PHANTOM-X speculator + Phase 2 dispatch (`d6dc63224`, `388169995`); Q1_0_G128 1-bit weight quant (`87d3705e0`); DFlash S1 model loader (`b6a75e524`); Q1_0 FA dispatch fix (`011939dcb`); Vulkan base-K MUL_MAT_ID fix (`626a02e8f`); backend_sampling default-flip for MTP draft (`871795ef2`). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `fd44da73f`** on
+`main` (post-mainline-rebase to `b9310`). Recent ships (2026-05-26 wave): **MTP Convergence Phase A** — CLI flag deprecation + legacy loader-gate field removal (`fd44da73f`); MTP bulk embd_read_tgt GPU→CPU sync perf (TODO 134, `750e74115`); suppress draft-simple auto-enable when dflash/mtp/draft-eagle3 explicit (TODO 120, `b1799cf36`). Prior 2026-05-25 wave: mainline rebase onto `b9310` (`1191e48fc`); MTP M-RoPE duplicate-impl fix removing 248-error-per-sample regression (`e8e767347`); MTP→`draft-mtp` CLI rename + GGML op enum convergence to mainline (`763c79c9b`, `b3ec1f8e2`); IQ2_KT trellis 2-bit weight quant Phase P3a + IQ_KT-family template refactor (`0dac276d9`, `e9520caac`); IQ2/3/1_KT cluster-acceleration (8D base-3 hash, k=60) (`1e8501e46`); IQ2_KL + IQ5_K/IQ6_K Vulkan shaders (Phase 5b-2 S2 / 5b-2a S2) (`3723c1f61`, `0ade7ff86`); EAGLE3 fc dtype-aware read with BF16/F16→F32 conversion (`4c38845c4`); DFlash S2 dispatch (`ef80c728c`) + DFlash S3 GPU ring buffer + server spec_type wiring (`9b7ab4e83`) + mask_token_id u32 fix (`1436d1890`); TriAttention Phase A in-graph K/V capture harness (`6cbc9e06c`) + Gemma-4 ISWA capture fix (`cbd071632`). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -102,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `e8e767347`**, the following features are on `main`.
+As of **HEAD `fd44da73f`**, the following features are on `main`.
 
 ---
 

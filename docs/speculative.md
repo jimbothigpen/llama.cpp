@@ -330,7 +330,7 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 
 This fork ships bundled-MTP inference for Qwen3.5 / Qwen3.5-MoE models that carry
 `nextn_predict_layers` MTP-tail blocks. Accept rates below are measured with
-`llama-speculative-simple --mtp` on Qwen3.5-35B-A3B-MTP-Q4_K_M (ROCm, ai00 gfx1150):
+`llama-speculative-simple --spec-type draft-mtp` on Qwen3.5-35B-A3B-MTP-Q4_K_M (ROCm, ai00 gfx1150):
 
 | Scenario | Accept rate | Notes |
 |---|---|---|
@@ -338,7 +338,7 @@ This fork ships bundled-MTP inference for Qwen3.5 / Qwen3.5-MoE models that carr
 | Long-prompt MoE (n_max=1) | ~100% | n_max=1 is always accepted (argmax depth-0 draft) |
 | Short-prompt MoE | ~64% | Shorter prompts have more variability |
 | Dense (Qwen3.5-4B-MTP-BF16, n_max=3) | ~42% | Dense models lower than MoE on accept rate |
-| Server MTP (--spec-type mtp, n_max=3) | ~85% | `system_fingerprint=b535-49f88e18a`; server uses shared speculative state |
+| Server MTP (--spec-type draft-mtp, n_max=3) | ~85% | `system_fingerprint=b535-49f88e18a`; server uses shared speculative state |
 
 The `top_k=1` draft sampler (vs mainline `top_k=10`) is intentional: with backend
 sampling pre-filtering to top-10 and bundled-MTP weight-sharing, `top_k=1` yields

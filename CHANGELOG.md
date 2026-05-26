@@ -9,7 +9,29 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); MTP V-J clean re-measurement post-mrope-fix on a quiet host (TODO 134); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+
+### Removed — MTP convergence Phase A: deprecate --mtp CLI flag, remove legacy loader-gate fields (2026-05-26, `fd44da73f`)
+
+Removes `has_mtp` / `cparams.mtp` / `llama_model_params::mtp` gate fields replaced by
+`LLAMA_CONTEXT_TYPE_MTP` mechanism. Deprecates `--mtp` / `--multi-token-prediction` CLI flags
+(now aliases to `--spec-type draft-mtp` with deprecation warning); `--no-mtp` becomes no-op.
+HARD-PRESERVED: `mtp_op_type` enum, `llama_set_mtp_op_type()` API, and Qwen3.5 machinery.
+Part of strategic pivot to converge MTP to mainline via cherry-pick of PR #23398 (Gemma4 MTP).
+
+### Optimized — MTP performance: bulk embd_read_tgt single GPU→CPU sync per ubatch (2026-05-26, `750e74115`)
+
+Replace per-row `llama_get_embeddings_pre_norm_ith()` loop with pointer arithmetic on
+bulk result from `llama_get_embeddings_pre_norm()` in both `common_speculative_impl_draft_mtp` and
+`common_speculative_state_draft_mtp::process()`. Prior profiling showed `embd_read_tgt` at
+65k calls consuming 59.3% wall; projects ~47% speedup (1382 s → ~730 s on 200-token sample).
+Closes TODO 134.
+
+### Fixed — Suppress draft-simple auto-enable when dflash/mtp/draft-eagle3 explicitly set (2026-05-26, `b1799cf36`)
+
+Conditional gate in speculative loader now respects explicit `--spec-type` selection,
+preventing `draft-simple` from overriding user intent when another speculator is active.
+Closes TODO 120.
 
 ### Fixed — MTP M-RoPE duplicate-impl regression (2026-05-25, `e8e767347`)
 
