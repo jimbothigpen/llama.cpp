@@ -11,6 +11,10 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
 
+### Added — OScaR Phase 2: INT2 KV residual window with hybrid-memory-chain root bug fix (2026-05-27, `c892e62a3`)
+
+Fixes architectural regression: `llama_memory_hybrid` hardcoded `oscar_res_window=0` silently disabled residual windows for all hybrid models (Qwen3.5 family). Root bug propagation chain identified: 5 constructor signatures required to thread `oscar_res_window` parameter through. Implementation: new `k_res` F16 buffer alongside INT2-quantized main KV; FATTN dispatch performs split-reads (F16 for positions in tail window, INT2 FHT for older blocks). New helper `ggml_flash_attn_ext_set_oscar_res()` manages window state. CLI flag `--cache-oscar-residual-window N` (default 128). Gate results: Qwen3.5-9B-Q4_K_M PASS 7.2005 (R=128-FLAG, margin 0.0005); 0.8B FAIL 20.8844 vs ≤17.0 gate (-0.97% vs target). D2 R-sweep (R=128/256/512/1024) showed 0.8B architectural non-response (flat ~21 PPL), 9B monotonic improvement to R=512=-2.77% (recommended deployment default). FOLLOWUP-F (full-dimension FWHT) identified as high-priority architectural fix for 0.8B under-performance.
+
 ### Added — TriAttention Phase B: physical KV cache compaction evictor (2026-05-26, `6f93b4e5d`)
 
 Implements `tria_compact_kv` legacy compaction strategy: selects prefix-protected,
