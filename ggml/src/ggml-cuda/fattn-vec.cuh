@@ -76,6 +76,30 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_oscar_int2(
     return sum;
 }
 
+// OScaR residual window F16 dot product.
+// K_res_row: pointer to the start of a single row (one head) in the F16 residual buffer.
+// Q_v: same Q register format as vec_dot_fattn_vec_KQ_oscar_int2 (half2[] or float2[]).
+// Computes raw dot product Q·K_res without FHT rotation (K_res stores original pre-rotation values).
+template<int D>
+static __device__ __forceinline__ float vec_dot_f16_residual(
+        const ggml_half * __restrict__ K_res_row,
+        const void * __restrict__ Q_v) {
+    float sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < D/2; i++) {
+#ifdef V_DOT2_F32_F16_AVAILABLE
+        const half2 qv = ((const half2 *)Q_v)[i];
+        sum += __half2float(qv.x) * __half2float(K_res_row[2*i]);
+        sum += __half2float(qv.y) * __half2float(K_res_row[2*i+1]);
+#else
+        const float2 qv = ((const float2 *)Q_v)[i];
+        sum += qv.x * __half2float(K_res_row[2*i]);
+        sum += qv.y * __half2float(K_res_row[2*i+1]);
+#endif
+    }
+    return sum;
+}
+
 // Currently llvm with the amdgcn target does not support unrolling loops
 // that contain a break that can not be resolved at compile time.
 #ifdef __clang__
@@ -105,7 +129,9 @@ static __global__ void flash_attn_ext_vec(
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33) {
+                            const int32_t nb31, const int32_t nb32, const int64_t nb33,
+        const ggml_half * __restrict__ K_res_f16,
+        const int32_t oscar_res_window) {
     ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
 
@@ -119,7 +145,8 @@ static __global__ void flash_attn_ext_vec(
                   nb11, nb12, nb13,
                   nb21, nb22, nb23,
                   ne31, ne32, ne33,
-                  nb31, nb32, nb33);
+                  nb31, nb32, nb33,
+            K_res_f16, oscar_res_window);
         NO_DEVICE_CODE;
         return;
     }
@@ -441,8 +468,22 @@ static __global__ void flash_attn_ext_vec(
                         sum = vec_dot_fattn_vec_KQ_turboq2_tcq_cb<D, nthreads_KQ>(
                             K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j], tcq_smem_codebook);
                     } else if constexpr (type_K == GGML_TYPE_KV_OSCAR_INT2) {
-                        sum = vec_dot_fattn_vec_KQ_oscar_int2<D, nthreads_KQ>(
-                            K + i_KQ*nb11, Q_reg[j]);
+                        // OScaR residual window: recent R rows use F16 (original values),
+                        // older rows use INT2 (quantized + FHT).
+                        const int abs_row = k_VKQ_0 + i_KQ;
+                        if (K_res_f16 && oscar_res_window > 0 &&
+                                abs_row >= k_VKQ_max - oscar_res_window) {
+                            // Compute pointer to head (head/gqa_ratio)'s D elements at row abs_row.
+                            // K_res layout: [ne10*ne12, ne11, n_stream] = [n_embd_k_gqa, kv_size, n_stream]
+                            const ggml_half * k_res_row = K_res_f16
+                                + (int64_t)sequence * (ne10 * ne12) * ne11
+                                + (head / gqa_ratio) * ne10
+                                + (int64_t)abs_row   * (ne10 * ne12);
+                            sum = vec_dot_f16_residual<D>(k_res_row, Q_reg[j]);
+                        } else {
+                            sum = vec_dot_fattn_vec_KQ_oscar_int2<D, nthreads_KQ>(
+                                K + i_KQ*nb11, Q_reg[j]);
+                        }
                     } else {
                         sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
                     }
@@ -914,7 +955,8 @@ static __global__ void flash_attn_ext_vec(
               nb11, nb12, nb13,
               nb21, nb22, nb23,
               ne31, ne32, ne33,
-              nb31, nb32, nb33);
+              nb31, nb32, nb33,
+        K_res_f16, oscar_res_window);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }

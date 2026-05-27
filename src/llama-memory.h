@@ -23,6 +23,9 @@ struct llama_memory_params {
     bool swa_full;
 
     llama_context_type ctx_type;
+
+    // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
+    uint32_t oscar_residual_window = 0;
 };
 
 enum llama_memory_status {

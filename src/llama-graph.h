@@ -1007,7 +1007,9 @@ struct llm_graph_context {
             ggml_tensor * sinks,   // [n_head_q]
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * k_res    = nullptr, // OScaR residual window F16 buffer (null = disabled)
+               int32_t   oscar_res_window = 0) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
