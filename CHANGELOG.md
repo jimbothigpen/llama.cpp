@@ -11,6 +11,16 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
 
+### Added — TriAttention Phase B: physical KV cache compaction evictor (2026-05-26, `6f93b4e5d`)
+
+Implements `tria_compact_kv` legacy compaction strategy: selects prefix-protected,
+top-scored, and trailing window tokens; evicts the rest via `kv->triattention_compact(keep_positions)`.
+Adds `llama_kv_cache::triattention_compact()` (~75 LOC) that physically relocates KV tensor rows.
+Gate results (Qwen3.5-0.8B-Q4_K_M, -c 4096 -ub 512 -b 512, 20ch wiki.test.raw): PPL=14.7299 PASS (limit 15.4664).
+Evictor demo: n_kv=300 keep=256 evict=44 budget=224 window=32; no-fire quirk in prefill mode (architectural, correctness verified).
+Build cells: ai00 ROCm/Vulkan + ai01 CPU/Vulkan GREEN; ai01 ROCm §-FLAG (HIP 7.2 LTO crash, pre-existing).
+Phase C (GPU GQA kernel + SWA aggregation) unblocked but not queued.
+
 ### Removed — MTP convergence Phase A: deprecate --mtp CLI flag, remove legacy loader-gate fields (2026-05-26, `fd44da73f`)
 
 Removes `has_mtp` / `cparams.mtp` / `llama_model_params::mtp` gate fields replaced by
