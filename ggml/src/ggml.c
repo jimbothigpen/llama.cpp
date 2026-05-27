@@ -5704,6 +5704,21 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+// ggml_flash_attn_ext_set_oscar_res
+
+void ggml_flash_attn_ext_set_oscar_res(
+        struct ggml_tensor * a,
+        struct ggml_tensor * k_res,
+        int32_t              res_window) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[5] == NULL);
+    GGML_ASSERT(k_res != NULL);
+    GGML_ASSERT(k_res->type == GGML_TYPE_F16);
+
+    a->src[5] = k_res;
+    ggml_set_op_params_i32(a, 4, res_window);
+}
+
 // ggml_flash_attn_sparse
 
 struct ggml_tensor * ggml_flash_attn_sparse(

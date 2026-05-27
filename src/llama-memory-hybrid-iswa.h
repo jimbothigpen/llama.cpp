@@ -28,6 +28,7 @@ public:
                  uint32_t   kv_size,
                  uint32_t   n_ubatch,
                  uint32_t   n_pad,
+                 uint32_t   oscar_res_window,
                             /* recurrent */
                 ggml_type   type_r,
                 ggml_type   type_s,

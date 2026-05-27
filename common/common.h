@@ -587,6 +587,7 @@ struct common_params {
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+    uint32_t  cache_oscar_residual_window = 128; // OScaR residual window size (0 = disabled)
 
     // TriAttention KV scoring (Phase A)
     std::string triattention_stats_path  = "";   // path to .tria calibration file; empty = disabled

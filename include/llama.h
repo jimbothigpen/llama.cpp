@@ -391,6 +391,8 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
+        uint32_t oscar_residual_window; // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
+
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
         // currently works only with CPU execution

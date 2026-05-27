@@ -2051,7 +2051,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * k_res,
+             int32_t   oscar_res_window) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -2088,6 +2090,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+
+        // OScaR residual window: k_res provides F16 copy of recent K for higher-quality attention
+        if (k_res && oscar_res_window > 0) {
+            ggml_flash_attn_ext_set_oscar_res(cur, k_res, oscar_res_window);
+        }
 
         // TurboQuant: inverse WHT on FA output when V values are WHT-rotated.
         // The FA kernel does inline V dequant but does NOT un-rotate; that's done here.
@@ -2344,6 +2351,14 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
 
+        // OScaR residual window: also write F16 copy for recent-token precision
+        {
+            auto * cpy_kres = mctx_cur->cpy_k_res(ctx0, k_cur, k_idxs, il);
+            if (cpy_kres) {
+                ggml_build_forward_expand(gf, cpy_kres);
+            }
+        }
+
         // TriAttention in-graph K/V capture (Phase A harness)
         // Scatter k_cur/v_cur into CPU-backed capture buffers using the same index tensors.
         // Bypasses broken ggml_backend_tensor_get() on ROCm past ~272 MiB sub-alloc boundaries.
@@ -2378,6 +2393,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
+    // OScaR residual window: get F16 buffer for recent tokens (null when disabled or non-OSCAR layer)
+    ggml_tensor * k_res = mctx_cur->get_k_res(ctx0, il);
+    const int32_t oscar_res_window = k_res ? (int32_t)mctx_cur->get_oscar_res_window() : 0;
+
     // TurboQuant pre-rotate-queries: O(d log d) WHT rotation via custom op
     // When K is WHT-rotated (turboq3/turboq4), Q must also be rotated for
     // <Q_rot, K_rot> = <Q, K> to hold and produce correct attention scores.
@@ -2387,7 +2406,7 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {

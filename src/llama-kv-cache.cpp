@@ -142,10 +142,12 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
+                 uint32_t   oscar_res_window,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
     model(model), hparams(model.hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    oscar_residual_window(oscar_res_window) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -163,8 +165,9 @@ llama_kv_cache::llama_kv_cache(
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
+            // +1 per layer for optional k_res tensor (OScaR residual window)
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer_kv*ggml_tensor_overhead() + ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t((2u*(1 + n_stream) + 1u)*n_layer_kv*ggml_tensor_overhead() + ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -365,6 +368,13 @@ llama_kv_cache::llama_kv_cache(
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);
 
+        // Allocate F16 residual buffer for OScaR INT2 K cache when residual window is enabled
+        ggml_tensor * k_res = nullptr;
+        if (has_k && layer_type_k == GGML_TYPE_KV_OSCAR_INT2 && oscar_residual_window > 0) {
+            k_res = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, n_embd_k_gqa, kv_size, n_stream);
+            ggml_format_name(k_res, "cache_k_res_l%d", il);
+        }
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
 
@@ -375,7 +385,7 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, k_stream, v_stream, });
+        layers.push_back({ il, k, v, k_res, k_stream, v_stream, });
     }
 
     // Create per-channel InnerQ scale_inv tensor if any INNERQ KV type is in use.
@@ -1617,6 +1627,58 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     // store the current K values into the cache
     return ggml_set_rows(ctx, k, k_cur, k_idxs);
+}
+
+ggml_tensor * llama_kv_cache::cpy_k_res(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
+    GGML_UNUSED(sinfo);
+
+    const int32_t ikv = map_layer_ids.at(il);
+    ggml_tensor * k_res = layers[ikv].k_res;
+    if (!k_res) {
+        return nullptr;
+    }
+
+    const int64_t n_embd_head = k_cur->ne[0];
+    const int64_t n_head      = k_cur->ne[1];
+    const int64_t n_embd_gqa  = n_embd_head * n_head;
+
+    GGML_ASSERT(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
+
+    // merge head dims so set_rows sees a 2D scatter [n_embd_gqa, n_tokens]
+    ggml_tensor * k_cur_2d = ggml_view_2d(ctx, k_cur, n_embd_gqa, k_cur->ne[2], k_cur->nb[2], 0);
+
+    const int64_t n_stream = k_res->ne[2];
+    ggml_tensor * k_res_2d = k_res;
+    if (n_stream > 1) {
+        const int64_t kv_size = get_size();
+        k_res_2d = ggml_reshape_2d(ctx, k_res, n_embd_gqa, kv_size * n_stream);
+    }
+
+    // k_cur_2d is F32, k_res_2d is F16 — ggml_set_rows handles the cast
+    return ggml_set_rows(ctx, k_res_2d, k_cur_2d, k_idxs);
+}
+
+ggml_tensor * llama_kv_cache::get_k_res(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
+    const int32_t ikv = map_layer_ids.at(il);
+    auto * k_res = layers[ikv].k_res;
+    if (!k_res) {
+        return nullptr;
+    }
+
+    const uint64_t kv_size      = get_size();
+    const uint64_t n_embd_k_gqa = k_res->ne[0];
+    const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
+
+    return ggml_view_4d(ctx, k_res,
+            hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
+            ggml_row_size(k_res->type, hparams.n_embd_head_k(il)),
+            ggml_row_size(k_res->type, n_embd_k_gqa),
+            ggml_row_size(k_res->type, n_embd_k_gqa * kv_size),
+            ggml_row_size(k_res->type, n_embd_k_gqa * kv_size) * sinfo.s0);
+}
+
+uint32_t llama_kv_cache::get_oscar_res_window() const {
+    return oscar_residual_window;
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
@@ -2893,8 +2955,20 @@ ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
 
+ggml_tensor * llama_kv_cache_context::cpy_k_res(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
+    return kv->cpy_k_res(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
+}
+
 ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const {
     return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::get_k_res(ggml_context * ctx, int32_t il) const {
+    return kv->get_k_res(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+uint32_t llama_kv_cache_context::get_oscar_res_window() const {
+    return kv->get_oscar_res_window();
 }
 
 ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {

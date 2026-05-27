@@ -2116,6 +2116,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--cache-oscar-residual-window"}, "N",
+        string_format(
+            "OScaR INT2 residual window: keep N most-recent K tokens in F16 for higher quality\n"
+            "only effective when --cache-type-k kv_oscar_int2 is set\n"
+            "(default: %d, set 0 to disable)",
+            (int)params.cache_oscar_residual_window
+        ),
+        [](common_params & params, int value) {
+            params.cache_oscar_residual_window = (uint32_t)std::max(0, value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_OSCAR_RESIDUAL_WINDOW"));
+    add_opt(common_arg(
         {"--triattention"}, "PATH",
         "path to TriAttention calibration stats file (.tria); enables KV scoring (default: disabled)",
         [](common_params & params, const std::string & value) {

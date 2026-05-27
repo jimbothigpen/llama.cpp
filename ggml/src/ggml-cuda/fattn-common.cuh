@@ -40,7 +40,9 @@ typedef void (* fattn_kernel_t)(
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33);
+                            const int32_t nb31, const int32_t nb32, const int64_t nb33,
+        const ggml_half * __restrict__ K_res_f16,
+        const int32_t oscar_res_window);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -2280,6 +2282,14 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
+    // OScaR residual window: extract K_res (src[5]) and oscar_res_window (op_params[4])
+    const ggml_tensor * K_res_tensor = KQV->src[5];
+    const ggml_half * K_res_f16_ptr = K_res_tensor ? (const ggml_half *) K_res_tensor->data : nullptr;
+    int32_t oscar_res_window_val = 0;
+    if (K_res_tensor) {
+        memcpy(&oscar_res_window_val, (const int32_t *) KQV->op_params + 4, sizeof(int32_t));
+    }
+
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
     ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
@@ -2294,7 +2304,8 @@ void launch_fattn(
         K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,
         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0,
+        K_res_f16_ptr, oscar_res_window_val
     );
     CUDA_CHECK(cudaGetLastError());
 

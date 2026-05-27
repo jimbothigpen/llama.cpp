@@ -2475,6 +2475,14 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Attach OScaR residual window buffer to a flash_attn_ext op.
+    // k_res: F16 tensor with same shape as K, holding original (unrotated) K values.
+    // res_window: number of most-recent cache rows to read from k_res instead of quantized K.
+    GGML_API void ggml_flash_attn_ext_set_oscar_res(
+            struct ggml_tensor * a,
+            struct ggml_tensor * k_res,
+            int32_t              res_window);
+
     // Block-sparse flash attention dispatch (pFlash hook).
     // Calls registered sparse kernel when available; falls back to dense FA otherwise.
     // alpha=1.0 selects all blocks (equivalent to dense attention).
