@@ -81,7 +81,7 @@ disambiguates from the `TURBO*_0` collisions in contributing forks.
 | 68 | `GGML_TYPE_TURBOQ2_INNERQ` | `TURBO2_INNERQ` (ft2 67) | 2-bit + InnerQ per-channel equalization; block_turboq2_0 | 34 bytes | CPU fallback (no .comp shaders in ft2) |
 | 69 | `GGML_TYPE_TURBOQ3_INNERQ` | `TURBO3_INNERQ` (ft2 68) | 3-bit + InnerQ per-channel equalization; block_turboq3_0 | 50 bytes | CPU fallback |
 | 70 | `GGML_TYPE_TURBOQ4_INNERQ` | `TURBO4_INNERQ` (ft2 69) | 4-bit alias: encoder routes to TURBOQ4_0 (codebook-sensitivity regression confirmed in ft2 ccfe39d675, PPL 9.08 vs 7.47) | 68 bytes | CPU fallback |
-| 71 | `GGML_TYPE_KV_OSCAR_INT2` | new — OScaR Phase 1 | FHT + per-block min-max uniform INT2 (arXiv:2605.19660); Phase 1 CUDA-only | 36 bytes | CPU fallback |
+| 71 | `GGML_TYPE_KV_OSCAR_INT2` | new — OScaR Phase 1 | FHT + per-block min-max uniform INT2 (arXiv:2605.19660); Phase 1 CUDA-only; Phase 2 adds F16 residual window (R=128) + hybrid-memory-chain constructor-chain propagation | 36 bytes | CPU fallback |
 
 Note: TURBOQ4_INNERQ is registered but its encoder is aliased to TURBOQ4_0 by design.
 
