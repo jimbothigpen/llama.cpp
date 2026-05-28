@@ -567,8 +567,14 @@ class _Qwen35MtpMixin:
         return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
 
     def set_gguf_parameters(self):
+        n = self.hparams.get("mtp_num_hidden_layers", 0)
+        no_mtp = getattr(self, 'no_mtp', False)
+        if n > 0 and no_mtp:
+            # Strip MTP from block_count so the base-class add_block_count() writes the
+            # trunk-only count; filter_tensors already dropped all mtp.* tensors.
+            self.block_count -= n
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
+        if n > 0 and not no_mtp:
             self.gguf_writer.add_nextn_predict_layers(n)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
