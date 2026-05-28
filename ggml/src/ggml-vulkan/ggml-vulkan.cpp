@@ -11993,7 +11993,7 @@ static void ggml_vk_silu_back(ggml_backend_vk_context * ctx, vk_context& subctx,
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_SILU_BACK, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f, 0.0f, 0.0f });
 }
 
-static void ggml_vk_fwht(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+static void ggml_vk_fwht_op(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     struct { uint32_t n_rows; uint32_t n; } pc = {
         (uint32_t)ggml_nrows(src0), (uint32_t)src0->ne[0],
     };
@@ -14291,7 +14291,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
     case GGML_OP_FWHT:
-        ggml_vk_fwht(ctx, compute_ctx, src0, node);
+        ggml_vk_fwht_op(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_TURBO_WHT:
