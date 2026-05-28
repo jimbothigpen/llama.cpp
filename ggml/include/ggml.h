@@ -624,8 +624,8 @@ extern "C" {
 
         GGML_OP_GLU,
         GGML_OP_FLASH_ATTN_SPARSE,
-        GGML_OP_FWHT,
         GGML_OP_TURBO_WHT,
+        GGML_OP_FWHT,
 
         GGML_OP_COUNT,
     };
