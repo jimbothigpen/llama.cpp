@@ -9,6 +9,10 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
+### Fixed — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B (revert ccee426)
+
+Reverts mainline commit ccee426 (PR #23280 server-context: fall back to full seq clear when partial KV eviction is refused) from 2026-05-25 forward-sync. The change introduced a KV cache reuse regression on Qwen3.6-35B-A3B (and likely Qwen3.5-35B-A3B-MTP) where a full batch of cached tokens is dropped per turn on multi-turn requests. Root cause under investigation; revert restores pre-regression cache-reuse behavior. **§-RISK**: This is a naked revert per mainline issue #23589 author; it may reintroduce the hybrid-attention crash that #23280 was fixing. Build + smoke verification of representative hybrid model required before merge. Mainline: https://github.com/ggml-org/llama.cpp/issues/23589 (RC + reproducer by orangeswim 2026-05-24).
+
 In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
 
 ### Added — OScaR Phase 2: INT2 KV residual window with hybrid-memory-chain root bug fix (2026-05-27, `c892e62a3`)
