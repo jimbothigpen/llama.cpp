@@ -587,6 +587,8 @@ struct common_params {
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+    ggml_type cache_type_k_swa = GGML_TYPE_COUNT; // KV cache data type for K in SWA layers (COUNT = use cache_type_k)
+    ggml_type cache_type_v_swa = GGML_TYPE_COUNT; // KV cache data type for V in SWA layers (COUNT = use cache_type_v)
     uint32_t  cache_oscar_residual_window = 128; // OScaR residual window size (0 = disabled)
 
     // TriAttention KV scoring (Phase A)

@@ -19,6 +19,9 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                  uint32_t   n_ubatch,
                  uint32_t   n_pad,
                  uint32_t   oscar_res_window,
+                            /* attn swa override */
+                ggml_type   type_k_swa,
+                ggml_type   type_v_swa,
                             /* recurrent */
                 ggml_type   type_r,
                 ggml_type   type_s,
@@ -36,6 +39,8 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         model,
         type_k,
         type_v,
+        type_k_swa,
+        type_v_swa,
         v_trans,
         offload,
         swa_full,

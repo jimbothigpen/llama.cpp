@@ -391,6 +391,9 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
+        enum ggml_type type_k_swa; // data type for K cache of SWA layers (GGML_TYPE_COUNT = use type_k)
+        enum ggml_type type_v_swa; // data type for V cache of SWA layers (GGML_TYPE_COUNT = use type_v)
+
         uint32_t oscar_residual_window; // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
 
         // Abort callback
