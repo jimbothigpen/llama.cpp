@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -553,6 +554,18 @@ class _Qwen35MtpMixin:
         self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("mtp."):
+            # Bundled-MTP (default): pass mtp.* through to modify_tensors for remapping.
+            # --no-mtp: drop the MTP head entirely (Qwen3NextModel behaviour preserved).
+            # This overrides Qwen3NextModel.filter_tensors which unconditionally drops mtp.*.
+            if getattr(cls, 'no_mtp', False):
+                return None
+            return item
+        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
         if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
@@ -572,7 +585,14 @@ class _Qwen35MtpMixin:
             n_layer = self.hparams["num_hidden_layers"]
             if name.find("layers.") != -1:
                 assert bid is not None
-                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
+                # Translate the MTP-local layer index (0-based) to the GGUF block index
+                # (trunk_layers + mtp_local_idx).  This is required for correct quantisation
+                # type dispatch (e.g. SSM_CONV1D → F32) and for MoE expert merging in
+                # Qwen2MoeModel.modify_tensors which keys experts by GGUF block index.
+                corrected_bid = bid + n_layer
+                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{corrected_bid}")
+                yield from super().modify_tensors(data_torch, name, corrected_bid)  # ty: ignore[unresolved-attribute]
+                return
             else:
                 remapper = {
                     "mtp.fc":                    "model.layers.{bid}.eh_proj",
