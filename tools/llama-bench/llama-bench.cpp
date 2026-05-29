@@ -514,10 +514,6 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "turboq3_innerq") {
         return GGML_TYPE_TURBOQ3_INNERQ;
     }
-    if (s == "turboq4_innerq") {
-        return GGML_TYPE_TURBOQ4_INNERQ;
-    }
-
     return GGML_TYPE_COUNT;
 }
 

@@ -164,7 +164,6 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-f16-turboq2_tcq.cu
             template-instances/fattn-vec-instance-turboq2_innerq-turboq2_innerq.cu
             template-instances/fattn-vec-instance-turboq3_innerq-turboq3_innerq.cu
-            template-instances/fattn-vec-instance-turboq4_innerq-turboq4_innerq.cu
             template-instances/fattn-vec-instance-f16-turboq2_innerq.cu
             template-instances/fattn-vec-instance-f16-turboq3_innerq.cu
             template-instances/fattn-vec-instance-bf16-turboq2_innerq.cu

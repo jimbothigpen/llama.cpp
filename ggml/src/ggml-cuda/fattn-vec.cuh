@@ -172,7 +172,7 @@ static __global__ void flash_attn_ext_vec(
     // RQ types use the float Q path (like f16/bf16/turbo), not q8_1 integer path.
     // iso4/planar4 added here to fix silent NaN (Q_q8_1=true was loading Q via wrong path).
     constexpr bool K_is_unquantized = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16 || type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ2_TCQ || type_K == GGML_TYPE_TURBOQ3_TCQ || type_K == GGML_TYPE_RQ_ISO3_0 || type_K == GGML_TYPE_RQ_PLANAR3_0 || type_K == GGML_TYPE_RQ_ISO4_0 || type_K == GGML_TYPE_RQ_PLANAR4_0 || type_K == GGML_TYPE_KV_OSCAR_INT2);
-    constexpr bool V_is_unquantized = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16 || type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ || type_V == GGML_TYPE_TURBOQ4_INNERQ);
+    constexpr bool V_is_unquantized = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16 || type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ);
     // RQ types excluded from K_is_turbo: nthreads_KQ=1 causes ~256 VGPR/thread at D=256 on
     // RQ K types, exceeding RDNA limits and causing register spill → GPU hang/crash. Use the
     // standard unquantized path (nthreads_KQ=8) instead; warp_reduce_sum<8> handles the rest.
@@ -181,7 +181,7 @@ static __global__ void flash_attn_ext_vec(
     // nthreads_KQ=1: each thread computes a full KQ product alone — eliminates warp_reduce_sum
     // shuffle and halves KQ loop iterations. Each thread holds full Q vector in registers.
     constexpr int nthreads_KQ = K_is_turbo ? 1 : (K_is_unquantized ? 128 / cpy_nb : nthreads_KQ_q);
-    constexpr bool V_is_turbo = (type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ || type_V == GGML_TYPE_TURBOQ4_INNERQ);
+    constexpr bool V_is_turbo = (type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ);
     // Turbo V dequant is scalar (byte extract + LUT), not vectorized loads.
     // Halve nthreads_V to double V_cols_per_iter (process 2 V rows per loop iteration),
     // reducing loop overhead and improving ILP in the V aggregation phase.
@@ -192,7 +192,7 @@ static __global__ void flash_attn_ext_vec(
     static_assert(WARP_SIZE % nthreads_KQ == 0, "bad nthreads_K");
     static_assert(WARP_SIZE % nthreads_V  == 0, "bad nthreads_V");
 
-    constexpr int V_rows_per_thread = V_is_unquantized ? ((type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ || type_V == GGML_TYPE_TURBOQ4_INNERQ) ? 4 : 2*cpy_ne) : 4;
+    constexpr int V_rows_per_thread = V_is_unquantized ? ((type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ || type_V == GGML_TYPE_TURBOQ2_INNERQ || type_V == GGML_TYPE_TURBOQ3_INNERQ) ? 4 : 2*cpy_ne) : 4;
     constexpr int V_cols_per_iter   = WARP_SIZE / nthreads_V;
 
     constexpr vec_dot_KQ_t vec_dot_KQ = get_vec_dot_KQ<type_K, D, nthreads_KQ>();

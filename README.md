@@ -196,7 +196,8 @@ one-time and stored alongside the GGUF.
 |---|---|---|---|
 | `turboq2_innerq` (slot 68) | 2.125 | 128 | Calibrated 2-bit |
 | `turboq3_innerq` (slot 69) | 3.125 | 128 | Calibrated 3-bit |
-| `turboq4_innerq` (slot 70) | 4.25 | 128 | Calibrated 4-bit |
+
+> **Note:** 4-bit InnerQ is intentionally not offered — per-channel equalization regresses quality at 4-bit; use `turboq4_0` instead.
 
 Example:
 ```bash

@@ -122,7 +122,6 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq2_tcq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq2_innerq-turboq2_innerq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_innerq-turboq3_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-turboq4_innerq-turboq4_innerq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq2_innerq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq3_innerq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-bf16-turboq2_innerq.cu

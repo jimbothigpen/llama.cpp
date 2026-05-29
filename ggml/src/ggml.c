@@ -821,14 +821,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_turboq3_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turboq3_0_ref,
     },
-    [GGML_TYPE_TURBOQ4_INNERQ] = {
-        .type_name                = "turboq4_innerq",
-        .blck_size                = QK_TURBOQ4,
-        .type_size                = sizeof(block_turboq4_0),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_turboq4_0,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_turboq4_0_ref,
-    },
+    // slot 70 (GGML_TYPE_TURBOQ4_INNERQ) retired/reserved — designated-initializer gap is intentional
     [GGML_TYPE_RQ_PLANAR3_0] = {
         .type_name                = "planar3",
         .blck_size                = QK_PLANAR3,

@@ -439,7 +439,7 @@ extern "C" {
         GGML_TYPE_TURBOQ3_TCQ = 67, // TurboQuant 3-bit KV cache: TCQ (k=3, L=9, 512 states, Viterbi) — source: buun TURBO3_TCQ
         GGML_TYPE_TURBOQ2_INNERQ = 68, // 2-bit + InnerQ K-cache equalization; block_turboq2_0 (34 bytes, QK=128)
         GGML_TYPE_TURBOQ3_INNERQ = 69, // 3-bit + InnerQ K-cache equalization; block_turboq3_0 (50 bytes, QK=128)
-        GGML_TYPE_TURBOQ4_INNERQ = 70, // 4-bit + InnerQ K-cache equalization; block_turboq4_0 (68 bytes); encoder aliases to TURBOQ4_0 (PPL regression at 4-bit)
+        // slot 70 retired/reserved — was GGML_TYPE_TURBOQ4_INNERQ (4-bit InnerQ alias of TURBOQ4_0; InnerQ equalization regresses quality at 4-bit, PPL 9.08 vs 7.47, ft2 ccfe39d675)
         GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype (arXiv:2605.19660)
         GGML_TYPE_RQ_PLANAR3_0 = 72, // RotorQuant 3-bit KV: Givens-rotation, 8 centroids, sign-mag — source: carlosfundora PLANAR3_0 (44)
         GGML_TYPE_RQ_PLANAR4_0 = 73, // RotorQuant 4-bit KV: Givens-rotation, 16 centroids — source: carlosfundora PLANAR4_0 (45)

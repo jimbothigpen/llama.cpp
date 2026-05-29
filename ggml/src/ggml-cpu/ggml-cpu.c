@@ -480,12 +480,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
-    [GGML_TYPE_TURBOQ4_INNERQ] = {
-        .from_float               = (ggml_from_float_t) quantize_row_turboq4_0_ref,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turboq4_0_f32,
-        .vec_dot_type             = GGML_TYPE_F32,
-        .nrows                    = 1,
-    },
+    // slot 70 (GGML_TYPE_TURBOQ4_INNERQ) retired/reserved — designated-initializer gap is intentional
     // RotorQuant KV cache types — GPU FA preferred; CPU vec_dot handles fallback
     // when K=iso3/planar3 is used and GPU FA has no K-side dispatch (routes to CPU)
     [GGML_TYPE_RQ_PLANAR3_0] = {

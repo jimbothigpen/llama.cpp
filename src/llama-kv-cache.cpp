@@ -53,7 +53,7 @@ static bool ggml_type_is_turboq_tcq(enum ggml_type t) {
 }
 
 static bool ggml_type_is_turboq_innerq(enum ggml_type t) {
-    return t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ || t == GGML_TYPE_TURBOQ4_INNERQ;
+    return t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ;
 }
 
 #define INNERQ_MAX_CHANNELS 128  // must match turbo-innerq.cuh INNERQ_MAX_CHANNELS

@@ -2190,10 +2190,6 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
         set_rows_cuda_turboq2<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_TURBOQ3_INNERQ) {
         set_rows_cuda_turboq3<idx_t>(ctx, src0, src1, dst);  // calls turbo_innerq_check_finalize internally
-    } else if (dst->type == GGML_TYPE_TURBOQ4_INNERQ) {
-        // TURBOQ4_INNERQ uses plain turboq4 encoder (InnerQ pre-scaling hurts quality at 4-bit,
-        // PPL 9.08 with InnerQ vs 7.47 without — ft2 empirical data ccfe39d675).
-        set_rows_cuda_turboq4<idx_t>(ctx, src0, src1, dst);  // calls turbo_innerq_check_finalize internally
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }

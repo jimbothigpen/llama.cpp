@@ -1682,8 +1682,6 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_turboq2_0<D, nthreads>;  // InnerQ wire format == TURBOQ2_0
     } else if constexpr (type_K == GGML_TYPE_TURBOQ3_INNERQ) {
         return vec_dot_fattn_vec_KQ_turboq3_0<D, nthreads>;  // InnerQ wire format == TURBOQ3_0
-    } else if constexpr (type_K == GGML_TYPE_TURBOQ4_INNERQ) {
-        return vec_dot_fattn_vec_KQ_turboq4_0<D, nthreads>;  // InnerQ wire format == TURBOQ4_0
     } else if constexpr (type_K == GGML_TYPE_RQ_ISO3_0) {
         return vec_dot_fattn_vec_KQ_rq_iso3_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_RQ_PLANAR3_0) {
@@ -1734,8 +1732,6 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_turboq2_0<T, ne>;  // InnerQ wire format == TURBOQ2_0
     } else if constexpr (type_V == GGML_TYPE_TURBOQ3_INNERQ) {
         return dequantize_V_turboq3_0<T, ne>;  // InnerQ wire format == TURBOQ3_0
-    } else if constexpr (type_V == GGML_TYPE_TURBOQ4_INNERQ) {
-        return dequantize_V_turboq4_0<T, ne>;  // InnerQ wire format == TURBOQ4_0
     } else if constexpr (type_V == GGML_TYPE_RQ_PLANAR3_0) {
         return dequantize_V_rq_planar3_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_RQ_PLANAR4_0) {

@@ -5334,8 +5334,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (op->type == GGML_TYPE_KV_OSCAR_INT2 && op->src[0]->ne[0] % 128 != 0) {
                     return false;
                 }
-                // turboq{2,3,4}_innerq block size is 128, head_dim must be divisible by 128
-                if ((op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ || op->type == GGML_TYPE_TURBOQ4_INNERQ) && op->src[0]->ne[0] % 128 != 0) {
+                // turboq{2,3}_innerq block size is 128, head_dim must be divisible by 128
+                if ((op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ) && op->src[0]->ne[0] % 128 != 0) {
                     return false;
                 }
                 // rq types all have block size 128, head_dim must be divisible by 128
@@ -5349,7 +5349,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                        op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL ||
                        op->type == GGML_TYPE_TURBOQ2_0 || op->type == GGML_TYPE_TURBOQ3_0 || op->type == GGML_TYPE_TURBOQ4_0 ||
                        op->type == GGML_TYPE_TURBOQ2_TCQ || op->type == GGML_TYPE_TURBOQ3_TCQ ||
-                       op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ || op->type == GGML_TYPE_TURBOQ4_INNERQ ||
+                       op->type == GGML_TYPE_TURBOQ2_INNERQ || op->type == GGML_TYPE_TURBOQ3_INNERQ ||
                        op->type == GGML_TYPE_RQ_PLANAR3_0 || op->type == GGML_TYPE_RQ_PLANAR4_0 ||
                        op->type == GGML_TYPE_RQ_ISO3_0    || op->type == GGML_TYPE_RQ_ISO4_0 ||
                        op->type == GGML_TYPE_KV_OSCAR_INT2) &&
