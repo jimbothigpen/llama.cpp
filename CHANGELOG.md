@@ -9,7 +9,7 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `30472d827` (2026-05-28/29 cascade — mainline rebase b745 + buun-3-fixes + domvox SWA KV + MTP convert fixes + ccee426 revert shipped).
+HEAD: `d8ec65064` (2026-05-28/29 cascade — mainline rebase b745 + buun-3-fixes + domvox SWA KV + MTP convert fixes + ccee426 revert shipped).
 
 In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
 
@@ -83,7 +83,7 @@ this, applying turbo KV uniformly across all Gemma 4 layers collapses PPL
 `5c59d773f` on `feature/turboquant-hip-port-clean`; 11 files ported manually
 (cherry-pick conflicted in 6 files due to fork-only additions).
 
-### Fixed — convert: emit `blk.<N>.attn_norm.weight` for bundled-MTP Qwen3.5/3.6 (2026-05-28, `c0d71d750`)
+### Fixed — convert: emit `blk.<N>.attn_norm.weight` for bundled-MTP Qwen3.5/3.6 (2026-05-28, `7d8fefc82`)
 
 `convert_hf_to_gguf.py` bundled-MTP path emitted the MTP-head block without
 `attn_norm.weight`, causing every Qwen3.5/3.6 bundled-MTP GGUF to fail loading
@@ -94,7 +94,7 @@ bundled-MTP mode passes `mtp.*` through to `modify_tensors`; in `--no-mtp` mode
 drops them (preserving the prior behaviour). Also adds missing `from pathlib import
 Path` import needed by the `mtp.fc`/`norm` remapper branch. Closes TODO 145.
 
-### Fixed — convert: zero nextn metadata + decrement `block_count` on `--no-mtp` for Qwen3.5/3.6 (2026-05-28, `36164e428`)
+### Fixed — convert: zero nextn metadata + decrement `block_count` on `--no-mtp` for Qwen3.5/3.6 (2026-05-28, `d8ec65064`)
 
 `--no-mtp` stripped MTP-head tensors (via the parent commit's `filter_tensors`
 override) but left `block_count` counting the absent MTP block and
