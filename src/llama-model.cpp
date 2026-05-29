@@ -1451,19 +1451,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // Gemma 4 assistant: prefix all tensors with "mtp." so they can be uniquely
-    // targeted by -ot rules (e.g. -ot 'mtp\..*=CUDA0') without colliding with
-    // the backbone model's identically-named tensors. Tensors already prefixed
-    // are left unchanged. In-memory only — GGUF and arch names are unchanged.
-    if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-        for (auto & kv : tensors_by_name) {
-            if (kv.first.compare(0, 4, "mtp.") != 0) {
-                std::string new_name = "mtp." + kv.first;
-                ggml_set_name(kv.second, new_name.c_str());
-                kv.first = new_name;
-            }
-        }
-    }
+    // NOTE: the Gemma 4 assistant "mtp." tensor-name prefixing is applied *after*
+    // load_all_data() below — see the rename block following the load loop. It must
+    // not run here: load_all_data() and get_mapping_range() look weights up by name
+    // via get_weight(ggml_get_name(cur)), and the loader's weights_map is keyed on
+    // the original GGUF names. Renaming before the load makes every lookup miss, so
+    // no tensor data is ever copied and the draft model's GPU buffer stays all-zero
+    // (the §-FLAG-B 0%-accept root cause).
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
@@ -1591,6 +1585,25 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
         if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
+        }
+    }
+
+    // Gemma 4 assistant: prefix all tensors with "mtp." so they can be uniquely
+    // targeted by -ot rules (e.g. -ot 'mtp\..*=CUDA0') without colliding with
+    // the backbone model's identically-named tensors. Tensors already prefixed
+    // are left unchanged. In-memory only — GGUF and arch names are unchanged.
+    //
+    // IMPORTANT: this MUST happen after load_all_data() above. The loader resolves
+    // each tensor's GGUF data by name (get_weight(ggml_get_name(cur))), so the ggml
+    // tensor names must still match the original GGUF names while weights are being
+    // read/mapped. Renaming earlier left the draft model's GPU buffer all-zero.
+    if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        for (auto & kv : tensors_by_name) {
+            if (kv.first.compare(0, 4, "mtp.") != 0) {
+                std::string new_name = "mtp." + kv.first;
+                ggml_set_name(kv.second, new_name.c_str());
+                kv.first = new_name;
+            }
         }
     }
 
