@@ -333,7 +333,7 @@ int main(int argc, char ** argv) {
             char val[64] = {};
             if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
                 float v = strtof(val, nullptr);
-                if (v > 0.0f && isfinite(v)) rope_theta = v;
+                if (v > 0.0f && std::isfinite(v)) rope_theta = v;
             }
         }
     }
