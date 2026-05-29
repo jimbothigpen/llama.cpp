@@ -379,6 +379,8 @@ Ported IQ5_K and IQ6_K from ik_llama.cpp (CPU+CUDA/HIP `8e19be061`; Vulkan dequa
 
 Imatrix required per PM-15 mandate. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
 
+**Docs:** [IK High-Bit-K weight quants](docs/features/ik-high-bit-k.md) · [IK quantization family primer](docs/features/concepts/ik-quantization-family.md)
+
 ---
 
 ### ik_llama IQ2_KL weight quant — Phase 5b-1c

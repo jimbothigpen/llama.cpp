@@ -38,6 +38,7 @@ Offline quantization — produce a smaller GGUF from an F16/BF16 source with
 | Feature | Status | Types | Notes |
 |---|---|---|---|
 | [IK Base-K weight quants](ik-base-k.md) | Stable | `IQ2_K`, `IQ3_K`, `IQ4_K` | 2–4.5 bpw; imatrix required; better PPL than mainline K-quants at matched bpw |
+| [IK High-Bit-K weight quants](ik-high-bit-k.md) | Stable | `IQ5_K`, `IQ6_K` | 5.5–6.625 bpw; imatrix required; near-lossless quality below Q8_0's footprint |
 
 More IK sub-family docs are in progress — see the
 [IK quantization family primer](concepts/ik-quantization-family.md) for the full
