@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `c892e62a3`** on
-`main` (post-mainline-rebase to `b9310`). Recent ships (2026-05-27 wave): **OScaR Phase 2** — INT2 KV residual window (R=128 F16 tail) with hybrid-memory-chain root bug fix propagating `oscar_res_window` through constructor chains; new `k_res` F16 buffer + FATTN split-read dispatch; CLI flag `--cache-oscar-residual-window N` (default 128); 9B PASS 7.2005 (R=128-FLAG margin 0.0005), 0.8B under-gate 20.8844 (-0.97% vs gate, FOLLOWUP-F full-dim WHT recommended) (`c892e62a3`); **TriAttention Phase B** — physical KV cache compaction evictor with legacy `tria_compact_kv` strategy (`6f93b4e5d`); **MTP Convergence Phase A** — CLI flag deprecation + legacy loader-gate field removal (`fd44da73f`); MTP bulk embd_read_tgt GPU→CPU sync perf (TODO 134, `750e74115`); suppress draft-simple auto-enable when dflash/mtp/draft-eagle3 explicit (TODO 120, `b1799cf36`); **DFlash converter + FWHT RE-ALIGN** — DFlashDraftModel safetensors→GGUF converter port from Anbeeld (`ba61a9d39`); post_attention_layernorm→attn_post_norm mapping fix (`a2c9c8c49`); GGML_OP_FWHT standalone op with CPU/CUDA/HIP/Vulkan backends (OScaR FOLLOWUP-A, `3d37eb55c`); Vulkan shader registration fix (`de3953843`); **OScaR INT2 KV + Kaggle T4 compat** — GGML_TYPE_KV_OSCAR_INT2 FHT-based INT2 cache quantization (Phase 1 CUDA-only, `e1f3e7083`); SM80+ arch guard for flashprefill (Kaggle T4 build compatibility, `54df8392d`). Prior 2026-05-25 wave: mainline rebase onto `b9310` (`1191e48fc`); MTP M-RoPE duplicate-impl fix removing 248-error-per-sample regression (`e8e767347`); MTP→`draft-mtp` CLI rename + GGML op enum convergence to mainline (`763c79c9b`, `b3ec1f8e2`); IQ2_KT trellis 2-bit weight quant Phase P3a + IQ_KT-family template refactor (`0dac276d9`, `e9520caac`); IQ2/3/1_KT cluster-acceleration (8D base-3 hash, k=60) (`1e8501e46`); IQ2_KL + IQ5_K/IQ6_K Vulkan shaders (Phase 5b-2 S2 / 5b-2a S2) (`3723c1f61`, `0ade7ff86`); EAGLE3 fc dtype-aware read with BF16/F16→F32 conversion (`4c38845c4`); DFlash S2 dispatch (`ef80c728c`) + DFlash S3 GPU ring buffer + server spec_type wiring (`9b7ab4e83`) + mask_token_id u32 fix (`1436d1890`); TriAttention Phase A in-graph K/V capture harness (`6cbc9e06c`) + Gemma-4 ISWA capture fix (`cbd071632`). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `30472d827`** on
+`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-28/29 cascade): **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 ai01 PASS; **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). Prior 2026-05-27 wave: **OScaR Phase 2** (`c892e62a3`); **TriAttention Phase B** (`6f93b4e5d`); **MTP Convergence Phase A** (`fd44da73f`); MTP perf + draft-simple gate + DFlash converter + FWHT op + OScaR INT2 KV + Kaggle T4 guard. Prior 2026-05-25 wave: mainline rebase `b9310` (`1191e48fc`); MTP M-RoPE fix; MTP→`draft-mtp` rename + GGML enum convergence; IQ2_KT P3a + cluster-accel; IQ2_KL + IQ5_K/IQ6_K Vulkan; EAGLE3 fc fix; DFlash S2+S3; TriAttention Phase A. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -102,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `fd44da73f`**, the following features are on `main`.
+As of **HEAD `30472d827`**, the following features are on `main`.
 
 ---
 
@@ -287,6 +287,27 @@ llama-cli --no-mmap -fa on -m model.gguf \
 - PFlash NEW-D Vulkan GPU scorer fix (IGPU fallback, `276508aaa`)
 
 Remaining pairs (X-3-s2, X-3-s3) pending.
+
+---
+
+### Per-layer SWA KV cache type (`--cache-type-k-swa` / `--cache-type-v-swa`) — domvox port
+
+For hybrid SWA (Sliding Window Attention) models such as Gemma 4, the full-attention
+and SWA layers can use different KV cache types. Without this, applying turbo KV
+uniformly collapses Gemma 4 PPL from 24.9k (F16 baseline) to >100k.
+
+```bash
+# Gemma 4 26B-A4B: turboq3 for full-attn layers, f16 for SWA layers
+llama-cli --no-mmap -fa on \
+    -m Gemma-4-26B-A4B-Q4_K_M.gguf \
+    --cache-type-k turboq3 --cache-type-v turboq3 \
+    --cache-type-k-swa f16 --cache-type-v-swa f16 \
+    -c 8192 -ngl 99
+```
+
+PPL gate (Gemma 4 26B-A4B, Qwen-format wikitext): 27.7k vs 24.9k F16 baseline
+(vs >100k all-turboq3). Ported from domvox `feature/turboquant-hip-port-clean`
+commit `5c59d773f` (`30472d827`).
 
 ---
 
@@ -708,9 +729,9 @@ fork and contain no fork-specific type names or conditionals.
 
 - Single long-lived downstream fork.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
-  mainline tag `b9310` (`e2ef8fe42`); rebased 2026-05-25 (`1191e48fc`,
-  282 fork commits replayed; PPL 6.5604 GREEN). Next sync ~2026-06-08.
-- Trunk: `main` (HEAD `e8e767347`).
+  mainline `b745` (`751ebd17a`); rebased 2026-05-28 (68 new mainline commits
+  since `b9310`; PPL 6.5453 GREEN ai01). Next sync ~2026-06-11.
+- Trunk: `main` (HEAD `30472d827`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
@@ -752,11 +773,11 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 
 - **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
 - **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
-- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`)
+- **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`); tensor-split with quantized KV unblocked + TURBO_WHT split-planner fix (shipped `6774410fa`, `340f6fe21`)
 - **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); Q1_0_G128 (shipped `87d3705e0`); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope per `[[supported-rocm-hardware-targets]]`
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch + S3 GPU ring buffer shipped)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending imatrix retrofit per PM-15)
-- **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending)
+- **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending); per-layer SWA KV cache type `--cache-type-{k,v}-swa` (shipped `30472d827`)
 - **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** — IK quants (5b-1a/1b/1c/5b-2 all shipped CPU+CUDA/HIP+Vulkan; IQ2_KT Trellis P3a shipped with cluster-accel; P3b/P3c queued), BitNet (pending), MLA/FlashMLA (declined), fused MoE (pending), bf16 KV (pending); ongoing MTP improvements
 - **[Zyphra/transformers](https://github.com/Zyphra/transformers)** (zaya1 branch) — ZAYA1-8B model architecture (Phase 0, in-tree port)
 

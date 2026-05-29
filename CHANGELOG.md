@@ -9,11 +9,99 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-### Fixed — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B (revert ccee426)
-
-Reverts mainline commit ccee426 (PR #23280 server-context: fall back to full seq clear when partial KV eviction is refused) from 2026-05-25 forward-sync. The change introduced a KV cache reuse regression on Qwen3.6-35B-A3B (and likely Qwen3.5-35B-A3B-MTP) where a full batch of cached tokens is dropped per turn on multi-turn requests. Root cause under investigation; revert restores pre-regression cache-reuse behavior. **§-RISK**: This is a naked revert per mainline issue #23589 author; it may reintroduce the hybrid-attention crash that #23280 was fixing. Build + smoke verification of representative hybrid model required before merge. Mainline: https://github.com/ggml-org/llama.cpp/issues/23589 (RC + reproducer by orangeswim 2026-05-24).
+HEAD: `30472d827` (2026-05-28/29 cascade — mainline rebase b745 + buun-3-fixes + domvox SWA KV + MTP convert fixes + ccee426 revert shipped).
 
 In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+
+### Refactored — Mainline rebase onto b745 (`751ebd17a`) (2026-05-28, cascade)
+
+Periodic mainline forward-sync. 68 new mainline commits integrated since `b9310` anchor.
+Conflict resolution:
+
+- **FWHT dual-pipeline** — mainline introduced `GGML_HINT_SRC0_IS_HADAMARD` hint path;
+  fork's standalone `GGML_OP_FWHT` kept in fork-only enum segment. `ggml_vk_fwht`
+  name collision resolved by renaming fork's function to `ggml_vk_fwht_op` (`cf70bbd33`).
+- **ZAYA / TALKIE arch slot** — mainline `c9d98295a` added `talkie-1930-13b`; resolved via
+  ZAYA slot bump.
+- **Q1_0_G128 Vulkan dequant** — resolved against mainline dequant-funcs refactor.
+- **`fwht_op.comp` dual-path + `ggml-cuda.cu`×3** — minor shader and CUDA conflict hunks.
+
+Post-rebase validation: ai01 ROCm + Vulkan PASS, PPL=6.5453. ai00 cells were
+pending at brief-time (§-FLAG).
+
+### Fixed — Vulkan: rename `ggml_vk_fwht_op` to avoid redefinition collision (2026-05-28, `cf70bbd33`)
+
+During the b745 rebase, mainline's hint-path `ggml_vk_fwht` (uses
+`pipeline_fwht_f32[]`) and fork's `GGML_OP_FWHT` dispatch `ggml_vk_fwht`
+(uses `pipeline_fwht`/`fwht_op`) ended up with the same symbol name.
+Renamed fork's standalone-OP function to `ggml_vk_fwht_op`; updated its
+call site at `GGML_OP_FWHT` case dispatch.
+
+### Refactored — FWHT fork-only enum position alignment (2026-05-28, `3caf1caa0`)
+
+`GGML_OP_FWHT` was inserted between `GGML_OP_FLASH_ATTN_SPARSE` and
+`GGML_OP_TURBO_WHT`, breaking the fork-only-ops consistency pattern established
+by `b3ec1f8e2`. Reordered to: `GLU → FLASH_ATTN_SPARSE → TURBO_WHT → FWHT →
+COUNT`. Minimizes future mainline rebase conflict surface in `ggml/include/ggml.h`.
+
+### Fixed — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B (revert ccee426) (2026-05-28, `f92e515f2`)
+
+Reverts mainline commit ccee426 (PR #23280) in `tools/server/server-context.cpp`
+picked up via 2026-05-25 forward-sync. The change dropped a full batch of cached
+tokens per turn on multi-turn Qwen3.6-35B-A3B (and likely Qwen3.5-35B-A3B-MTP)
+requests, collapsing cache reuse. Revert restores pre-regression cache-reuse
+behavior. Loader-smoke TODO 147 PASS (confirmed post-revert build + smoke on
+Qwen3.5 MTP models). **§-RISK**: naked revert may reintroduce the hybrid-attention
+crash that #23280 was fixing; monitor mainline #23589 for a cleaner fix.
+Mainline: https://github.com/ggml-org/llama.cpp/issues/23589.
+
+### Ported — buun: allow tensor-split with quantized KV cache (2026-05-28, `6774410fa`)
+
+Removes the defensive block that prevented tensor-split (multi-GPU) with
+quantized KV cache types. The meta backend already handles quantized KV
+correctly — axis-0 split uses head-aligned granularity, view/permute
+propagation maps to axis-2 for `flash_attn_ext`, and turbo `set_rows`
+kernels handle quantized writes. Log the configuration instead of blocking.
+Port of buun `spiritbuun/buun-llama-cpp` commit `0530f5111` (#59).
+
+### Ported — buun: add `TURBO_WHT` to split planner (2026-05-28, `340f6fe21`)
+
+The meta backend tensor-split planner did not know how to propagate split
+state through `GGML_OP_TURBO_WHT`, causing an abort on multi-GPU setups with
+turbo KV cache quantization. `TURBO_WHT` is an elementwise transform (128-element
+WHT groups along axis 0); `handle_generic` with `scalar_only=false` is correct,
+matching `GLU` and other elementwise ops.
+Port of buun `spiritbuun/buun-llama-cpp` commit `9b1ffc6dd` (#59).
+
+### Ported — domvox: per-layer SWA KV cache type (`--cache-type-k-swa` / `--cache-type-v-swa`) (2026-05-28, `30472d827`)
+
+Adds independent KV cache type selection for the SWA (Sliding Window Attention)
+layers of hybrid models (Gemma 4, and future SWA-hybrid architectures). Without
+this, applying turbo KV uniformly across all Gemma 4 layers collapses PPL
+(>100k). With `--cache-type-k turboq3 --cache-type-k-swa f16`, Gemma 4 PPL =
+27.7k vs 24.9k F16 baseline (vs >100k all-turboq3). Port of domvox commit
+`5c59d773f` on `feature/turboquant-hip-port-clean`; 11 files ported manually
+(cherry-pick conflicted in 6 files due to fork-only additions).
+
+### Fixed — convert: emit `blk.<N>.attn_norm.weight` for bundled-MTP Qwen3.5/3.6 (2026-05-28, `c0d71d750`)
+
+`convert_hf_to_gguf.py` bundled-MTP path emitted the MTP-head block without
+`attn_norm.weight`, causing every Qwen3.5/3.6 bundled-MTP GGUF to fail loading
+with `error loading model: missing tensor 'blk.32.attn_norm.weight'`. Root cause:
+`Qwen3NextModel.filter_tensors` unconditionally dropped all `mtp.*` tensors before
+`modify_tensors` was reached. Fix: `_Qwen35MtpMixin.filter_tensors` override — in
+bundled-MTP mode passes `mtp.*` through to `modify_tensors`; in `--no-mtp` mode
+drops them (preserving the prior behaviour). Also adds missing `from pathlib import
+Path` import needed by the `mtp.fc`/`norm` remapper branch. Closes TODO 145.
+
+### Fixed — convert: zero nextn metadata + decrement `block_count` on `--no-mtp` for Qwen3.5/3.6 (2026-05-28, `36164e428`)
+
+`--no-mtp` stripped MTP-head tensors (via the parent commit's `filter_tensors`
+override) but left `block_count` counting the absent MTP block and
+`nextn_predict_layers >= 1`, causing trunk-only GGUFs to fail loading. When
+`no_mtp`, set `block_count` = trunk-only count and `nextn_predict_layers = 0`.
+Bundled-MTP (default) path unchanged. Loader-smoke TODO 147 PASS (confirmed
+post-merge). Closes TODO 146.
 
 ### Added — OScaR Phase 2: INT2 KV residual window with hybrid-memory-chain root bug fix (2026-05-27, `c892e62a3`)
 
