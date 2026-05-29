@@ -9,9 +9,16 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `d8ec65064` (2026-05-28/29 cascade — mainline rebase b745 + buun-3-fixes + domvox SWA KV + MTP convert fixes + ccee426 revert shipped).
+HEAD: `623835cc9` (2026-05-29 — IQ3_KT trellis 3-bit landed).
 
-In-flight: Trellis P3b (IQ3_KT) and P3c (IQ1_KT) ports; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+
+### Added — IQ3_KT: 3-bit trellis-coded quantization (2026-05-29, `623835cc9`)
+
+Added IQ3_KT (3-bit trellis-coded quant); PPL +23.5% vs IQ3_K is inherent to the 3-bit
+single-codebook design (see late-stage dual-codebook follow-up); cluster-accel fix k=60.
+CPU, ROCm (gfx1150), and Vulkan backends validated. Imatrix required for quantize.
+Based on ADR-018 trellis P3b design.
 
 ### Refactored — Mainline rebase onto b745 (`751ebd17a`) (2026-05-28, cascade)
 
