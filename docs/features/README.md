@@ -10,6 +10,7 @@ Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache
 |---|---|---|---|
 | [TurboQuant KV base](turboquant-kv-base.md) | Stable | `turboq2`, `turboq3`, `turboq4` | ~7.5× / ~5.1× / ~3.8× |
 | [TCQ KV cache](tcq-kv.md) | Stable | `turboq2_tcq`, `turboq3_tcq` | ~7.1× / ~4.9× |
+| [InnerQ KV cache](innerq-kv.md) | Experimental (CUDA/HIP only) | `turboq2_innerq`, `turboq3_innerq` | ~7.5× / ~5.1× (same memory as base; quality improvement) |
 
 ## Concept Primers
 

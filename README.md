@@ -185,32 +185,34 @@ pre-dequantizing V to F16 before FA dispatch, making Vulkan TCQ asymmetric
 
 ---
 
-### InnerQ KV types (`TURBOQ{2,3,4}_INNERQ`) — Phase 3d
+### InnerQ KV types (`TURBOQ{2,3}_INNERQ`) — Phase 3d
 
-Calibrated KV quantization types. Unlike TurboQuant_0 and TCQ (which run on
-any model), InnerQ uses per-model calibration data collected by a CUDA
-calibration engine (`d_innerq_*` kernels from TheTom). Calibration is
-one-time and stored alongside the GGUF.
+> **Full feature doc:** [docs/features/innerq-kv.md](docs/features/innerq-kv.md)
+
+Online-calibrated KV quantization types (CUDA/HIP only). InnerQ reuses the same
+block structs as `turboq2` / `turboq3` (identical memory footprint) and adds a
+per-session per-channel equalization pass that improves quality when K channels
+have unequal variance. No calibrated GGUF file is needed — calibration runs
+automatically during the first N tokens of inference when `TURBO_INNERQ=N` is set.
 
 | Type | Bits | Block | Notes |
 |---|---|---|---|
-| `turboq2_innerq` (slot 68) | 2.125 | 128 | Calibrated 2-bit |
-| `turboq3_innerq` (slot 69) | 3.125 | 128 | Calibrated 3-bit |
+| `turboq2_innerq` (slot 68) | 2.125 | 128 | Per-channel equalization + 2-bit PolarQuant |
+| `turboq3_innerq` (slot 69) | 3.125 | 128 | Per-channel equalization + 3-bit PolarQuant |
 
-> **Note:** 4-bit InnerQ is intentionally not offered — per-channel equalization regresses quality at 4-bit; use `turboq4_0` instead.
+> **No 4-bit InnerQ.** Per-channel equalization regresses quality at 4-bit (observed PPL
+> regression vs plain `turboq4`); slot 70 is retired. Use `turboq4` for 4-bit KV cache.
 
 Example:
 ```bash
-llama-cli --no-mmap -fa on \
-    -m Qwen3.5-9B-Q4_K_M-calibrated.gguf \
+TURBO_INNERQ=256 llama-cli --no-mmap -fa on \
+    -m Qwen3.5-9B-Q4_K_M.gguf \
     --cache-type-k turboq3_innerq --cache-type-v turboq3_innerq \
     -c 4096 -ngl 99
 ```
 
-**Backend support:** CUDA/HIP type traits, calibration engine, and FA-vec
-dispatch are on `main`. RDC enabled broadly in v368 (commit 5e314b5f5) for
-ggml-hip and ggml-cuda. InnerQ types require model-specific calibration data
-alongside the GGUF. Vulkan support is not yet implemented (gap documented).
+**Backend support:** CUDA/HIP only. No Vulkan encode (InnerQ types on Vulkan fall
+back to plain PolarQuant without equalization). Flash attention (`-fa on`) required.
 
 ---
 
