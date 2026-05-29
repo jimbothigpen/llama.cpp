@@ -1890,7 +1890,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all, cparams.mtp_op_type)) {
+    // MTP draft contexts (e.g. gemma4-assistant) own an empty KV that tracks positions
+    // but never stores actual K/V — skip the consecutive-position check for them.
+    const llama_memory_i * balloc_check_mem =
+        (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) ? nullptr : memory.get();
+
+    if (!balloc->init(batch_inp, vocab, balloc_check_mem, n_embd, n_seq_max, output_all, cparams.mtp_op_type)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
