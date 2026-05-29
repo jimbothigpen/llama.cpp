@@ -870,7 +870,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_wht4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_wht4_0_ref,
     },
-    // Phase 5b-1a: ik_llama base IK weight quant family (source: frankenturbo2 feature/turboquant-kv-cache)
+    // Phase 5b-1a: ik_llama base IK weight quant family (source: ik_llama)
     [GGML_TYPE_IQ4_K] = {
         .type_name                = "iq4_k",
         .blck_size                = QK_K,

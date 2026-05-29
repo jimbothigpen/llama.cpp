@@ -1,6 +1,6 @@
-// IQK weight quantization types ported from ik_llama.cpp via frankenturbo2
-// Source: /usr/src/llama-forks/frankenturbo2 @ feature/turboquant-kv-cache
-// Type IDs renumbered: ft2 60/59/58 → ygg canonical 137(IQ2_K)/138(IQ3_K)/139(IQ4_K)
+// IQK weight quantization types ported from ik_llama.cpp
+// Source: ik_llama
+// Type IDs renumbered to ygg canonical: 137(IQ2_K)/138(IQ3_K)/139(IQ4_K)
 // Reference scalar implementations only — no SIMD optimization.
 
 #include "ggml-impl.h"

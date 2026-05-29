@@ -153,7 +153,7 @@ A weekly ik_llama sweep (every Monday) catches new PRs.
   Remaining subsystems (IK quants, BitNet, bf16 KV, R-suffix variants,
   CPU MLA, etc.) still pending-recon but not blocking Phase 1 entry.
 - **v3** (2026-05-22, ik-quant-lift-recon) — Full IK quant subsystem recon
-  from frankenturbo2 feature/turboquant-kv-cache. All 7 target quant types
+  from ik_llama. All 7 target quant types
   classified recon-additive (LIFT-WITH-GLUE). Critical blocker identified:
   `row_meta_size` field absent from ygg's `ggml_type_traits` — must land as
   P0 prereq commit before row-meta types (IQ3_KS, IQ4_KS, IQ4_KSS, IQ4_KT).

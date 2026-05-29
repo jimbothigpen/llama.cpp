@@ -452,9 +452,9 @@ extern "C" {
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)
         // IDs match ik_llama's enum order (ascending) to preserve existing ik_llama GGUF compat.
-        GGML_TYPE_IQ2_K   = 137, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: frankenturbo2 ID 60
-        GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: frankenturbo2 ID 59
-        GGML_TYPE_IQ4_K   = 139, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: frankenturbo2 ID 58
+        GGML_TYPE_IQ2_K   = 137, // ik_llama IQK 2-bit imatrix-aware weight quant (2.375 bpw) — source: ik_llama
+        GGML_TYPE_IQ3_K   = 138, // ik_llama IQK 3-bit imatrix-aware weight quant (3.4375 bpw) — source: ik_llama
+        GGML_TYPE_IQ4_K   = 139, // ik_llama IQK 4-bit imatrix-aware weight quant (4.50 bpw) — source: ik_llama
         // Phase 5b-2: no-row-meta 5/6-bit IK family (row_meta_size=0)
         GGML_TYPE_IQ5_K   = 140, // ik_llama IQK 5-bit imatrix-aware weight quant (5.50 bpw) — source: ikllama/main
         GGML_TYPE_IQ6_K   = 141, // ik_llama IQK 6-bit imatrix-aware weight quant (6.625 bpw) — source: ikllama/ik/iq6_k

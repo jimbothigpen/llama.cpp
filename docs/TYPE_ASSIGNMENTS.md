@@ -72,7 +72,7 @@ Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2
 Symbol prefix: `turboq_` (kernels), `TURBOQ_` (constants). The `Q` suffix
 disambiguates from the `TURBO*_0` collisions in contributing forks.
 
-### 66–71: TCQ + InnerQ KV family (source: buun `master` / frankenturbo2)
+### 66–71: TCQ + InnerQ KV family (source: buun `master` (TCQ) / TheTom (InnerQ))
 
 | Slot | Type name | Source name (renamed) | Description | Block size | Vulkan |
 |---|---|---|---|---|---|

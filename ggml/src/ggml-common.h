@@ -462,7 +462,7 @@ typedef struct {
 } block_wht4_0;                         // 20 bytes total
 static_assert(sizeof(block_wht4_0) == 20, "wrong wht4_0 block size");
 
-// IQ4_K: ik_llama.cpp 4-bit imatrix quantization (4.50 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// IQ4_K: ik_llama.cpp 4-bit imatrix quantization (4.50 bpw) — source: ik_llama
 // 256-element superblock with per-16-element scales (6 bits each: 4 low + 2 high bits).
 // extra: 16-bit field, 1 bit per 16-element half-sub-block selects between iq4k_values and shifted iq4k_values.
 typedef struct {
@@ -501,7 +501,7 @@ typedef struct {
 } block_iq6_k;
 static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/4 + QK_K/16, "wrong iq6_k block size/padding");
 
-// IQ3_K: ik_llama.cpp 3-bit imatrix quantization (3.4375 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// IQ3_K: ik_llama.cpp 3-bit imatrix quantization (3.4375 bpw) — source: ik_llama
 // 256-element block, 8 sub-blocks of 32, with per-16-element scales.
 typedef struct {
     ggml_half d;
@@ -513,7 +513,7 @@ typedef struct {
 } block_iq3_k;
 static_assert(sizeof(block_iq3_k) == sizeof(ggml_half) + 2*sizeof(uint16_t) + QK_K/32 + QK_K/4 + QK_K/8, "wrong iq3_k block size/padding");
 
-// IQ2_K: ik_llama.cpp 2-bit imatrix quantization (2.375 bpw) — source: frankenturbo2 feature/turboquant-kv-cache
+// IQ2_K: ik_llama.cpp 2-bit imatrix quantization (2.375 bpw) — source: ik_llama
 // 256-element block, 16 sub-blocks of 16. Each pair of sub-blocks (32 elements) shares
 // a packed scale byte; the 'extra' bitmap chooses standard or shifted iq2nl_values per
 // 16-element sub-block.

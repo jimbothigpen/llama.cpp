@@ -71,14 +71,14 @@ Status updated per layer landing. Initial state derived from
 
 | Feature | Layer | ROCm status | Vulkan status | Vulkan port priority |
 |---|---|---|---|---|
-| Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3.5 (ai01); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
+| Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3 (gfx1103); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
 | TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
 | WHT weight quants (WHT3_0) | 1 | **RELEASED** | **deferred** — no TQ3_1S shaders in upstream; tracked as original port | P2 — original ~50-100 LOC; lands alongside RotorQuant Phase 5 |
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | Boundary V / `TURBO_LAYER_ADAPTIVE` | 1 | **RELEASED** | **RELEASED** | n/a (default-off; backend-agnostic plumbing) |
 | MTP spec-decode spine + Migration 0-3 | 2 | **RELEASED** (speculative driver + loader + graph converged to b9246; V-J gap closed `705ffccb8`) | no novel GPU kernels — Vulkan parity via inherited mainline paths | n/a (CPU/scheduler only; no backend-specific kernels) |
-| NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | **RELEASED** Vulkan (smoke + 5ch PPL PASS on ai01 RADV gfx1103, 2026-05-24; llama-cli load+gen + llama-perplexity validated) | n/a (released; backend-agnostic inference path, no new kernels) |
+| NLD (Nemotron-Labs Diffusion) | model port (not phased) | **RELEASED** ROCm — CLI `49f88e18a`; server self-spec `1cb8c4218` | **RELEASED** Vulkan (smoke + 5ch PPL PASS on gfx1103 RADV, 2026-05-24; llama-cli load+gen + llama-perplexity validated) | n/a (released; backend-agnostic inference path, no new kernels) |
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 9 (revived) | **Phase A+B SHIPPED** — in-graph K/V capture harness `6cbc9e06c` + HIP guard + Gemma-4 ISWA fix `cbd071632` + legacy compaction evictor `6f93b4e5d`; GQA CPU smoke GREEN 3/3; Phase C GPU GQA kernel pending | (Phase A+B are CPU-side; GPU kernel work in Phase C) | P1 — scoring kernel + SWA-layer capture extension needed |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
@@ -146,7 +146,7 @@ gfx1102/1103 ROCm as **out of scope for production inference / calibration**,
 breakage early (e.g., new `__shfl_xor_sync` call sites, missing
 `cudaStreamCapture*` shims, undefined-symbol link errors when a new
 fattn-vec template instance is added). Cross-host PPL parity is validated
-against ai00 gfx1150 on models that fit gfx1103's GEMM coverage
+against gfx1150 on models that fit gfx1103's GEMM coverage
 (empirically: TurboQuant KV types + WHT weight quants pass; mainline
 Q4_K_M passes; production-class quantize/calibrate workloads still hit
 Tensile gaps).
@@ -158,7 +158,7 @@ gfx1102 binary on gfx1103 hardware via RDNA3-family ISA compatibility:
 ```bash
 cmake -B build-rocm-gfx1102 -S . -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/opt/llama-yggdrasil-rocm-ai01 \
+    -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
     -DGGML_HIP=ON \
     -DAMDGPU_TARGETS="gfx1102" \
     -DGGML_AVX512=ON -DGGML_AVX512_VBMI=ON \
@@ -279,5 +279,5 @@ features; sweep regularly.
 - **v4** (2026-05-24) — Phase 5b-2 (IQ5_K/IQ6_K) and Phase 5b-1c (IQ2_KL)
   released rows updated. EAGLE3 + PHANTOM-X marked RELEASED (backend-agnostic).
   Q1_0_G128 marked RELEASED (ROCm; Vulkan pending). DFlash S1 model loader noted.
-  NLD Vulkan RELEASED confirmed (ai01 gfx1103 RADV, `7da3a8378`). Vulkan base-K
+  NLD Vulkan RELEASED confirmed (gfx1103 RADV, `7da3a8378`). Vulkan base-K
   MUL_MAT_ID fix (`c4da029f3`) recorded.

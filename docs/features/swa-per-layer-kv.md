@@ -44,7 +44,7 @@ llama-server \
 
 The split between a global full-attention sub-cache (`kv_base`) and a sliding-window
 sub-cache (`kv_swa`) — implemented in `llama_kv_cache_iswa` — is **mainline llama.cpp**.
-It was introduced upstream and first appeared in this fork at the mainline merge `fc2b0053f`.
+It was introduced upstream and first appeared in this fork at the corresponding mainline merge.
 The SWA sub-cache is window-sized and padded to 256 cells for performance (upstream ref:
 [ggml-org/llama.cpp#17037](https://github.com/ggml-org/llama.cpp/issues/17037)).
 
@@ -53,7 +53,7 @@ The SWA sub-cache is window-sized and padded to 256 cells for performance (upstr
 The ability to assign a *different* KV type to each sub-cache — the
 `--cache-type-k-swa` / `--cache-type-v-swa` CLI flags and the `type_k_swa` / `type_v_swa`
 fields in `llama_context_params` (`include/llama.h:394-395`) — is a contribution of
-**domvox**, ported to this fork in commit `30472d827`.
+**domvox**, ported to this fork.
 
 ### Differences from upstream
 
@@ -145,8 +145,7 @@ savings from the SWA cache being smaller are lost.
 
 - **Catastrophe-avoidance on hybrid SWA models.** Uniform aggressive KV quant on Gemma 4
   collapses perplexity to >100 000 (vs ~25 F16 baseline). Keeping at least one layer class
-  at a higher precision dramatically reduces the damage. Reference stress-test data point
-  (commit `30472d827`):
+  at a higher precision dramatically reduces the damage. Reference stress-test data point:
   — uniform `turboq3` → PPL **>100 000**;
   — `turboq3` global + `f16` SWA → PPL **~28 000**;
   — `f16` baseline → PPL **~25 000**.

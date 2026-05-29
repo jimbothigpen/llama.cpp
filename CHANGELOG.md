@@ -26,7 +26,7 @@ Conflict resolution:
 - **Q1_0_G128 Vulkan dequant** — resolved against mainline dequant-funcs refactor.
 - **`fwht_op.comp` dual-path + `ggml-cuda.cu`×3** — minor shader and CUDA conflict hunks.
 
-Post-rebase validation: ai01 ROCm + Vulkan PASS, PPL=6.5453. ai00 cells were
+Post-rebase validation: gfx1103 ROCm + Vulkan PASS, PPL=6.5453. gfx1150 cells were
 pending at brief-time (§-FLAG).
 
 ### Fixed — Vulkan: rename `ggml_vk_fwht_op` to avoid redefinition collision (2026-05-28, `cf70bbd33`)
@@ -114,7 +114,7 @@ top-scored, and trailing window tokens; evicts the rest via `kv->triattention_co
 Adds `llama_kv_cache::triattention_compact()` (~75 LOC) that physically relocates KV tensor rows.
 Gate results (Qwen3.5-0.8B-Q4_K_M, -c 4096 -ub 512 -b 512, 20ch wiki.test.raw): PPL=14.7299 PASS (limit 15.4664).
 Evictor demo: n_kv=300 keep=256 evict=44 budget=224 window=32; no-fire quirk in prefill mode (architectural, correctness verified).
-Build cells: ai00 ROCm/Vulkan + ai01 CPU/Vulkan GREEN; ai01 ROCm §-FLAG (HIP 7.2 LTO crash, pre-existing).
+Build cells: gfx1150 ROCm/Vulkan + gfx1103 CPU/Vulkan GREEN; gfx1103 ROCm §-FLAG (HIP 7.2 LTO crash, pre-existing).
 Phase C (GPU GQA kernel + SWA aggregation) unblocked but not queued.
 
 ### Removed — MTP convergence Phase A: deprecate --mtp CLI flag, remove legacy loader-gate fields (2026-05-26, `fd44da73f`)
@@ -188,7 +188,7 @@ instances to be created; `process()` then ran twice per batch, advancing
 second call. Diagnosed initially as a checkpoint-restore bug; per-iteration
 tracing of `delta_post = -1` on all 124 iterations ruled that out. Fix is 3 LOC.
 
-Gates (Qwen3.5-35B-A3B-MTP-IQ4_XS on ai00 ROCm):
+Gates (Qwen3.5-35B-A3B-MTP-IQ4_XS on gfx1150 ROCm):
 mrope_errors **248 → 0**; accept rate **70.769%** (≥70 gate); PPL **6.5604**
 bit-identical to anchor; MTP-ON 17.761 t/s = **0.737× MTP-OFF** (§-FLAG —
 still below 0.78–0.85× projection; clean re-measurement on a quiet host queued
@@ -323,8 +323,8 @@ Periodic mainline forward-sync. 282 fork commits replayed onto `b9310`.
 fixups: `85fdde861` (restore 3-param `accept()` interface that the b9246
 rebase fixup reverted), `e109b17d8` (repair EAGLE3 struct with missing
 batch field + duplicate ctor/fns from rebase conflict). PPL smoke gate
-6.5604 vs anchor 6.71 — GREEN. ROCm + Vulkan builds EXIT:0 on ai00 gfx1150.
-ai01 builds not executed in this session (§-FLAG).
+6.5604 vs anchor 6.71 — GREEN. ROCm + Vulkan builds EXIT:0 on gfx1150.
+gfx1103 builds not executed in this session (§-FLAG).
 
 ### Added — DFlash S1 model loader (2026-05-24, `b8bf27eda`)
 
@@ -449,7 +449,7 @@ PPL gate post-Phase-3: 5.5302 ± 0.064 vs Phase-1 anchor 5.5302 — numerics-cle
 
 ### Added — Phase 5b-1b row-meta IK weight quants (2026-05-22, `026671689`–`5fe804bcd`)
 
-Port of IQ4_KS / IQ4_KSS / IQ3_KS / IQ4_KT from frankenturbo2. Requires P0 prereq
+Port of IQ4_KS / IQ4_KSS / IQ3_KS / IQ4_KT from ik_llama. Requires P0 prereq
 commit `d91059253` (add `row_meta_size` to `ggml_type_traits` + extend `ggml_row_size()`).
 
 Ship sequence:
@@ -462,11 +462,11 @@ PPL gate (Vulkan, Qwen3.5-9B, 20 chunks): IQ4_KS 6.4131 / IQ3_KS 6.7325 / IQ4_KS
 
 ### Added — Phase 5b-1a base IK weight quants (2026-05-20 to 2026-05-22, `aed6d2965`)
 
-Port of IQ2_K / IQ3_K / IQ4_K from frankenturbo2 (Phase 5b-1a). CPU traits +
+Port of IQ2_K / IQ3_K / IQ4_K from ik_llama (Phase 5b-1a). CPU traits +
 CUDA/HIP kernels (convert.cu, mmvq-iqk.cu) + Vulkan dequant/matvec shaders (6
 `.comp` shaders). No row_meta; standard `ggml_type_size`-only layout.
 Renumbered to ygg canonical IDs: IQ4_K=139, IQ3_K=138, IQ2_K=137
-(ik_llama compatibility zone). PPL parity Δ < 0.0045 vs frankenturbo2 reference.
+(ik_llama compatibility zone). PPL parity Δ < 0.0045 vs ik_llama reference.
 
 ### Added — PFlash base port Phase 3: HIP GPU scorer (2026-05-19, v355, `abe0bb81a`)
 
@@ -475,7 +475,7 @@ HIP-ify scorer compute graph. Replaces CPU backend with GPU backend via
 and `pflash-graph.cpp` (compute graph). CPU fallback retained for Vulkan-only
 builds. Compute context memory bumped 4 MB → 16 MB for GPU tensor overhead.
 Enables 24× scorer speedup versus Phase 2A CPU baseline (9.89s → ~0.41s per
-prefill window on ai01 ROCm gfx1102+HSA_OVERRIDE). Phase 2A F32 tok_embd
+prefill window on gfx1102 ROCm+HSA_OVERRIDE). Phase 2A F32 tok_embd
 dequant (`dd91b3fe7`) is the prerequisite that enables clean GPU dispatch.
 4-cell smoke PASS; FF-merged to main as v355. Follow-ups: Phase 4b (bulk
 upload) and Phase 4c (scorer caching + Vulkan GPU scorer fix).
@@ -528,7 +528,7 @@ implied it did. No code changes.
 
 ### Fixed — README gfx1150 host APU name: Strix Halo → Strix Point (2026-05-19, `5c257b475`)
 
-Corrected the codename for the gfx1150 host (ai00). The APU is Strix Point
+Corrected the codename for the gfx1150 host. The APU is Strix Point
 (Ryzen AI 9 HX 370, 12C/24T Zen 5 + Zen 5c), not Strix Halo (which is a
 different product line). No code changes.
 
@@ -539,9 +539,9 @@ Documents the sibling fork lineage (buun, frankenturbo2, carlosfundora, TheTom,
 ik_llama) and original llama.cpp authors whose work this fork builds upon.
 No code changes.
 
-### Fixed — Multi-backend /opt RPATH; ai01 Vulkan binary was loading ROCm libggml (2026-05-18, v327)
+### Fixed — Multi-backend /opt RPATH; gfx1103 Vulkan binary was loading ROCm libggml (2026-05-18, v327)
 
-Root cause of the v326 ai01 Vulkan SIGSEGV was a broken `RUNPATH` in installed
+Root cause of the v326 gfx1103 Vulkan SIGSEGV was a broken `RUNPATH` in installed
 binaries (`/../lib`, resolving to `/lib`). Without a valid `$ORIGIN`-relative
 RPATH, the dynamic linker fell back to ldconfig and resolved the ROCm
 `libggml.so.0` (listed first in the ldconfig configuration) instead of the Vulkan
@@ -620,7 +620,7 @@ the six tracked sibling forks. Reference impl was the unmerged
     `ggml_conv_1d_grouped` with `n_seqs > 1` must use the lambda or discuss
     a ggml-core fix with the user first.
 
-PPL gates (ai01 Vulkan, 80 chunks, c=512, wikitext-2-raw-test):
+PPL gates (gfx1103 Vulkan, 80 chunks, c=512, wikitext-2-raw-test):
 
 | Quant | Bits | Single-seq PPL | Multi-seq PPL | Δ |
 |---|---|---|---|---|
@@ -719,7 +719,7 @@ ROCm + Vulkan, gfx1150 + gfx1102/1103.
 gfx1102/1103 ROCm support is in-scope as a *regression-smoke target* (catches
 HIP-shim breakage early; cross-host PPL parity validated against gfx1150).
 Production-inference calibration on those hosts still defers to Vulkan
-(upstream AMD Tensile/hipBLAS GEMM gaps). ai01 ROCm binaries run with
+(upstream AMD Tensile/hipBLAS GEMM gaps). gfx1102 ROCm binaries run with
 `HSA_OVERRIDE_GFX_VERSION=11.0.2` (gfx1102-built binary on gfx1103
 hardware).
 

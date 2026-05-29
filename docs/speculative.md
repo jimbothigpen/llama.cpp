@@ -330,7 +330,7 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 
 This fork ships bundled-MTP inference for Qwen3.5 / Qwen3.5-MoE models that carry
 `nextn_predict_layers` MTP-tail blocks. Accept rates below are measured with
-`llama-speculative-simple --spec-type draft-mtp` on Qwen3.5-35B-A3B-MTP-Q4_K_M (ROCm, ai00 gfx1150):
+`llama-speculative-simple --spec-type draft-mtp` on Qwen3.5-35B-A3B-MTP-Q4_K_M (ROCm, gfx1150):
 
 | Scenario | Accept rate | Notes |
 |---|---|---|
@@ -369,7 +369,7 @@ diff stats: 38 cycles, draft=2106.1ms verify=2014.8ms bonus=203.1ms overhead=241
 CLI: `llama-diffusion-cli --diffusion-self-spec --diffusion-draft-length 8`
 Server: auto-detected via `llama_model_is_diffusion()`; no `--spec-type` needed.
 
-Measured performance (Nemotron-Labs Diffusion 14B Q8_0, ai00 ROCm):
+Measured performance (Nemotron-Labs Diffusion 14B Q8_0, gfx1150 ROCm):
 
 | Mode | Throughput | Accept rate | Notes |
 |---|---|---|---|

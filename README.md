@@ -30,7 +30,7 @@ that absorbs novel work from six sibling forks into a single coherent tree.
 
 
 **Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `d8ec65064`** on
-`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-28/29 cascade): **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 ai01 PASS; **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). Prior 2026-05-27 wave: **OScaR Phase 2** (`c892e62a3`); **TriAttention Phase B** (`6f93b4e5d`); **MTP Convergence Phase A** (`fd44da73f`); MTP perf + draft-simple gate + DFlash converter + FWHT op + OScaR INT2 KV + Kaggle T4 guard. Prior 2026-05-25 wave: mainline rebase `b9310` (`1191e48fc`); MTP M-RoPE fix; MTP→`draft-mtp` rename + GGML enum convergence; IQ2_KT P3a + cluster-accel; IQ2_KL + IQ5_K/IQ6_K Vulkan; EAGLE3 fc fix; DFlash S2+S3; TriAttention Phase A. See [What's available now](#whats-available-now) and
+`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-28/29 cascade): **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). Prior 2026-05-27 wave: **OScaR Phase 2** (`c892e62a3`); **TriAttention Phase B** (`6f93b4e5d`); **MTP Convergence Phase A** (`fd44da73f`); MTP perf + draft-simple gate + DFlash converter + FWHT op + OScaR INT2 KV + Kaggle T4 guard. Prior 2026-05-25 wave: mainline rebase `b9310` (`1191e48fc`); MTP M-RoPE fix; MTP→`draft-mtp` rename + GGML enum convergence; IQ2_KT P3a + cluster-accel; IQ2_KL + IQ5_K/IQ6_K Vulkan; EAGLE3 fc fix; DFlash S2+S3; TriAttention Phase A. See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -320,20 +320,23 @@ commit `5c59d773f` (`d8ec65064`).
 
 ### ik_llama weight quants (IQ2_K, IQ3_K, IQ4_K) — Phase 5b-1a
 
-Ported IQ-family weight quantization types from ik_llama.cpp. All three types are production-ready with parity verified against frankenturbo2 (the ik_llama reference). These join the existing IQ*_KS types in providing a rich gradient of quality/compression tradeoffs for weight quantization.
+Ported IQ-family weight quantization types from ik_llama.cpp. All three types are production-ready. These join the existing IQ*_KS types in providing a rich gradient of quality/compression tradeoffs for weight quantization.
 
 | Type | Bits | Block | Backends | Notes |
 |---|---|---|---|---|
-| `IQ2_K` (slot 137) | 2.375 bpw | 256 | CPU + CUDA/HIP + Vulkan | 2-bit with 128-entry codebook |
-| `IQ3_K` (slot 138) | 3.44 bpw | 256 | CPU + CUDA/HIP + Vulkan | 3-bit with 256-entry codebook |
-| `IQ4_K` (slot 139) | 4.50 bpw | 256 | CPU + CUDA/HIP + Vulkan | 4-bit with 512-entry codebook |
+| `IQ2_K` (slot 137) | 2.375 bpw | 256 | CPU + CUDA/HIP + Vulkan | imatrix-aware; nonlinear values + per-group scales |
+| `IQ3_K` (slot 138) | 3.44 bpw | 256 | CPU + CUDA/HIP + Vulkan | imatrix-aware; nonlinear values + per-group scales |
+| `IQ4_K` (slot 139) | 4.50 bpw | 256 | CPU + CUDA/HIP + Vulkan | imatrix-aware; nonlinear values + per-group scales |
 
 Example:
 ```bash
-llama-quantize Qwen3.5-9B-F16.gguf Qwen3.5-9B-IQ3_K.gguf IQ3_K
+# Generate imatrix first (required):
+llama-imatrix -m Qwen3.5-9B-F16.gguf -f calibration-data.txt -o Qwen3.5-9B.imatrix
+# Then quantize:
+llama-quantize --imatrix Qwen3.5-9B.imatrix Qwen3.5-9B-F16.gguf Qwen3.5-9B-IQ3_K.gguf IQ3_K
 ```
 
-Calibration-free, no imatrix required. PPL parity Δ < 0.0045 vs frankenturbo2 (the ik_llama reference) across multiple quant/model pairs. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
+**imatrix required.** These are imatrix-aware quants; without `--imatrix` the quantizer hard-errors for all tensors except `token_embd` and `output`. PPL parity Δ < 0.0045 vs ik_llama across multiple quant/model pairs. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
 
 ---
 
@@ -578,7 +581,7 @@ TriAttention from domvox `feature/triattention-scoring` was originally Phase 4 w
 - **Safe null-return in `get_layer_k/v_raw`** (`2ad2564f1`) — handles hybrid Qwen3.5-0.8B models where only 6/24 layers have full-attn KV cache.
 - **Gemma-4 ISWA capture fix** (`cbd071632`) — handles `llama_kv_cache_iswa` (doesn't inherit `llama_kv_cache`) via a third `dynamic_cast` branch using `iswa->get_base()`; Gemma-4 now allocates 35-layer K/V capture buffers.
 
-**Validation (Phase B GQA CPU smoke):** 3/3 GQA models GREEN (Qwen3.5-9B, Llama-3.1-8B, Gemma-4-E2B). 4-cell build PASS (ROCm gfx1150 + gfx1102 + Vulkan ai00 + Vulkan ai01). PPL gate: baseline 15.2055 vs triattention 15.1913, Δ=0.09% — within ±10% (no-op compact is expected for Phase A).
+**Validation (Phase B GQA CPU smoke):** 3/3 GQA models GREEN (Qwen3.5-9B, Llama-3.1-8B, Gemma-4-E2B). 4-cell build PASS (ROCm gfx1150 + gfx1102 + Vulkan gfx1150 + Vulkan gfx1103). PPL gate: baseline 15.2055 vs triattention 15.1913, Δ=0.09% — within ±10% (no-op compact is expected for Phase A).
 
 **Open Phase C work:** GPU GQA kernel extension to aggregate query heads for `nh != nkv` GQA models, SWA-layer capture for Gemma-4 (`kv_swa` not currently captured), and GPU scoring path (requires `--cache-type-k q8_0`).
 
@@ -737,7 +740,7 @@ fork and contain no fork-specific type names or conditionals.
 - Single long-lived downstream fork.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   mainline `b745` (`751ebd17a`); rebased 2026-05-28 (68 new mainline commits
-  since `b9310`; PPL 6.5453 GREEN ai01). Next sync ~2026-06-11.
+  since `b9310`; PPL 6.5453 GREEN (gfx1103 RDNA3). Next sync ~2026-06-11.
 - Trunk: `main` (HEAD `d8ec65064`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,

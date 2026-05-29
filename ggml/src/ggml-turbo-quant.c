@@ -888,7 +888,7 @@ static int tq4_0_choose_index(float val) {
  * (NULL = unweighted). When set, the scale search uses weighted error and
  * the WLS refinement weights the inner products — ADR-016 imatrix integration.
  * Note: iw is applied to post-RHT positions directly (per recon/08 §720
- * frankenturbo2 pattern). This is approximate (RHT mixes positions) but
+ * TheTom pattern). This is approximate (RHT mixes positions) but
  * empirically effective. */
 static void quantize_block_wht3_0(const float * GGML_RESTRICT src_blk,
                                   block_wht3_0 * GGML_RESTRICT blk,

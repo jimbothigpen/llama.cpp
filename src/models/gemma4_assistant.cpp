@@ -532,7 +532,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         // FFN residual. build_ffn does NOT add the residual — the caller must.
         // Dropping this collapses each layer to ffn_post_norm(FFN(norm(x))),
         // discarding the post-attn residual stream (the dominant accept-rate
-        // bug in the frankenturbo2 reference: 1.2% → 78%).
+        // bug in the upstream reference implementation: 1.2% → 78%).
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "ffn_residual", il);
 
@@ -590,7 +590,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
 //   hidden:    [n_embd, n_tokens]  (the assistant's normed last hidden state)
 //   lm_head_w: [n_embd, n_vocab]   (tied output embedding)
 //
-// No fork reference exists for this head — frankenturbo2 / ik_llama only
+// No fork reference exists for this head — ik_llama only
 // did the no-centroid 26B-A4B path. Built from the HF reference + mainline
 // #22738's build_masked_embedding_logits comment. The ggml realization
 // avoids a dedicated scatter op by using the row-size-1 ggml_set_rows

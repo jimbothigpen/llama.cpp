@@ -162,7 +162,7 @@ llama-quantize --imatrix imatrix.dat --override-tensor "$OVERRIDES" \
 
 ## Variants shipped
 
-PPL gates measured on ai01 Vulkan, 80 chunks, c=512, wikitext-2-raw-test,
+PPL gates measured on gfx1103 Vulkan, 80 chunks, c=512, wikitext-2-raw-test,
 default multi-seq (`-np 4`, n_seq_max=4):
 
 | Quant | Size | Multi-seq PPL | vs F16 30.5270 |

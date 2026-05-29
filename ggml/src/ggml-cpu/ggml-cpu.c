@@ -3660,7 +3660,7 @@ static void ggml_vec_dot_wht3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
     // Dim n can exceed 4096 (e.g. Qwen3.5-9B ffn_down = 12288); heap-alloc to match
-    // frankenturbo2 + TheTom canonical impls per yggdrasil-frankenturbo2-lift-policy.
+    // ik_llama + TheTom canonical impls.
     float * tmp = (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT3_0)->to_float(vx, tmp, n);
