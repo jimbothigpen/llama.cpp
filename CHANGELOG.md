@@ -251,7 +251,7 @@ on Qwen3.5-9B). Coverage 0.91% (599/65536); matches the IQ4_KT pattern.
 - When IQ3_KT / IQ1_KT land via Phase P3b / P3c, apply the same `k_neighbours=60`
   treatment at their `iqkt_cooked_book_init` call sites.
 
-### Added — IQ2_KL Vulkan shaders (Phase 5b-2a S2) (2026-05-25, `3723c1f61`)
+### Added — IQ2_KL Vulkan shaders (Phase 5b-1c S2) (2026-05-25, `3723c1f61`)
 
 Ported IQ2_KL Vulkan dequant + matvec shaders + S1 brace/template fixes.
 IQ2_KL is now CPU + CUDA/HIP + Vulkan on `main`.

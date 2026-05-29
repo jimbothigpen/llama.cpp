@@ -124,7 +124,7 @@ will quantify the gap once benchmarks are collected.
 |---|---|---|---|
 | **Base-K** (this primer's primary family) | [IK Base-K weight quants](../ik-base-k.md) | `IQ2_K`, `IQ3_K`, `IQ4_K` | Global-scale super-block; nonlinear value tables + codebook-shift |
 | **High-bit-K** | [IK High-Bit-K weight quants](../ik-high-bit-k.md) | `IQ5_K`, `IQ6_K` | Global-scale super-block; nonlinear value tables + codebook-shift |
-| **KS / row-meta** | _(doc pending)_ | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL` | Per-row floating-point meta-scale prepended to each row; sub-block structure |
+| **KS / row-meta** | [IK Row-Meta weight quants](../ik-ks-row-meta.md) | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL` | Per-row floating-point meta-scale prepended to each row; sub-block structure |
 | **KT / trellis** | _(doc pending)_ | `IQ4_KT`, `IQ2_KT`, `IQ3_KT` | Per-row scale + trellis-coded quantization (Viterbi search over per-block groups) |
 
 `IQ2_KL` is grouped with KS because it is structurally a row-meta type (a floating-point

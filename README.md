@@ -366,6 +366,8 @@ PPL gate (Qwen3.5-9B, 20 chunks, c=4096, wikitext-2-raw-test):
 
 Slots are ik_llama compatibility zone IDs (preserved verbatim). Row-meta types store per-row scale metadata alongside the quantized block; `ggml_nbytes` must be used for buffer sizing (not `type_size × ne`).
 
+**Docs:** [IK Row-Meta weight quants](docs/features/ik-ks-row-meta.md) · [IK quantization family primer](docs/features/concepts/ik-quantization-family.md)
+
 ---
 
 ### ik_llama extended weight quants (IQ5_K, IQ6_K) — Phase 5b-2
