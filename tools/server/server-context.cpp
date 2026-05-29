@@ -10,6 +10,8 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: llama_set_mtp_source
+#include "ggml-cpp.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -815,10 +817,11 @@ private:
         }
 
         // optionally reserve VRAM for the draft / MTP context before fitting the target model
+        const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+                                        params_base.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+
         if (params_base.fit_params) {
-            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-                                            params_base.speculative.types.end(),
-                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
             const bool has_draft = params_base.speculative.has_dft();
 
             if (has_draft || spec_mtp) {
@@ -847,11 +850,29 @@ private:
                 }
                 cparams_dft.n_rs_seq = 0;
 
+                bool skip_measure = false;
+                //TODO: remove this
+                if (spec_mtp && has_draft) {
+                    struct gguf_init_params meta_params = {
+                        /* .no_alloc = */ true,
+                        /* .ctx      = */ nullptr,
+                    };
+                    gguf_context_ptr meta(gguf_init_from_file(params_dft.model.path.c_str(), meta_params));
+
+                    if (meta && gguf_find_key(meta.get(), "general.architecture") >= 0) {
+                        if (std::string(gguf_get_val_str(meta.get(), gguf_find_key(meta.get(), "general.architecture"))) == "gemma4-assistant") {
+                            skip_measure = true;
+                            SRV_WRN("[spec] skipping --fit memory measurement for Gemma 4 assistant draft model '%s'\n",
+                                    params_dft.model.path.c_str());
+                        }
+                    }
+                }
+
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
                 uint32_t hp_nct = 0;
                 uint32_t hp_nex = 0;
-                try {
+                if (!skip_measure) try {
                     auto dmd = common_get_device_memory_data(
                         params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
                         devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
@@ -925,8 +946,14 @@ private:
             params_dft.devices      = params_spec.devices;
             params_dft.model        = params_spec.mparams;
             params_dft.n_gpu_layers = params_spec.n_gpu_layers;
-            params_dft.cache_type_k = params_spec.cache_type_k;
-            params_dft.cache_type_v = params_spec.cache_type_v;
+            // TODO: find a better way to expose that the cache is shared
+            if (spec_mtp) {
+                params_dft.cache_type_k = params_base.cache_type_k;
+                params_dft.cache_type_v = params_base.cache_type_v;
+            } else {
+                params_dft.cache_type_k = params_spec.cache_type_k;
+                params_dft.cache_type_v = params_spec.cache_type_v;
+            }
 
             if (params_spec.cpuparams.n_threads > 0) {
                 params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
@@ -945,24 +972,22 @@ private:
 
             auto cparams = common_context_params_to_llama(params_dft);
 
-            // Gemma 4 external-assistant MTP: the assistant is a separately-loaded
-            // draft GGUF (foreign-KV drafter, mainline #22738). Its context must
-            // extract the post-projection hidden state so the speculative driver
-            // can read it back via llama_get_embeddings_ith; embeddings=true gates
-            // that extraction (params_dft does not inherit MTP types).
-            if (llama_model_is_gemma4_assistant(model_dft.get())) {
-                cparams.embeddings = true;
-                SRV_INF("%s", "draft model is a Gemma 4 external MTP assistant - enabling MTP extraction on its context\n");
+            if (spec_mtp) {
+                cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            if (spec_mtp) {
+                // MTP draft must know its target before the first decode
+                llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
+            }
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
-        } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
+        } else if (spec_mtp) {
             // Bundled-MTP: the MTP head lives in the target GGUF; create a second
             // context on the same model with ctx_type=MTP. No separate model load needed.
             // Mirrors the common/speculative-simple --mtp path (LLAMA_CONTEXT_TYPE_MTP on model_tgt).
@@ -990,6 +1015,10 @@ private:
                 SRV_ERR("%s", "failed to create MTP draft context\n");
                 return false;
             }
+
+            // wire the source before any decode (the seq-rm probe below
+            // triggers sched_reserve which needs src for Gemma4-style MTP)
+            llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
@@ -1097,18 +1126,6 @@ private:
                                              COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end())
                                   && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
-
-            // Gemma 4 external-assistant MTP: thread this slot's seq_id into the
-            // assistant context so its foreign-KV mask reads the backbone's KV
-            // cells written under slot.id. get_mtp_ctx returns non-null only for
-            // the external-assistant impl; n_seq==1 today so slot.id is always 0
-            // (== the legacy fallback), but thread it explicitly for correctness.
-            if (slot.is_mtp_enabled) {
-                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(spec.get(), slot.id);
-                if (mtp_ctx != nullptr) {
-                    llama_set_mtp_target_seq_id(mtp_ctx, slot.id);
-                }
-            }
 
             if (is_diffusion) {
                 slot.diff_self_spec = true;

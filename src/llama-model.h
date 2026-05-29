@@ -574,12 +574,9 @@ struct llama_model {
     struct ggml_tensor * zaya_res_scale_res   = nullptr;
     struct ggml_tensor * zaya_res_scale_res_b = nullptr;
 
-    // gemma4_assistant (MTP drafter): backbone <-> assistant projections and
-    // optional centroid-clustered output head.
-    struct ggml_tensor * assist_pre_proj         = nullptr; // [2*backbone, hidden]
-    struct ggml_tensor * assist_post_proj        = nullptr; // [hidden, backbone]
-    struct ggml_tensor * assist_embed_centroids  = nullptr; // [hidden, num_centroids]
-    struct ggml_tensor * assist_token_ordering   = nullptr; // i32 [vocab_size]
+    // NextN/MTP model-level projections
+    struct ggml_tensor * nextn_pre_proj  = nullptr;
+    struct ggml_tensor * nextn_post_proj = nullptr;
 
 
     // NVFP4 per-tensor scale2, input_scale for LM head

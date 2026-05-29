@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-sidecar.h"
 #include "llama-impl.h"
+#include "llama-memory.h"
 #include "llama-triattention.h"
 
 #include "ggml-cpp.h"
@@ -109,21 +110,7 @@ struct llama_context {
     float * get_embeddings_pre_norm_ith(int32_t i);
     float * get_embeddings_pre_norm_raw_ith(int32_t i);
 
-    // gemma4-assistant internal: set which MTP op this context performs on the next decode.
-    void set_mtp_op_type(llama_mtp_op_type op);
-    void set_draft_input_hidden_state(const float * hidden_state);
-
-    // gemma4-assistant external-MTP: attach a target (backbone) context whose
-    // hidden state and KV cache this assistant context reads from when building
-    // its draft graph. nullptr clears the attachment.
-    void            set_mtp_target_context(llama_context * target_ctx);
-    llama_context * get_mtp_target_ctx() const;
-    // the sequence id the backbone wrote its KV cells under (= server slot.id);
-    // -1 means "use the draft ubatch's own seq_id" (only correct when slot.id == 0).
-    void         set_mtp_target_seq_id(llama_seq_id seq_id);
-    llama_seq_id get_mtp_target_seq_id() const;
-
-    // E3b chain logits: returns pointer into mtp_chain_logits[chain_depth] at flat index i.
+// E3b chain logits: returns pointer into mtp_chain_logits[chain_depth] at flat index i.
     // Only valid after an MTP context decode; returns nullptr if chain_depth >= mtp_chain_depth.
     float * get_mtp_chain_logits_ith(int32_t chain_depth, int32_t i);
     int32_t get_mtp_chain_depth() const;
@@ -152,6 +139,7 @@ struct llama_context {
 
     void set_embeddings (bool value);
     void set_embeddings_pre_norm(bool value, bool masked);
+    void set_mtp_source(llama_context * src);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
@@ -363,6 +351,12 @@ private:
 
     std::unique_ptr<llama_memory_i> memory;
 
+    // external KV source used by MTP draft contexts. src_ctx is the target
+    // context whose memory we read; src_mctx_for_decode is a per-decode
+    // snapshot held for the duration of one decode/sched_reserve call.
+    llama_context *           src_ctx              = nullptr;
+    llama_memory_context_ptr  src_mctx_for_decode;
+
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
 
@@ -435,15 +429,7 @@ private:
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
-    // used by set_draft_input_hidden_state / gemma4-assistant DRAFT_GEN
-    const float * draft_input_hidden_state = nullptr;
-
-    // gemma4-assistant external-MTP: target (backbone) context borrowed for
-    // foreign-KV attention, and the seq_id its KV cells were written under.
-    llama_context * mtp_target_ctx    = nullptr;
-    llama_seq_id    mtp_target_seq_id = -1;
-
-    // E3b: chain logit CPU buffers + depth; populated after each MTP context decode
+// E3b: chain logit CPU buffers + depth; populated after each MTP context decode
     std::vector<float> mtp_chain_logits[llm_graph_result::MTP_CHAIN_MAX];
     int32_t            mtp_chain_depth = 0;
 

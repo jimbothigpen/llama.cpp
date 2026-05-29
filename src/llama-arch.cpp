@@ -463,16 +463,14 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_FFN_NORM_EXPS,                          "blk.%d.ffn_norm_exps" },
     { LLM_TENSOR_ATTN_K_B,                               "blk.%d.attn_k_b" },
     { LLM_TENSOR_ATTN_V_B,                               "blk.%d.attn_v_b" },
+    { LLM_TENSOR_NEXTN_PRE_PROJ,                         "nextn.pre_projection" },
+    { LLM_TENSOR_NEXTN_POST_PROJ,                        "nextn.post_projection" },
     { LLM_TENSOR_NEXTN_EH_PROJ,                          "blk.%d.nextn.eh_proj" },
     { LLM_TENSOR_NEXTN_EMBED_TOKENS,                     "blk.%d.nextn.embed_tokens" },
     { LLM_TENSOR_NEXTN_ENORM,                            "blk.%d.nextn.enorm" },
     { LLM_TENSOR_NEXTN_HNORM,                            "blk.%d.nextn.hnorm" },
     { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,                 "blk.%d.nextn.shared_head_head" },
     { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,                 "blk.%d.nextn.shared_head_norm" },
-    { LLM_TENSOR_ASSIST_PRE_PROJ,                        "assist_pre_proj" },
-    { LLM_TENSOR_ASSIST_POST_PROJ,                       "assist_post_proj" },
-    { LLM_TENSOR_ASSIST_EMBED_CENTROIDS,                 "assist_embed_centroids" },
-    { LLM_TENSOR_ASSIST_TOKEN_ORDERING,                  "assist_token_ordering" },
     { LLM_TENSOR_ATTN_SUB_NORM,                          "blk.%d.attn_sub_norm" },
     { LLM_TENSOR_FFN_SUB_NORM,                           "blk.%d.ffn_sub_norm" },
     { LLM_TENSOR_DEC_OUTPUT_NORM,                        "dec.output_norm" },
@@ -810,20 +808,17 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_PROJ,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_Q_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    // NextN/MTP per-block tensors live on the trailing nextn_predict_layers blocks
-    // (e.g. blk.%d.nextn.eh_proj.weight); must be LAYER_REPEATING so create_tensor
-    // accepts a layer index. The assistant.{pre,post}_projection scalars are
-    // global LAYER_OUTPUT slots reserved for Gemma 4 MTP (Task 2c).
+    {LLM_TENSOR_NEXTN_PRE_PROJ,             {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_POST_PROJ,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}},
+    // NextN/MTP tensors are stored per-block (blk.%d.nextn.*) even though only the
+    // last nextn_predict_layers blocks carry them. Classify as LAYER_REPEATING so
+    // the model loader doesn't fault on the block index.
     {LLM_TENSOR_NEXTN_EH_PROJ,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_EMBED_TOKENS,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
     {LLM_TENSOR_NEXTN_ENORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_ASSIST_PRE_PROJ,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}}, // backbone-hidden -> assistant-hidden
-    {LLM_TENSOR_ASSIST_POST_PROJ,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // assistant-hidden -> backbone-hidden
-    {LLM_TENSOR_ASSIST_EMBED_CENTROIDS,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // logits over centroid clusters
-    {LLM_TENSOR_ASSIST_TOKEN_ORDERING,      {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}}, // i32 vocab permutation
     // Nemotron 3 Super
     // latent projections feed ggml_mul_mat, the buft probe must use MUL_MAT to keep them on GPU
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},

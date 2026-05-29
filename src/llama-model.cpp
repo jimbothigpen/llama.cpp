@@ -2576,9 +2576,6 @@ bool llama_model_is_diffusion(const llama_model * model) {
     return llm_arch_is_diffusion(model->arch);
 }
 
-bool llama_model_is_gemma4_assistant(const llama_model * model) {
-    return model && model->arch == LLM_ARCH_GEMMA4_ASSISTANT;
-}
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
@@ -2590,6 +2587,10 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
 
 int32_t llama_model_n_devices(const struct llama_model * model) {
     return (int32_t)model->devices.size();
+}
+
+int32_t llama_model_n_layer_kv(const struct llama_model * model) {
+    return (int32_t) model->hparams.n_layer_kv();
 }
 
 ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {

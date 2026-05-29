@@ -669,11 +669,6 @@ extern "C" {
     // Returns true if the model is hybrid (like Jamba, Granite, etc.)
     LLAMA_API bool llama_model_is_hybrid(const struct llama_model * model);
 
-    // Returns true if the model is a Gemma 4 MTP "assistant" drafter
-    // (LLM_ARCH_GEMMA4_ASSISTANT) — loaded as a separate GGUF and run as an
-    // external speculative-decoding draft model against a Gemma 4 backbone.
-    LLAMA_API bool llama_model_is_gemma4_assistant(const struct llama_model * model);
-
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
@@ -1025,24 +1020,7 @@ extern "C" {
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
 
-    // Provide the draft input hidden state for an MTP_OP_DRAFT_GEN pass.
-    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
-
-    // gemma4-assistant external-MTP: attach the target (backbone) context that an
-    // assistant draft context reads hidden state and foreign K/V from. nullptr clears it.
-    LLAMA_API void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
-
-    // gemma4-assistant external-MTP: tell the assistant context which sequence id the
-    // backbone wrote its KV cells under (= server slot id). -1 = use the draft ubatch's own.
-    LLAMA_API void llama_set_mtp_target_seq_id(struct llama_context * ctx, llama_seq_id seq_id);
-
-    // Width of the per-step hidden-state buffer the MTP speculative driver feeds this
-    // context. For a gemma4-assistant draft model this is the backbone's hidden size
-    // (wider than the assistant's own n_embd); for any other model it is the model's
-    // own n_embd.
-    LLAMA_API int32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
-
-    // E3b: chain logits from the MTP context after each decode.
+// E3b: chain logits from the MTP context after each decode.
     // chain_depth is in [0, llama_get_mtp_chain_depth(ctx)); i is a flat index into the logit row.
     // Returns nullptr if chain_depth is out of range or no chain decode has completed.
     LLAMA_API float * llama_get_mtp_chain_logits_ith(struct llama_context * ctx, int32_t chain_depth, int32_t i);

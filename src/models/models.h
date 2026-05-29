@@ -817,18 +817,7 @@ struct llama_model_gemma4_assistant : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_graph_context {
-        const llama_model & model;
-
-        const int64_t n_embd_backbone;
-        const int64_t n_assist_centroids;
-        const int64_t n_assist_centroid_top_k;
-        const bool    use_ordered_embeddings;
-
         graph(const llama_model & model, const llm_graph_params & params);
-
-        // Centroid-clustered logits projection.
-        // Reference: transformers Gemma4AssistantMaskedEmbedder
-        ggml_tensor * build_masked_embedding_logits(ggml_tensor * hidden, ggml_tensor * lm_head_w);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

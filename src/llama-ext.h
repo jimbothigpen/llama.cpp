@@ -85,6 +85,11 @@ using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
+// number of layers that own KV (i.e. layers whose graph writes K/V).
+// 0 means the model owns no KV — e.g. a Gemma4-style MTP draft that reads
+// trunk KV via llama_set_mtp_source.
+LLAMA_API int32_t llama_model_n_layer_kv(const struct llama_model * model);
+
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
@@ -93,9 +98,14 @@ LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_c
 // MTP (multi-token prediction) draft head — staging API
 //
 
+// internal MTP op type — used by the Qwen35 bundled-MTP path (not the external assistant path).
+// HARD-PRESERVED alongside the mtp_op_type cparams field.
+LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
+
 // mirrors:
 // LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 LLAMA_API void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value, bool masked);
+LLAMA_API void llama_set_mtp_source(struct llama_context * ctx, struct llama_context * src);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
@@ -108,7 +118,3 @@ LLAMA_API float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, 
 // Get the raw pre-norm embedding row by token row index from the last decode graph.
 // Unlike llama_get_embeddings_pre_norm_ith(), this does not resolve through output rows.
 LLAMA_API float * llama_get_embeddings_pre_norm_raw_ith(struct llama_context * ctx, int32_t i);
-
-// gemma4-assistant internal: set which MTP op the context performs on the next decode.
-// Demoted from llama.h to llama-ext.h; consumed only by the static Gemma4 speculative free fns.
-LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);

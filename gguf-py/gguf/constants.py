@@ -903,6 +903,8 @@ class MODEL_TENSOR(IntEnum):
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
     # nextn/mtp
+    NEXTN_PRE_PROJ       = auto()
+    NEXTN_POST_PROJ      = auto()
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
     NEXTN_ENORM          = auto()
@@ -1489,6 +1491,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_QF_FFN_DOWN:             "a.proj_blk.{bid}.ffn_down",
     MODEL_TENSOR.A_QF_FFN_NORM:             "a.proj_blk.{bid}.ffn_norm",
     # NextN/MTP
+    MODEL_TENSOR.NEXTN_PRE_PROJ:            "nextn.pre_projection",
+    MODEL_TENSOR.NEXTN_POST_PROJ:           "nextn.post_projection",
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
     MODEL_TENSOR.NEXTN_ENORM:               "blk.{bid}.nextn.enorm",
@@ -2582,24 +2586,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
-        # 4-layer transformer; only Q is projected — K/V are read from the
-        # target backbone's last-layer cache (one entry per attention type).
+        MODEL_TENSOR.NEXTN_PRE_PROJ,
+        MODEL_TENSOR.NEXTN_POST_PROJ,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.FFN_PRE_NORM,
         MODEL_TENSOR.FFN_POST_NORM,
         MODEL_TENSOR.LAYER_OUT_SCALE,
-        # assistant-specific projections and ordered embedding head
-        MODEL_TENSOR.ASSIST_PRE_PROJ,
-        MODEL_TENSOR.ASSIST_POST_PROJ,
-        MODEL_TENSOR.ASSIST_EMBED_CENTROIDS,
-        MODEL_TENSOR.ASSIST_TOKEN_ORDERING,
     ],
     MODEL_ARCH.GEMMA_EMBEDDING: [
         MODEL_TENSOR.TOKEN_EMBD,

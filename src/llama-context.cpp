@@ -29,6 +29,70 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     }
 }
 
+static uint32_t ctx_type_to_embd_inp(const llama_hparams & hparams, llama_context_type ctx_type) {
+    switch (ctx_type) {
+        case LLAMA_CONTEXT_TYPE_DEFAULT: return hparams.n_embd_inp();
+        case LLAMA_CONTEXT_TYPE_MTP    : return hparams.n_embd_out();
+    }
+    throw std::runtime_error("Unsupported ctx type");
+}
+
+namespace {
+struct src_mctx_reset_on_exit {
+    llama_memory_context_ptr * slot;
+    ~src_mctx_reset_on_exit() { if (slot) slot->reset(); }
+};
+
+static void llama_assert_gemma4_mtp_source_placement(
+        const llama_context * ctx,
+        const llama_context * src) {
+    if (!ctx || !src) {
+        return;
+    }
+
+    const auto & model_dft = ctx->get_model();
+    const auto & model_tgt = src->get_model();
+
+    if (model_dft.arch != LLM_ARCH_GEMMA4_ASSISTANT || model_tgt.arch != LLM_ARCH_GEMMA4) {
+        return;
+    }
+
+    if (model_tgt.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+        return;
+    }
+
+    const auto & hparams_dft = model_dft.hparams;
+    const auto & hparams_tgt = model_tgt.hparams;
+
+    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer - 1;
+    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer - 2;
+
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!dev_cpu) {
+        throw std::runtime_error("Gemma 4 assistant MTP placement check failed: no CPU backend found");
+    }
+
+    const bool kv_offload = src->get_cparams().offload_kqv;
+
+    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer; ++il_dft) {
+        const int32_t il_tgt = hparams_dft.is_swa(il_dft) ? il_tgt_swa : il_tgt_full;
+
+        ggml_backend_dev_t dev_dft = model_dft.dev_layer(il_dft);
+        ggml_backend_dev_t dev_kv  = kv_offload ? model_tgt.dev_layer(il_tgt) : dev_cpu;
+
+        if (dev_dft != dev_kv) {
+            throw std::runtime_error(format(
+                    "Gemma 4 assistant MTP placement mismatch: draft layer %d is on %s, "
+                    "but shared target KV layer %d is on %s",
+                    (int) il_dft,
+                    ggml_backend_dev_name(dev_dft),
+                    (int) il_tgt,
+                    ggml_backend_dev_name(dev_kv)));
+        }
+    }
+}
+}
+
 //
 // llama_context
 //
@@ -184,7 +248,7 @@ llama_context::llama_context(
 
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model.hparams.nextn_predict_layers == 0 &&
         model.arch != LLM_ARCH_GEMMA4_ASSISTANT) {
-        LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers; falling back to DEFAULT\n", __func__);
+        LLAMA_LOG_WARN("%s: MTP requested but model has no NextN layers and is not a Gemma4 assistant; falling back to DEFAULT\n", __func__);
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_DEFAULT;
     }
 
@@ -396,7 +460,11 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
-        sched_reserve();
+        // MTP draft contexts can't reserve until the source context is wired
+        // via llama_set_mtp_source — defer to the first decode.
+        if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
+            sched_reserve();
+        }
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
@@ -476,6 +544,23 @@ void llama_context::sched_reserve() {
             throw std::runtime_error("failed to initialize memory module");
         }
     }
+
+    // When called from decode(), src_mctx_for_decode is already populated and
+    // we must not drop it on exit (process_ubatch still needs it). Snapshot
+    // only when sched_reserve runs standalone (e.g. lazy first-decode reserve
+    // when set_mtp_source flipped sched_need_reserve).
+    const bool owns_src_snapshot = src_ctx && !src_mctx_for_decode;
+    if (owns_src_snapshot) {
+        auto * src_memory = src_ctx->get_memory();
+        if (!src_memory) {
+            throw std::runtime_error("MTP source context has no memory module");
+        }
+        src_mctx_for_decode = src_memory->init_full();
+        if (!src_mctx_for_decode) {
+            throw std::runtime_error("failed to initialize MTP source memory snapshot");
+        }
+    }
+    src_mctx_reset_on_exit reserve_src_drop{owns_src_snapshot ? &src_mctx_for_decode : nullptr};
 
     // avoid reserving graphs with zero outputs - assume one output per sequence
     const int n_outputs = n_seqs;
@@ -1130,7 +1215,7 @@ float * llama_context::get_embeddings_pre_norm_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
-        const uint32_t n_embd = model.hparams.n_embd;
+        const uint32_t n_embd = model.hparams.n_embd_out();
         return embd_pre_norm.data + j*n_embd;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid pre-norm embeddings id %d, reason: %s\n", __func__, i, err.what());
@@ -1176,6 +1261,18 @@ float * llama_context::get_embeddings_pre_norm_raw_ith(int32_t i) {
     ggml_backend_tensor_get(t_h_pre_norm, embd_pre_norm_raw.data(), (size_t) i_clamped * t_h_pre_norm->nb[1], row_bytes);
 
     return embd_pre_norm_raw.data();
+}
+
+void llama_context::set_mtp_source(llama_context * src) {
+    if (src_ctx == src) {
+        return;
+    }
+    llama_assert_gemma4_mtp_source_placement(this, src);
+    src_ctx = src;
+    src_mctx_for_decode.reset();
+    // worst-case compute buffers were reserved without knowing about the source
+    // memory; force a re-reserve so the next decode sees src views
+    sched_need_reserve = true;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -1454,7 +1551,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const int64_t n_embd  = ctx_type_to_embd_inp(hparams, cparams.ctx_type);
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -1755,7 +1852,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const int64_t n_embd  = ctx_type_to_embd_inp(hparams, cparams.ctx_type);
 
     mtp_chain_depth = 0;
 
@@ -1822,6 +1919,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
     output_swaps.clear();
+
+    src_mctx_reset_on_exit decode_src_drop{&src_mctx_for_decode};
+    if (src_ctx) {
+        auto * src_memory = src_ctx->get_memory();
+        if (!src_memory) {
+            LLAMA_LOG_ERROR("%s: MTP source context has no memory module\n", __func__);
+            return -2;
+        }
+        src_mctx_for_decode = src_memory->init_full();
+        if (!src_mctx_for_decode) {
+            LLAMA_LOG_ERROR("%s: failed to snapshot MTP source memory\n", __func__);
+            return -2;
+        }
+    }
 
     sched_reserve();
 
@@ -2024,7 +2135,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_pre_norm_user);
             GGML_ASSERT(backend_h != nullptr);
 
-            const uint32_t n_embd = hparams.n_embd;
+            const uint32_t n_embd = hparams.n_embd_out();
             float * embd_pre_norm_out = embd_pre_norm.data + n_outputs_prev*n_embd;
 
             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
@@ -2120,7 +2231,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
     const auto n_embd_out = hparams.n_embd_out();
-    const auto n_embd     = hparams.n_embd;
 
     bool has_logits        = true;
     bool has_embd          = cparams.embeddings;
@@ -2138,7 +2248,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits.size        = has_logits        ? n_vocab*n_outputs_max    : 0;
     embd.size          = has_embd          ? n_embd_out*n_outputs_max : 0;
-    embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max     : 0;
+    embd_pre_norm.size = has_embd_pre_norm ? n_embd_out*n_outputs_max  : 0;
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
@@ -2401,10 +2511,10 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.sidecars    =*/ sidecars.get(),
         /*.mctx        =*/ mctx,
+        /*.src_mctx    =*/ src_mctx_for_decode.get(),
+        /*.src_model   =*/ src_ctx ? &src_ctx->get_model() : nullptr,
         /*.cross       =*/ &cross,
         /*.eagle3      =*/ const_cast<llama_eagle3 *>(&eagle3_state),
-        /*.mtp_target_ctx    =*/ mtp_target_ctx,
-        /*.mtp_target_seq_id =*/ mtp_target_seq_id,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3717,8 +3827,16 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     return ctx->get_embeddings_seq(seq_id);
 }
 
+void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
+    const_cast<llama_cparams &>(ctx->get_cparams()).mtp_op_type = mtp_op_type;
+}
+
 void llama_set_embeddings_pre_norm(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_pre_norm(value, masked);
+}
+
+void llama_set_mtp_source(llama_context * ctx, llama_context * src) {
+    ctx->set_mtp_source(src);
 }
 
 float * llama_get_embeddings_pre_norm(llama_context * ctx) {
@@ -3744,57 +3862,6 @@ int32_t llama_model_n_nextn_layer(const llama_model * model) {
     return (int32_t) model->hparams.nextn_predict_layers;
 }
 
-void llama_context::set_mtp_op_type(llama_mtp_op_type op) {
-    cparams.mtp_op_type = op;
-}
-
-void llama_context::set_draft_input_hidden_state(const float * hidden_state) {
-    draft_input_hidden_state = hidden_state;
-}
-
-void llama_context::set_mtp_target_context(llama_context * target_ctx) {
-    mtp_target_ctx = target_ctx;
-}
-
-llama_context * llama_context::get_mtp_target_ctx() const {
-    return mtp_target_ctx;
-}
-
-void llama_context::set_mtp_target_seq_id(llama_seq_id seq_id) {
-    mtp_target_seq_id = seq_id;
-}
-
-llama_seq_id llama_context::get_mtp_target_seq_id() const {
-    return mtp_target_seq_id;
-}
-
-void llama_set_mtp_op_type(llama_context * ctx, enum llama_mtp_op_type mtp_op_type) {
-    ctx->set_mtp_op_type(mtp_op_type);
-}
-
-void llama_set_draft_input_hidden_state(llama_context * ctx, const float * hidden_state) {
-    ctx->set_draft_input_hidden_state(hidden_state);
-}
-
-void llama_set_mtp_target_context(llama_context * ctx, llama_context * target_ctx) {
-    ctx->set_mtp_target_context(target_ctx);
-}
-
-void llama_set_mtp_target_seq_id(llama_context * ctx, llama_seq_id seq_id) {
-    ctx->set_mtp_target_seq_id(seq_id);
-}
-
-int32_t llama_mtp_state_n_embd(const llama_context * ctx) {
-    const llama_model & model = ctx->get_model();
-
-    // The gemma4-assistant drafter's MTP hidden state (pre_projection input and
-    // post_projection output) is backbone-width, not the assistant's own n_embd.
-    if (llama_model_is_gemma4_assistant(&model)) {
-        return model.hparams.n_embd_backbone;
-    }
-
-    return model.hparams.n_embd;
-}
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);

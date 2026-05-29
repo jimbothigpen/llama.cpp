@@ -47,9 +47,7 @@ struct common_speculative_draft_params {
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
 
-// returns the external-assistant MTP draft context (the separately-loaded
-// gemma4-assistant GGUF) if one is active, else nullptr. Used by the server to
-// thread mtp_target_seq_id into the assistant context.
+// returns the draft context if one is active, else nullptr.
 llama_context * common_speculative_get_mtp_ctx(common_speculative * spec, llama_seq_id seq_id);
 
 // optionally call once at the beginning of a new generation

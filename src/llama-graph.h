@@ -458,6 +458,42 @@ public:
     const llama_kv_cache_iswa_context * mctx;
 };
 
+// mask-only input for attention against an external (read-only) ISWA KV cache.
+// used by MTP draft graphs that attend to the target's KV without owning any.
+class llm_graph_input_attn_src_kv_iswa : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_src_kv_iswa(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_kv_cache_iswa_context * src_mctx) :
+        hparams(hparams),
+        cparams(cparams),
+        src_mctx(src_mctx) {
+    }
+    ~llm_graph_input_attn_src_kv_iswa() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * get_kq_mask()       const { return self_kq_mask_cnv; }
+    ggml_tensor * get_kq_mask_swa()   const { return self_kq_mask_swa_cnv; }
+
+    ggml_tensor * self_kq_mask         = nullptr;
+    ggml_tensor * self_kq_mask_cnv     = nullptr;
+    ggml_tensor * self_kq_mask_swa     = nullptr;
+    ggml_tensor * self_kq_mask_swa_cnv = nullptr;
+
+    ggml_tensor * self_k_rot     = nullptr;
+    ggml_tensor * self_v_rot     = nullptr;
+    ggml_tensor * self_k_rot_swa = nullptr;
+    ggml_tensor * self_v_rot_swa = nullptr;
+
+    const llama_hparams hparams;
+    const llama_cparams cparams;
+
+    const llama_kv_cache_iswa_context * src_mctx;
+};
+
 class llm_graph_input_attn_cross : public llm_graph_input_i {
 public:
     llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
@@ -601,14 +637,13 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const std::vector<llama_sidecar_handler_ptr> * sidecars;
     const llama_memory_context_i * mctx;
+    // per-decode snapshot of an external memory module the graph reads from
+    // (never writes) — e.g. ctx_dft reading target KV during MTP draft.
+    // nullptr for a main decode. Rebound inside reuse-aware input classes.
+    const llama_memory_context_i * src_mctx;
+    const llama_model            * src_model;
     const llama_cross            * cross;
     llama_eagle3                 * eagle3 = nullptr;
-
-    // gemma4-assistant external-MTP: the target (backbone) context this graph
-    // borrows hidden state + foreign K/V from, and the seq_id its KV cells were
-    // written under. Both stay unset for every non-assistant graph.
-    llama_context * mtp_target_ctx    = nullptr;
-    llama_seq_id    mtp_target_seq_id = -1;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -703,9 +738,7 @@ struct llm_graph_params {
             sidecars == other.sidecars &&
             cross   == other.cross   &&
             cparams.eagle3_extract_enabled == other.cparams.eagle3_extract_enabled &&
-            // gemma4-assistant: attaching/detaching a target context changes the
-            // graph topology (degenerate fast-path vs. full foreign-KV attention).
-            mtp_target_ctx == other.mtp_target_ctx;
+            src_model == other.src_model;
     }
 };
 
@@ -846,13 +879,10 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const std::vector<llama_sidecar_handler_ptr> * sidecars;
     const llama_memory_context_i * mctx;
+    const llama_memory_context_i * src_mctx;
+    const llama_model            * src_model;
     const llama_cross            * cross;
     llama_eagle3                 * eagle3;
-
-    // gemma4-assistant external-MTP: copied from llm_graph_params; the assistant
-    // graph builder reads foreign K/V + hidden state from this target context.
-    llama_context * mtp_target_ctx    = nullptr;
-    llama_seq_id    mtp_target_seq_id = -1;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1075,6 +1105,24 @@ struct llm_graph_context {
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
+
+    llm_graph_input_attn_src_kv_iswa * build_attn_inp_src_kv_iswa() const;
+
+    // Q-only attention against an external ISWA KV cache (no K/V projections,
+    // no writes). il_assist labels the attention block in the local graph for
+    // logging; il_src indexes the source K/V layer to attend to.
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_src_kv_iswa * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il_assist,
+                    int   il_src) const;
 
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
