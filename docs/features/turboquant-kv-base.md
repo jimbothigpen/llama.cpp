@@ -29,8 +29,7 @@ llama-server \
 
 TurboQuant KV cache is based on **TheTom's `feature/turboquant-kv-cache`** branch
 ([TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)),
-which implements the PolarQuant + randomized Walsh-Hadamard rotation technique
-introduced in arXiv 2504.19874 (ICLR 2026).
+which implements the TurboQuant method (arXiv 2504.19874, ICLR 2026) — a randomized Walsh-Hadamard rotation plus quantization scheme that builds on PolarQuant (arXiv 2502.02617, AISTATS 2026).
 
 ### Differences from upstream
 
@@ -193,6 +192,7 @@ See [concepts/hadamard-wht-rotation.md](concepts/hadamard-wht-rotation.md) for a
 
 - **Upstream source:** [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) — `feature/turboquant-kv-cache` branch
 - **Paper:** arXiv 2504.19874 — TurboQuant: ICLR 2026
+- **PolarQuant paper:** arXiv 2502.02617 — PolarQuant: Quantizing KV Caches with Polar Transformation (AISTATS 2026)
 - **Related docs (this repo):**
   - [docs/TYPE_ASSIGNMENTS.md](../TYPE_ASSIGNMENTS.md) — slot assignments and upstream-name mapping
   - [docs/features/README.md](README.md) — index of all feature docs
