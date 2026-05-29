@@ -9,9 +9,9 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `623835cc9` (2026-05-29 — IQ3_KT trellis 3-bit landed).
+HEAD: `d738c4341` (2026-05-29 — IK row-meta weight quants doc added; IQ3_KT landed prior; IQ2_KL phase fix landed).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); **MTP Gemma4 §-FLAG-B fix** (commit `96b487c1c`) — address=0% accept regression on bundled-MTP Gemma4 models due to "mtp." tensor rename happening BEFORE load_all_data (causing name-keyed weight lookup miss); fix validated accept 33.9-61.8%, land pending on convergence bridge branch `feat/mtp-gemma4-guided-port-2026-05-29`; MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
 
 ### Added — IQ3_KT: 3-bit trellis-coded quantization (2026-05-29, `623835cc9`)
 
