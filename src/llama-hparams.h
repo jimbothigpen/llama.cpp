@@ -231,8 +231,6 @@ struct llama_hparams {
 
     // gemma4_assistant (Multi-Token Prediction drafter)
     uint32_t n_embd_backbone        = 0;     // hidden size of the target backbone (drafter input is 2x this)
-    uint32_t n_assist_centroids     = 0;     // number of centroids in the masked-embedding head
-    uint32_t n_assist_centroid_top_k = 0;    // top-K centroids selected per token
     bool     use_ordered_embeddings = false; // if true, use centroid masked-embedding head; else direct lm_head
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)

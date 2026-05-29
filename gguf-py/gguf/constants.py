@@ -599,10 +599,6 @@ class MODEL_TENSOR(IntEnum):
     PER_LAYER_PROJ       = auto() # gemma3n
     PER_LAYER_PROJ_NORM  = auto() # gemma3n
     PER_LAYER_POST_NORM  = auto() # gemma3n
-    ASSIST_PRE_PROJ          = auto() # gemma4_assistant: backbone_hidden -> assistant_hidden
-    ASSIST_POST_PROJ         = auto() # gemma4_assistant: assistant_hidden -> backbone_hidden
-    ASSIST_EMBED_CENTROIDS   = auto() # gemma4_assistant: centroid clustering for output embeddings
-    ASSIST_TOKEN_ORDERING    = auto() # gemma4_assistant: vocab permutation aligning token id <-> centroid bucket
     ALTUP_PROJ           = auto() # gemma3n
     ALTUP_UNEMBD_PROJ    = auto() # gemma3n
     ALTUP_CORRECT_COEF   = auto() # gemma3n
@@ -1158,10 +1154,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.PER_LAYER_INP_GATE:        "blk.{bid}.inp_gate",             # gemma3n
     MODEL_TENSOR.PER_LAYER_PROJ:            "blk.{bid}.proj",                 # gemma3n
     MODEL_TENSOR.PER_LAYER_POST_NORM:       "blk.{bid}.post_norm",            # gemma3n
-    MODEL_TENSOR.ASSIST_PRE_PROJ:           "assist_pre_proj",                # gemma4_assistant
-    MODEL_TENSOR.ASSIST_POST_PROJ:          "assist_post_proj",               # gemma4_assistant
-    MODEL_TENSOR.ASSIST_EMBED_CENTROIDS:    "assist_embed_centroids",         # gemma4_assistant
-    MODEL_TENSOR.ASSIST_TOKEN_ORDERING:     "assist_token_ordering",          # gemma4_assistant
     MODEL_TENSOR.ALTUP_CORRECT_COEF:        "blk.{bid}.altup_correct_coef",   # gemma3n
     MODEL_TENSOR.ALTUP_CORRECT_SCALE:       "blk.{bid}.altup_correct_scale",  # gemma3n
     MODEL_TENSOR.ALTUP_PREDICT_COEF:        "blk.{bid}.altup_predict_coef",   # gemma3n
