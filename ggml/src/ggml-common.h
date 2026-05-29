@@ -96,9 +96,6 @@ typedef sycl::half2 ggml_half2;
 #define QI1_0 (QK1_0 / 32)
 #define QR1_0 1
 
-#define QI1_0_G128 (QK1_0_G128 / 32)
-#define QR1_0_G128 1
-
 #define QI4_0 (QK4_0 / (4 * QR4_0))
 #define QR4_0 2
 
@@ -182,15 +179,6 @@ typedef struct {
     uint8_t qs[QK1_0 / 8]; // bits / quants
 } block_q1_0;
 static_assert(sizeof(block_q1_0) == sizeof(ggml_half) + QK1_0 / 8, "wrong q1_0 block size/padding");
-
-// Q1_0_G128: identical layout to Q1_0 but registered under GGUF type ID 43
-// for carlosfundora/prism-ml Bonsai model compatibility.
-#define QK1_0_G128 128
-typedef struct {
-    ggml_half d;               // delta
-    uint8_t qs[QK1_0_G128 / 8]; // bits / quants
-} block_q1_0_g128;
-static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
 
 #define QK4_0 32
 typedef struct {

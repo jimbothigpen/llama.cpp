@@ -17,7 +17,7 @@ incompatible ways. Concrete known collisions:
 |---|---|---|---|---|---|---|---|
 | 41 | `Q1_0` | `Q1_0` (mainline-aligned) | `TURBO3_0` | `Q1_0` | (gap) | `Q1_0` | `Q1_0_G128` |
 | 42 | — | `TURBO2_0` | `TURBO4_0` | `TURBO3_0` | `Q1_0` | — | — |
-| 43 | — | `TURBO3_0` | `TURBO2_0` | `TURBO4_0` | `Q1_0_g128` | — | — |
+| 43 | — | `TURBO3_0` | `TURBO2_0` | `TURBO4_0` | `Q1_0_g128` (removed; slot returned to mainline reserve) | — | — |
 | 44 | — | `TURBO4_0` | `TQ3_1S` | `TURBO2_0` | `PLANAR3_0` | **`TQ3_1S`** (different layout from TheTom's) | — |
 | 45 | — | `TQ3_1S` | `TQ4_1S` | `TURBO3_TCQ` | `PLANAR4_0` | — | — |
 | 46 | — | `TQ4_1S` | — | `TURBO2_TCQ` | `ISO3_0` | `TQ3_4S` | — |
@@ -160,27 +160,6 @@ existing ik_llama-quantized GGUFs. The full list of preserved assignments:
 | 156 | `IQ3_KS` | IK-quant small 3-bit; row_meta=2 bytes (uint16_t half-row-scale) — **Phase 5b-1b; ygg canonical** |
 | 157 | `IQ2_KL` | IQK 2-bit low-bpw (2.6875 bpw) imatrix-aware weight quant — **Phase 5b-1c S1 `e404274b9`; ygg canonical** |
 | 158 | `IQ1_KT` | trellis 1-bit (dormant) |
-
-### Special case: `Q1_0_G128`
-
-Three forks place "Q1_0 with 128-element groups" at three different slots:
-
-- ik_llama: `Q1_0_G128 = 41` (collides with mainline `Q1_0`)
-- Carlosfundora: `Q1_0_g128 = 43` (lowercase `g`)
-- Mainline: no equivalent
-
-**Resolution:** Place `GGML_TYPE_Q1_0_G128 = 96` in this fork (first slot of
-ik_llama compat zone). This means:
-
-- Existing ik_llama GGUFs marked with type 41 must be re-quantized OR loaded
-  through a fork-detection shim (see "Reader compatibility" below).
-- Existing carlosfundora GGUFs marked with type 43 must be re-quantized OR
-  loaded through a fork-detection shim.
-
-Slot 96 is the canonical ID for this type going forward.
-
-Symbol: `q1_0_g128_` (kernels), `Q1_0_G128` (constant). Uppercase `G` follows
-ik_llama's convention.
 
 ## Row-interleaved / packed variants (200–255)
 

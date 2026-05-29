@@ -57,7 +57,7 @@ sibling forks rebased onto mainline's architecture.
 | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | **Base** — this fork rebases against mainline regularly | upstream-of-everything |
 | [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | TurboQuant KV cache (`TURBOQ{2,3,4}_0`), WHT weight quants, alpha-scaling, asymmetric K/V, InnerQ calibrated KV (`TURBOQ{2,3,4}_INNERQ`) | active |
 | [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), PFlash prompt compression, DFlash S1 model loader | active |
-| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | RotorQuant KV V-cache (`RQ_*`), PrismML 1-bit (`Q1_0_G128`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
+| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | RotorQuant KV V-cache (`RQ_*`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
 | [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) | RaBitQ TQ3 weight quants (`RBQ3_*`); MTP research | recent |
 | [domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip) | TriAttention KV compression with GPU scoring, `--hugepages` | moderate |
 | [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) | IK quants (IQ\*_K, IQ\*_KS), BitNet, MLA / FlashMLA, fused MoE, ongoing MTP improvements | very active; **not a git merge source** — see [docs/IK_LLAMA_PORTS.md](docs/IK_LLAMA_PORTS.md) |
@@ -88,7 +88,7 @@ cross-backend PPL matches within tolerance. See
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
 | 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
 | 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **complete — 34/34 K×V pairs shipped (`88afd0b5a`); iso3-K cross-V hang (4 pairs) RESOLVED 2026-05-24 (fix landed `16c1a0012` on 2026-05-19; previously open as TODO 68; 4/4 smokes PASS exit:0)** |
-| 4 | Carlosfundora dense bundle (Q1_0_G128, EAGLE3, PHANTOM-X, DFlash S1, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` / buun | **Q1_0_G128 ported (`87d3705e0`); EAGLE3 ported (`c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X ported + Phase 2 dispatch (`d6dc63224`, `388169995`); DFlash S1 model loader ported (`b6a75e524`); TurboMind allocator queued for opportunistic port (PORT-LATER); Wave32 RDNA2 out of scope (`[[supported-rocm-hardware-targets]]`)** |
+| 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, DFlash S1, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` / buun | **Q1_0_G128 ported (`87d3705e0`) then removed (pure duplicate of Q1_0, slot 43 returned to mainline reserve); EAGLE3 ported (`c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X ported + Phase 2 dispatch (`d6dc63224`, `388169995`); DFlash S1 model loader ported (`b6a75e524`); TurboMind allocator queued for opportunistic port (PORT-LATER); Wave32 RDNA2 out of scope (`[[supported-rocm-hardware-targets]]`)** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`c12d37dbc`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`63b754e84..a25ee1cf7`); 5b-1c (IQ2_KL type-157) complete CPU+CUDA/HIP+Vulkan (`f18a92a42` + `3723c1f61`); 5b-2 (IQ5_K/IQ6_K) complete CPU+CUDA/HIP+Vulkan (`8e19be061` + `0ade7ff86`); Trellis P3a IQ2_KT complete (`0dac276d9` + cluster-accel `1e8501e46`); P3b IQ3_KT complete CPU/ROCm/Vulkan, cluster-accel k=60, imatrix required (`623835cc9`, 2026-05-29); P3c IQ1_KT queued; MLA declined** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending — imatrix retrofit required per PM-15 (~6h) before port** |
 | 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **DFlash S1 loader (`b6a75e524`) + S2 `common_speculative_state_dflash` + dispatch (`ef80c728c`) + S3 GPU ring buffer + server spec_type wiring (`9b7ab4e83`) + mask_token_id u32 fix (`1436d1890`) + DFlashDraftModel safetensors→GGUF converter (`ee7d4f896`) all shipped; end-to-end smoke gate GREEN @ `2726a56c0` with 33.3% combined accept (dual-spec mode); isolated DFlash-only accept unmeasured (known-limitation)** |
@@ -411,16 +411,6 @@ Ported IQ2_KT (Trellis P3a) from ik_llama via the new `ggml-iqk-kt-family.hpp` t
 - Cluster acceleration overshoots the ≤+5% PPL gate (+8.3% vs brute-force baseline); k=80–100 retune is planned for late-stage polish.
 - Vulkan path not yet ported.
 - IQ3_KT / IQ1_KT (Trellis P3b / P3c) queued behind P3a; will use the same `iqkt_cooked_book_init` site for cluster acceleration.
-
----
-
-### Q1_0_G128 (PrismML 1-bit weight quant) — Phase 4 carlosfundora
-
-Ported `Q1_0_G128` from carlosfundora `1-bit-turbo` (`67edf5eec`). 1-bit weight quantization with 128-element groups (Bonsai-family). Placed at ygg canonical slot 96 (first slot of ik_llama compat zone) to resolve the three-way collision between ik_llama (slot 41), carlosfundora (slot 43), and mainline `Q1_0` (slot 41).
-
-| Type | Slot | Backends | Notes |
-|---|---|---|---|
-| `Q1_0_G128` | 96 | CPU + CUDA/HIP | 1-bit with 128-element group; imatrix required per PM-15 |
 
 ---
 
@@ -791,7 +781,7 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 - **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
 - **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
 - **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`); tensor-split with quantized KV unblocked + TURBO_WHT split-planner fix (shipped `6774410fa`, `340f6fe21`)
-- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); Q1_0_G128 (shipped `87d3705e0`); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope per `[[supported-rocm-hardware-targets]]`
+- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope per `[[supported-rocm-hardware-targets]]`
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch + S3 GPU ring buffer shipped)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending imatrix retrofit per PM-15)
 - **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending); per-layer SWA KV cache type `--cache-type-{k,v}-swa` (shipped `d8ec65064`)

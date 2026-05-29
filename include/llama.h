@@ -166,7 +166,6 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 47, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 48, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KT        = 49, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q1_0_G128     = 50, // except 1d tensors (Bonsai 128-element blocks, GGUF type ID 43)
         // Phase 5b-2: no-row-meta 5/6-bit IK family
         LLAMA_FTYPE_MOSTLY_IQ5_K         = 51, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ6_K         = 52, // except 1d tensors

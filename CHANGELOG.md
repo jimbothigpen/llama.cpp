@@ -46,6 +46,10 @@ sole cause of the earlier "gemma4 output-degenerate" symptom — it was a smoke-
 bug, not an MTP/graph/conversion defect. A `--jinja`/chat-template option for `speculative-simple`
 is a possible future hardening (out of scope here).
 
+### Removed — Q1_0_G128 (GGUF type 43) (2026-05-29)
+
+- Removed `Q1_0_G128` (GGUF type 43) — pure duplicate of mainline `Q1_0` (slot 41); zero type-43 GGUFs exist; slot 43 returned to mainline-growth reserve (ADR-003)
+
 ### Added — IQ3_KT: 3-bit trellis-coded quantization (2026-05-29, `623835cc9`)
 
 Added IQ3_KT (3-bit trellis-coded quant); PPL +23.5% vs IQ3_K is inherent to the 3-bit

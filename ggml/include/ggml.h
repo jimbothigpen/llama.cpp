@@ -429,8 +429,7 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_Q1_0_G128 = 43, // PrismML Bonsai 1-bit weight quant (128-element blocks) — source: carlosfundora slot 43
-        // slots 42, 44–59 reserved for mainline growth (do not use) — see docs/TYPE_ASSIGNMENTS.md
+        // slots 42–59 reserved for mainline growth (do not use) — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_TURBOQ2_0 = 60, // TurboQuant 2-bit KV cache: 2-bit PolarQuant only (no QJL)
         GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 4-bit PolarQuant (default TURBOQ4_USE_4BIT=1; legacy 3-bit+QJL mode via TURBOQ4_USE_4BIT=0)
@@ -513,7 +512,6 @@ extern "C" {
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q1_0_G128 = 28, // except 1d tensors (Bonsai 128-element blocks)
     };
 
     // available tensor operations:
