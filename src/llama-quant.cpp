@@ -788,6 +788,7 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ2_KT:
+        case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
         case GGML_TYPE_IQ5_K:
         case GGML_TYPE_IQ6_K:
@@ -845,6 +846,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ3_KS:  return GGML_TYPE_IQ3_KS;
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS: return GGML_TYPE_IQ4_KSS;
         case LLAMA_FTYPE_MOSTLY_IQ2_KT:  return GGML_TYPE_IQ2_KT;
+        case LLAMA_FTYPE_MOSTLY_IQ3_KT:  return GGML_TYPE_IQ3_KT;
         case LLAMA_FTYPE_MOSTLY_IQ4_KT:  return GGML_TYPE_IQ4_KT;
         case LLAMA_FTYPE_MOSTLY_IQ5_K:   return GGML_TYPE_IQ5_K;
         case LLAMA_FTYPE_MOSTLY_IQ6_K:   return GGML_TYPE_IQ6_K;

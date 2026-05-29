@@ -3,12 +3,12 @@
 // Parameterizes the trellis weight-quant family over:
 //   GROUP_SIZE : elements per codebook lookup group (4 for IQ4_KT; 8 for IQ2/3/1_KT)
 //   NUM_BITS   : codebook index width in bits; kNumVal = 1 << NUM_BITS entries
-//   IS_ABS     : true for IQ3_KT (absolute-value codebook); false otherwise
+//   IS_ABS     : true for absolute-value codebook; false (signed) for all current types
 //
 // Upstream QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int=true> instantiations:
 //   IQ4_KT : <32, 4, 15, false, true>  — kNumVal=32768,  codebook A+B
 //   IQ2_KT : <32, 8, 16, false, true>  — kNumVal=65536,  single codebook
-//   IQ3_KT : <32, 8, 16, true,  true>  — kNumVal=65536,  single codebook (abs values)
+//   IQ3_KT : <32, 8, 16, false, true>  — kNumVal=65536,  single codebook (signed output)
 //   IQ1_KT : <32, 8, 13, false, true>  — kNumVal=8192,   single codebook
 //
 // This header provides:
@@ -43,7 +43,7 @@ struct IQKTParams {
 // Family aliases matching upstream QuantizerIQKT instantiations.
 using IQ4KTParams = IQKTParams<4, 15, false>;   // shipped
 using IQ2KTParams = IQKTParams<8, 16, false>;   // P3a
-using IQ3KTParams = IQKTParams<8, 16, true>;    // P3b
+using IQ3KTParams = IQKTParams<8, 16, false>;   // P3b
 using IQ1KTParams = IQKTParams<8, 13, false>;   // P3c
 
 // ---------------------------------------------------------------------------

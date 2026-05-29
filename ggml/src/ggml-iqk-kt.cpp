@@ -549,6 +549,220 @@ static void quantize_row_iq2_kt_impl(const float * x, char * cy, int n_per_row,
 
 }  // anonymous namespace (IQ2_KT)
 
+// =============================================================================
+// IQ3_KT — 3.0 bpw trellis-coded (row_meta_size = 4: per-row float scale)
+//
+// IQ3KTParams = IQKTParams<GROUP_SIZE=8, NUM_BITS=16, IS_ABS=false>.
+// kNumVal = 65536.  Single implicit codebook (offset = 4096, signed output).
+//
+// Block layout (96 bytes = 24 uint32_t per QK_K=256 elements):
+//   qs[0..7]   (32 B): shb — bits[7:0] = scale byte (ls+128), bits[8+4g..11+4g] = idx[15:12]
+//   qs[8..15]  (32 B): ql  — 8 low bits per group, 4 groups per uint32_t (32 groups)
+//   qs[16..19] (16 B): qh  — 4 mid bits per group, 2 groups per nibble (32 groups)
+//   qs[20..23] (16 B): padding
+// Index reconstruction: ql_byte | (qh_nibble << 8) | (sh_4bits << 12)
+// =============================================================================
+
+namespace {
+
+constexpr int kIQ3KT_BlockSize  = 32;
+constexpr int kIQ3KT_GroupSize  = IQ3KTParams::kGroupSize;   // 8
+constexpr int kIQ3KT_NumBits    = IQ3KTParams::kNumBits;     // 16
+constexpr int kIQ3KT_NumVal     = IQ3KTParams::kNumVal;      // 65536
+constexpr int kIQ3KT_Ng         = kIQ3KT_BlockSize / kIQ3KT_GroupSize; // 4
+constexpr int kIQ3KT_Nblock     = QK_K / kIQ3KT_BlockSize;             // 8
+constexpr int kIQ3KT_NumGroups  = QK_K / kIQ3KT_GroupSize;             // 32
+constexpr int kIQ3KT_Offset     = 4096;
+constexpr int kIQ3KT_NeighboursPB = 60;   // cluster-accel k=60 (mirrors IQ2_KT fix, 57ccf64cd)
+
+struct IQ3KT_Codebook {
+    IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> a;
+    bool initialized = false;
+};
+
+static IQ3KT_Codebook g_iq3kt_codebook;
+static std::once_flag g_iq3kt_init_once;
+
+static void iq3kt_codebook_do_init() {
+    iqkt_cooked_book_init<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
+        g_iq3kt_codebook.a, kIQ3KT_Offset, kIQ3KT_NeighboursPB);
+    g_iq3kt_codebook.initialized = true;
+}
+
+static inline void iq3kt_codebook_init() {
+    std::call_once(g_iq3kt_init_once, iq3kt_codebook_do_init);
+}
+
+// Find best per-sub-block scale d such that d * codebook[best_idx[g]] ≈ xb.
+// IS_ABS=true: codebook values are non-negative; scale handles sign.
+static float iq3kt_find_best_scale(const float * xb, const float * weight,
+                                   const int * best_idx, const float * codebook) {
+    float sumqx = 0, sumq2 = 0;
+    for (int g = 0; g < kIQ3KT_Ng; ++g) {
+        const float * v  = codebook + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+        const float * xl = xb + g * kIQ3KT_GroupSize;
+        const float * wl = weight + g * kIQ3KT_GroupSize;
+        for (int k = 0; k < kIQ3KT_GroupSize; ++k) {
+            sumqx += wl[k] * v[k] * xl[k];
+            sumq2 += wl[k] * v[k] * v[k];
+        }
+    }
+    return sumq2 > 0.f ? sumqx / sumq2 : 0.f;
+}
+
+static void quantize_row_iq3_kt_impl(const float * x, char * cy, int n_per_row,
+                                     const float * quant_weights) {
+    iq3kt_codebook_init();
+    const IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> & ck = g_iq3kt_codebook.a;
+    const float * cb = ck.values.data();
+
+    constexpr int kSuperBlockSize = QK_K;
+    const int nblock = n_per_row / kSuperBlockSize;
+
+    float * dptr = (float *)cy;
+    block_iq3_kt * y = (block_iq3_kt *)(dptr + 1);
+
+    std::vector<float> weights(n_per_row);
+    {
+        constexpr float kEps2 = 1e-14f;
+        constexpr float kWeight = 1e-4f;
+        constexpr float kSigmaScale = 2.0f;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            const float * xbl = x + ibl * kSuperBlockSize;
+            float * wbl = weights.data() + ibl * kSuperBlockSize;
+            float sumx2 = 0;
+            for (int j = 0; j < kSuperBlockSize; ++j) sumx2 += xbl[j] * xbl[j];
+            if (sumx2 < kEps2 * kSuperBlockSize) {
+                for (int j = 0; j < kSuperBlockSize; ++j) wbl[j] = kWeight;
+                continue;
+            }
+            const float sigma2 = kSigmaScale * sumx2 / kSuperBlockSize;
+            if (quant_weights) {
+                for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
+                    const float * qw = quant_weights + ibl * kSuperBlockSize + ib * kIQ3KT_BlockSize;
+                    const float * xb = xbl + ib * kIQ3KT_BlockSize;
+                    float * wb = wbl + ib * kIQ3KT_BlockSize;
+                    for (int j = 0; j < kIQ3KT_BlockSize; ++j) {
+                        wb[j] = qw[j] * sqrtf(sigma2 + xb[j] * xb[j]);
+                    }
+                }
+            } else {
+                for (int j = 0; j < kSuperBlockSize; ++j) wbl[j] = 0.25f * sigma2 + xbl[j] * xbl[j];
+            }
+        }
+    }
+
+    float amax_row = 0;
+    for (int j = 0; j < n_per_row; ++j) amax_row = std::max(amax_row, std::abs(x[j]));
+    if (amax_row == 0.f) {
+        dptr[0] = 0.f;
+        std::memset(y, 0, (size_t)nblock * sizeof(block_iq3_kt));
+        return;
+    }
+
+    std::vector<float> all_scales((size_t)nblock * kIQ3KT_Nblock);
+
+    float amax_scale = 0, max_scale = 0;
+    int best_idx[kIQ3KT_Ng];
+    float xaux[kIQ3KT_BlockSize];
+
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        std::memset(&y[ibl], 0, sizeof(block_iq3_kt));
+        const float * xbl = x + ibl * kSuperBlockSize;
+        float * scales = all_scales.data() + (size_t)ibl * kIQ3KT_Nblock;
+
+        for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
+            const float * weight = weights.data() + ibl * kSuperBlockSize + ib * kIQ3KT_BlockSize;
+            float amax = 0;
+            for (int j = 0; j < kIQ3KT_BlockSize; ++j) {
+                xaux[j] = xbl[ib * kIQ3KT_BlockSize + j];
+                amax = std::max(amax, std::abs(xaux[j]));
+            }
+            if (amax < 1e-16f) {
+                scales[ib] = 0;
+                continue;
+            }
+            const float scale_0 = std::max(64.f, 96.f * amax / amax_row);
+            float best_score = -INFINITY;
+            for (int sign = 0; sign < 2; ++sign) {
+                const float d_init = (sign == 0 ? amax : -amax) / scale_0;
+                for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                    best_idx[g] = iqkt_find_best_index<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
+                        xaux + g * kIQ3KT_GroupSize,
+                        weight + g * kIQ3KT_GroupSize,
+                        d_init, ck);
+                }
+                const float d = iq3kt_find_best_scale(xaux, weight, best_idx, cb);
+                float sumqx = 0;
+                for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                    const float * v  = cb + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+                    const float * xl = xaux + g * kIQ3KT_GroupSize;
+                    const float * wl = weight + g * kIQ3KT_GroupSize;
+                    for (int k = 0; k < kIQ3KT_GroupSize; ++k) sumqx += wl[k] * v[k] * xl[k];
+                }
+                const float score = sumqx * d;
+                if (score > best_score) { best_score = score; scales[ib] = d; }
+            }
+            const float abs_scale = std::abs(scales[ib]);
+            if (abs_scale > amax_scale) { amax_scale = abs_scale; max_scale = scales[ib]; }
+        }
+    }
+
+    float d_row = -max_scale / 128.f;
+    dptr[0] = d_row;
+    if (d_row == 0.f) return;
+
+    const float id = 1.f / d_row;
+    float sumqx = 0, sumq2 = 0;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        uint32_t * shb = y[ibl].qs;
+        const float * xbl = x + ibl * kSuperBlockSize;
+        const float * scales = all_scales.data() + (size_t)ibl * kIQ3KT_Nblock;
+
+        for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
+            const float * weight = weights.data() + ibl * kSuperBlockSize + ib * kIQ3KT_BlockSize;
+            for (int j = 0; j < kIQ3KT_BlockSize; ++j) xaux[j] = xbl[ib * kIQ3KT_BlockSize + j];
+
+            int ls = (int)nearbyintf(id * scales[ib]);
+            ls = std::max(-128, std::min(127, ls));
+            shb[ib] = (uint32_t)(ls + 128) & 0xff;
+
+            const float dl = d_row * (float)ls;
+            for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                best_idx[g] = iqkt_find_best_index<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
+                    xaux + g * kIQ3KT_GroupSize,
+                    weight + g * kIQ3KT_GroupSize,
+                    dl, ck);
+            }
+
+            for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                const int jj = kIQ3KT_Ng * ib + g;
+                const int idx16 = best_idx[g] & 0xffff;
+                // Low 8 bits in ql (qs[8..15])
+                shb[kIQ3KT_Nblock + jj / 4] |= (uint32_t)(idx16 & 0xff) << ((jj % 4) * 8);
+                // Mid 4 bits in qh (qs[16..19])
+                const int qh_shift = ((jj / 2) & 3) * 8 + (jj % 2) * 4;
+                shb[kIQ3KT_Nblock + kIQ3KT_NumGroups / 4 + jj / 8] |=
+                    (uint32_t)((idx16 >> 8) & 0xf) << qh_shift;
+                // High 4 bits in shb[ib] bits[8+4g..11+4g]
+                shb[ib] |= (uint32_t)((idx16 >> 12) & 0xf) << (8 + 4 * g);
+
+                const float * v = cb + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+                const float * xl = xaux + g * kIQ3KT_GroupSize;
+                const float * wl = weight + g * kIQ3KT_GroupSize;
+                for (int k = 0; k < kIQ3KT_GroupSize; ++k) {
+                    const float q = v[k] * (float)ls;
+                    sumqx += wl[k] * xl[k] * q;
+                    sumq2 += wl[k] * q * q;
+                }
+            }
+        }
+    }
+    if (sumq2 > 0.f) dptr[0] = sumqx / sumq2;
+}
+
+}  // anonymous namespace (IQ3_KT)
+
 void dequantize_row_iq2_kt(const block_iq2_kt * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const float * dptr = (const float *)vx;
@@ -613,6 +827,97 @@ void ggml_vec_dot_iq2_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
                 sumf += db * gv[k] * (float)q8[k];
             }
             q8 += kIQ2KT_GroupSize;
+        }
+    }
+    *s = sumf;
+}
+
+
+void dequantize_row_iq3_kt(const block_iq3_kt * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const float * dptr = (const float *)vx;
+    const float d = dptr[0];
+    const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+    const int nb = (int)(k / QK_K);
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint32_t * shb = x[ibl].qs;
+        const uint8_t  * ql  = (const uint8_t *)(shb + kIQ3KT_Nblock);
+        const uint32_t * qh_u32 = shb + kIQ3KT_Nblock + kIQ3KT_NumGroups / 4;
+        for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
+            const int ls = (int)(shb[ib] & 0xff) - 128;
+            const float sl = d * (float)ls;
+            for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                const int jj = kIQ3KT_Ng * ib + g;
+                const int qh_shift = ((jj / 2) & 3) * 8 + (jj % 2) * 4;
+                const uint32_t qh_nibble = (qh_u32[jj / 8] >> qh_shift) & 0xfu;
+                const uint32_t sh_4bits  = (shb[ib] >> (8 + 4 * g)) & 0xfu;
+                const uint32_t idx = (uint32_t)ql[jj] | (qh_nibble << 8) | (sh_4bits << 12);
+                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, kIQ3KT_Offset, y);
+                for (int kk = 0; kk < kIQ3KT_GroupSize; ++kk) y[kk] *= sl;
+                y += kIQ3KT_GroupSize;
+            }
+        }
+    }
+}
+
+size_t quantize_iq3_kt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_K == 0);
+    const size_t row_size = ggml_row_size(GGML_TYPE_IQ3_KT, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq3_kt_impl(src + row * n_per_row, qrow, (int)n_per_row, imatrix);
+        qrow += row_size;
+    }
+    return (size_t)nrows * row_size;
+}
+
+void quantize_row_iq3_kt_ref(const float * GGML_RESTRICT x, block_iq3_kt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_iq3_kt(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq3_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_iq3_kt_ref(x, (block_iq3_kt *)y, k);
+}
+
+void ggml_vec_dot_iq3_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                               const void * GGML_RESTRICT vx, size_t bx,
+                               const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    (void)nrc; (void)bx; (void)by; (void)bs;
+
+    const float * dptr = (const float *)vx;
+    const float d = dptr[0];
+    const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+    const block_q8_K   * y8 = (const block_q8_K   *)vy;
+    const int nblock = n / QK_K;
+
+    float sumf = 0;
+    float gv[kIQ3KT_GroupSize];
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const float db = d * y8[ibl].d;
+        const uint32_t * shb = x[ibl].qs;
+        const uint8_t  * ql  = (const uint8_t *)(shb + kIQ3KT_Nblock);
+        const uint32_t * qh_u32 = shb + kIQ3KT_Nblock + kIQ3KT_NumGroups / 4;
+        const int8_t   * q8  = y8[ibl].qs;
+        for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
+            const int ls = (int)(shb[ib] & 0xff) - 128;
+            const float dl = db * (float)ls;
+            for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                const int jj = kIQ3KT_Ng * ib + g;
+                const int qh_shift = ((jj / 2) & 3) * 8 + (jj % 2) * 4;
+                const uint32_t qh_nibble = (qh_u32[jj / 8] >> qh_shift) & 0xfu;
+                const uint32_t sh_4bits  = (shb[ib] >> (8 + 4 * g)) & 0xfu;
+                const uint32_t idx = (uint32_t)ql[jj] | (qh_nibble << 8) | (sh_4bits << 12);
+                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, kIQ3KT_Offset, gv);
+                for (int kk = 0; kk < kIQ3KT_GroupSize; ++kk) {
+                    sumf += dl * gv[kk] * (float)q8[kk];
+                }
+                q8 += kIQ3KT_GroupSize;
+            }
         }
     }
     *s = sumf;

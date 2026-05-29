@@ -1,0 +1,92 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ3_KT — ik_llama.cpp trellis 3-bit IS_ABS=true (3.0 bpw, row_meta=4 = float row scale).
+// Row layout: [float d_row][block_iq3_kt blocks].  Block is 96 bytes = 24 u32:
+//   qs[0..7]   : 8 u32 (32 B) — shb: bits[7:0]=scale(ls+128), bits[8+4g..11+4g]=idx[15:12]
+//   qs[8..15]  : 8 u32 (32 B) — ql: 8 low bits per group (32 groups, 4 groups per u32)
+//   qs[16..19] : 4 u32 (16 B) — qh: 4 mid bits per group (2 groups per nibble per byte)
+//   qs[20..23] : 4 u32 (16 B) — padding
+//
+// Single codebook with IS_ABS=true: abs() applied to each LCG output value.
+// Index = ql_byte | (qh_nibble << 8) | (sh_4bits << 12), seeded by idx + 4096.
+//
+// Dispatch: 1 WG per super-block (256 elements), 32 threads — one per group of 8.
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const uint IQ3KT_KA     = 0xCBAC1FEDu;
+const uint IQ3KT_Offset = 4096u;
+
+void iq3kt_gen_group(uint idx, out float result[8]) {
+    uint x = idx + IQ3KT_Offset;
+    [[unroll]] for (int k = 0; k < 8; k++) {
+        x = IQ3KT_KA * x;
+        const uint s = x & 0x3f3f3f3fu;
+        const int sum =  int(s         & 0xffu)
+                       + int((s >>  8) & 0xffu)
+                       + int((s >> 16) & 0xffu)
+                       + int((s >> 24) & 0xffu);
+        const int signed_val = sum - 126;
+        result[k] = float(signed_val);
+    }
+}
+
+void main() {
+    const uint nb           = p.K / 256u;
+    const uint row_size_u32 = 1u + nb * 24u;   // 1 float row_scale + nb * 24 u32/block
+    const uint total_blocks = p.nel / 256u;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const float d        = uintBitsToFloat(uint(data_a[row_u32]));
+    const uint block_u32 = row_u32 + 1u + ib_in_row * 24u;
+
+    const uint tid = gl_LocalInvocationID.x;   // 0..31 — one thread per group
+    const uint ib  = tid >> 2;                  // sub-block 0..7 (4 groups per sub-block)
+    const uint g   = tid & 3u;                  // group within sub-block 0..3
+    const uint jj  = tid;                       // linear group index 0..31
+
+    // shb[ib]: block_u32 + ib
+    const uint shb = data_a[block_u32 + ib];
+    const int  ls  = int((shb & 0xffu)) - 128;
+    const float sl = d * float(ls);
+
+    // ql: block_u32 + 8 .. block_u32 + 15 (8 u32 = 32 bytes, 4 groups per u32)
+    const uint ql_word  = data_a[block_u32 + 8u + (jj >> 2)];
+    const uint ql_byte  = (ql_word >> ((jj & 3u) * 8u)) & 0xffu;
+
+    // qh: block_u32 + 16 .. block_u32 + 19 (4 u32 = 16 bytes, 2 groups per byte)
+    // group jj: byte = jj/2, nibble = jj%2
+    const uint qh_byte_idx  = jj >> 1;          // 0..15
+    const uint qh_nib_shift = (jj & 1u) * 4u;
+    const uint qh_word      = data_a[block_u32 + 16u + (qh_byte_idx >> 2)];
+    const uint qh_byte_val  = (qh_word >> ((qh_byte_idx & 3u) * 8u)) & 0xffu;
+    const uint qh_nibble    = (qh_byte_val >> qh_nib_shift) & 0xfu;
+
+    // High 4 bits from shb: bits[8+4g..11+4g]
+    const uint sh_4bits = (shb >> (8u + 4u * g)) & 0xfu;
+
+    const uint idx = ql_byte | (qh_nibble << 8u) | (sh_4bits << 12u);
+
+    float gv[8];
+    iq3kt_gen_group(idx, gv);
+
+    const uint y_base = ib_global * 256u + ib * 32u + g * 8u;
+    [[unroll]] for (uint i = 0u; i < 8u; i++) {
+        data_b[y_base + i] = D_TYPE(gv[i] * sl);
+    }
+}

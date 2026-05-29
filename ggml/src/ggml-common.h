@@ -535,6 +535,18 @@ typedef struct {
 } block_iq4_ks;
 static_assert(sizeof(block_iq4_ks) == QK_K/32 + QK_K/2, "wrong iq4_ks block size/padding");
 
+// IQ3_KT: ik_llama.cpp trellis-coded 3-bit (3.0 bpw, per-row float scale, IS_ABS=true)
+// Row layout: [float row_scale][block_iq3_kt blocks].  Block format (96 bytes = 24 u32):
+//   qs[0..7]   (32 B) = shb: bits[7:0]=scale(ls+128), bits[8+4g..11+4g]=idx[15:12] for group g
+//   qs[8..15]  (32 B) = ql: 8 low bits per group, 4 groups packed per u32 (32 groups total)
+//   qs[16..19] (16 B) = qh: 4 mid bits per group, 2 groups per nibble per byte (32 groups)
+//   qs[20..23] (16 B) = padding
+// Index = ql_byte | (qh_nibble << 8) | (sh_4bits << 12); 16-bit → 65536-entry codebook
+typedef struct {
+    uint32_t qs[24];               // 24 uint32_t = 96 bytes
+} block_iq3_kt;
+static_assert(sizeof(block_iq3_kt) == QK_K * 3 / 8, "wrong iq3_kt block size/padding");
+
 // IQ4_KT: ik_llama.cpp trellis-coded 4-bit (4.0 bpw, per-row float scale)
 // Row layout: [float row_scale][block_iq4_kt blocks].  Block format:
 //   shb[0..7]  (32 B) = scale + use-codebook-B + 24 high bits per sub-block

@@ -172,6 +172,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ6_K         = 52, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KL        = 53, // except 1d tensors
         // P3a: IQ2_KT trellis 2-bit (slot 54 is IQ3_KT per W37/74310fce9)
+        LLAMA_FTYPE_MOSTLY_IQ3_KT        = 54, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KT        = 55, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
