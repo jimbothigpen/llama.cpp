@@ -12,6 +12,14 @@ Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache
 | [TCQ KV cache](tcq-kv.md) | Stable | `turboq2_tcq`, `turboq3_tcq` | ~7.1× / ~4.9× |
 | [InnerQ KV cache](innerq-kv.md) | Experimental (CUDA/HIP only) | `turboq2_innerq`, `turboq3_innerq` | ~7.5× / ~5.1× (same memory as base; quality improvement) |
 
+## KV Cache Architecture
+
+Per-layer or per-class configuration that composes with the KV type flags above.
+
+| Feature | Status | Applicable models | Summary |
+|---|---|---|---|
+| [SWA per-layer KV types](swa-per-layer-kv.md) | Stable | Gemma 4 / Gemma 2/3, Llama 4, MiMo2 | Assign separate KV types to global and SWA sub-caches; avoids catastrophic PPL collapse under uniform aggressive quant |
+
 ## Concept Primers
 
 Short standalone explanations of techniques used across multiple feature families. Feature docs link here instead of repeating the same background.
