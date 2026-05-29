@@ -108,6 +108,8 @@ As of **HEAD `d8ec65064`**, the following features are on `main`.
 
 ### TurboQuant KV cache types (`TURBOQ{2,3,4}_0`) — Phase 1
 
+> **Full feature doc:** [docs/features/turboquant-kv-base.md](docs/features/turboquant-kv-base.md)
+
 Calibration-free KV compression. Pass to `--cache-type-k` / `--cache-type-v`
 on any GGUF whose `head_dim` is a multiple of 128. The KV cache is quantized
 at runtime via `SET_ROWS`; model weights are unchanged.
