@@ -151,14 +151,16 @@ Default is off (uniform precision); each non-zero mode is an explicit opt-in.
 
 ### TCQ KV cache types (`TURBOQ{2,3}_TCQ`) — Phase 3
 
+> **Full feature doc:** [docs/features/tcq-kv.md](docs/features/tcq-kv.md)
+
 Trellis Coded Quantization KV cache. Same CLI interface as TurboQuant_0 types;
 higher per-bit quality from the Viterbi-coded codebook at the cost of a slower
-encode step.
+encode step (GPU required for encode).
 
 | Type | Bits | Block | Compression vs fp16 | Notes |
 |---|---|---|---|---|
-| `turboq2_tcq` (slot 66) | 2.125 | 128 | ~7.5× | TCQ2 Viterbi codebook |
-| `turboq3_tcq` (slot 67) | 3.125 | 128 | ~5.1× | TCQ3 Viterbi codebook |
+| `turboq2_tcq` (slot 66) | 2.25 | 128 | ~7.1× | TCQ2 Viterbi codebook (k=2, 256 states) |
+| `turboq3_tcq` (slot 67) | 3.25 | 128 | ~4.9× | TCQ3 Viterbi codebook (k=3, 512 states) |
 
 Example:
 ```bash
