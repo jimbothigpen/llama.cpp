@@ -305,7 +305,30 @@ int main(int argc, char ** argv) {
     acc.n_layers   = llama_model_n_layer(model);
     acc.n_heads    = llama_model_n_head(model);
     acc.n_kv_heads = llama_model_n_head_kv(model);
-    acc.head_dim   = llama_model_n_embd(model) / acc.n_heads;
+
+    /*
+     * head_dim: prefer the GGUF "<arch>.attention.key_length" metadata key,
+     * which is the authoritative per-head Q/K dimension.  Older models that
+     * don't carry this key fall back to n_embd / n_heads.  The fallback is
+     * wrong for models where head_dim != hidden/n_heads (e.g. Qwen3-0.6B:
+     * hidden=1024, n_heads=16 → fallback=64, but actual head_dim=128).
+     */
+    {
+        char arch[128] = {};
+        bool hd_from_meta = false;
+        if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) >= 0) {
+            char key[256];
+            snprintf(key, sizeof(key), "%s.attention.key_length", arch);
+            char val[64] = {};
+            if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
+                long v = strtol(val, nullptr, 10);
+                if (v > 0) { acc.head_dim = (int32_t)v; hd_from_meta = true; }
+            }
+        }
+        if (!hd_from_meta) {
+            acc.head_dim = llama_model_n_embd(model) / acc.n_heads;
+        }
+    }
     acc.n_embd_q   = acc.n_heads * acc.head_dim;
     acc.freq_count = acc.head_dim / 2;   /* full-RoPE assumption: freq_count = head_dim/2 */
 
