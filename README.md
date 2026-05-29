@@ -338,6 +338,8 @@ llama-quantize --imatrix Qwen3.5-9B.imatrix Qwen3.5-9B-F16.gguf Qwen3.5-9B-IQ3_K
 
 **imatrix required.** These are imatrix-aware quants; without `--imatrix` the quantizer hard-errors for all tensors except `token_embd` and `output`. PPL parity Δ < 0.0045 vs ik_llama across multiple quant/model pairs. Slots are in the ik_llama compatibility zone (96–199) per [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md).
 
+**Docs:** [IK Base-K weight quants](docs/features/ik-base-k.md) · [IK quantization family primer](docs/features/concepts/ik-quantization-family.md)
+
 ---
 
 ### ik_llama row-meta weight quants (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) — Phase 5b-1b

@@ -24,10 +24,24 @@ Per-layer or per-class configuration that composes with the KV type flags above.
 
 Short standalone explanations of techniques used across multiple feature families. Feature docs link here instead of repeating the same background.
 
+- [IK quantization family](concepts/ik-quantization-family.md) — shared IK concepts: block structure, imatrix mandate, Vulkan dispatch split, and the four-sub-family doc map
 - [WHT / Hadamard rotation](concepts/hadamard-wht-rotation.md) — the randomized Walsh-Hadamard Transform used by TurboQuant and TCQ
 - [Trellis-coded quantization](concepts/trellis-coded-quantization.md) — Viterbi trellis, codebook, and why TCQ beats nearest-centroid at the same bit-width
 - [Asymmetric KV cache & K×V pairing](concepts/asymmetric-kv-cache.md) — why K and V behave differently and how to pick a pair
 - [Feature maturity levels & backend support](concepts/feature-maturity-levels.md) — what Stable / Experimental / Preview mean; CPU/CUDA/HIP/Vulkan notation
+
+## Weight Quantization
+
+Offline quantization — produce a smaller GGUF from an F16/BF16 source with
+`llama-quantize`. All IK weight quants require an imatrix.
+
+| Feature | Status | Types | Notes |
+|---|---|---|---|
+| [IK Base-K weight quants](ik-base-k.md) | Stable | `IQ2_K`, `IQ3_K`, `IQ4_K` | 2–4.5 bpw; imatrix required; better PPL than mainline K-quants at matched bpw |
+
+More IK sub-family docs are in progress — see the
+[IK quantization family primer](concepts/ik-quantization-family.md) for the full
+four-sub-family map.
 
 ## Adding a new doc
 
