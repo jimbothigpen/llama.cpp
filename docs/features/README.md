@@ -61,6 +61,7 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 | Feature | Status | Models | Summary |
 |---|---|---|---|
 | [NLD diffusion self-spec](nld-diffusion-self-spec.md) | Stable | Dream / LLaDA / LLaDA-MoE / RND1 | Bidirectional draft + causal verify on shared KV; ~3.7× over block-mode; CLI flag `--diffusion-self-spec`; server auto-detects |
+| [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 
 ## Adding a new doc
 
