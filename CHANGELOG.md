@@ -9,9 +9,11 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `d738c4341` (2026-05-29 — IK row-meta weight quants doc added; IQ3_KT landed prior; IQ2_KL phase fix landed).
+HEAD: `60ece65ca` (2026-05-30 — tria-gen TRIA calibration-stats generator landed; MTP Gemma4 §-FLAG-B landed; Qwen3.5 MTP converter converged to mainline; DFlash spec-decode feature doc added).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); **MTP Gemma4 §-FLAG-B** — ✅ VALIDATED, LANDING-PENDING-APPROVAL on branch `feat/mtp-gemma4-guided-port-2026-05-29` (rebased onto `main`); end-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) integrated on this branch.
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture (GPU `score_q8_0` path gated off for GQA at `src/triattention-runtime.c:354`, CPU fallback active); full 40-cell spec-decode validation matrix (TODO 103).
+
+**MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port, TODO 148) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
 
 ### Changed — Qwen3.5/3.6 MTP converter converged to mainline; `--mtp` split-export restored (2026-05-30)
 
@@ -608,7 +610,7 @@ different product line). No code changes.
 ### Added — README Attribution section crediting sibling forks and original authors (2026-05-18, `466fc667e`)
 
 Post-v327 follow-up. Merged `feature/readme-attribution-additions-2026-05-18-PM` into main.
-Documents the sibling fork lineage (buun, frankenturbo2, carlosfundora, TheTom,
+Documents the sibling fork lineage (buun, carlosfundora, TheTom,
 ik_llama) and original llama.cpp authors whose work this fork builds upon.
 No code changes.
 
@@ -798,7 +800,7 @@ hardware).
 
 ### Changed — Trunk renamed `master` → `main`
 
-The durable trunk branch is `main` (was `port/frankenturbo2/sidecar-engine`
+The durable trunk branch is `main` (was a sidecar-engine port branch
 through session 5, then `master` briefly). GitHub default branch updated.
 
 ---
