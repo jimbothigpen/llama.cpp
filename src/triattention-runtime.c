@@ -432,8 +432,13 @@ int tria_maybe_score(
         }
     }
 
-    /* Upload this pass's global_scores slice once; all GPU layers reuse it. */
-    if (use_gpu_scoring) {
+    /* Upload this pass's global_scores slice once; all GPU layers reuse it.
+     * Guard on > 0: use_gpu_scoring uses -1 as the "force CPU" sentinel
+     * (TRIA_NO_GPU_SCORE), and -1 is truthy in C. A plain `if (use_gpu_scoring)`
+     * therefore wrongly enters this GPU upload (and the matching download below)
+     * on the forced-CPU path, clobbering the CPU-computed scores with the stale
+     * all-(-1e30) buffer uploaded here before scoring. */
+    if (use_gpu_scoring > 0) {
         if (rt->gpu_global_scores) {
             if (g_tria_backend.stats_free)
                 g_tria_backend.stats_free(rt->gpu_global_scores, NULL, NULL);
@@ -669,7 +674,7 @@ int tria_maybe_score(
         }
     }
 
-    if (use_gpu_scoring && rt->gpu_global_scores) {
+    if (use_gpu_scoring > 0 && rt->gpu_global_scores) {
         g_tria_backend.scores_download(rt->global_scores + score_start, rt->gpu_global_scores, n_new);
     }
 
