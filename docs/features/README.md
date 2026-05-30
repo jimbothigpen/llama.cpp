@@ -45,6 +45,15 @@ More IK sub-family docs are in progress — see the
 [IK quantization family primer](concepts/ik-quantization-family.md) for the full
 four-sub-family map.
 
+## Novel Model Architectures
+
+In-tree ports for hybrid model architectures not present in mainline llama.cpp.
+GGUF files produced from these converters load only in this fork.
+
+| Feature | Status | Architecture | Summary |
+|---|---|---|---|
+| [Zyphra ZAYA1-8B](zaya1.md) | Stable | `LLM_ARCH_ZAYA` | 8.4B hybrid MoE — 80 layers alternating CCA attention and 16-expert top-1 MoE; CPU/ROCm gfx1150/Vulkan RDNA3 validated |
+
 ## Adding a new doc
 
 1. Create `docs/features/<feature-name>.md` using the template in `turboquant-kv-base.md` as the exemplar.
