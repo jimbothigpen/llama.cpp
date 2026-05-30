@@ -506,6 +506,29 @@ int tria_maybe_score(
             }
         }
 
+        /* Hybrid mixed-head_dim guard (e.g. Gemma-4: SWA layers head_dim=256,
+         * full-attn layers head_dim=512). The calibration stats are single-head_dim
+         * (the SWA dim — see tria-gen), so layers whose captured K row matches neither
+         * the calibrated row (nkv*hd) nor its 128-padded form would be mis-strided by
+         * the freq decomposition / GPU kernel below. Skip them: their stats are
+         * uncalibrated anyway, so scoring is driven by the matching (SWA) layers.
+         * Non-hybrid models are unaffected (every layer matches). */
+        {
+            int64_t actual_row = k_tensor->ne[0];
+            int exp_row    = nkv * hd;
+            int exp_padded = nkv * (((hd + 127) / 128) * 128);
+            if (actual_row != exp_row && actual_row != exp_padded) {
+                static int s_warned_mixed = 0;
+                if (!s_warned_mixed) {
+                    s_warned_mixed = 1;
+                    fprintf(stderr, "tria_score: layer %d K row %lld != calibrated %d/%d "
+                            "(hybrid mixed head_dim) — skipping uncalibrated layers\n",
+                            li, (long long)actual_row, exp_row, exp_padded);
+                }
+                continue;
+            }
+        }
+
         /* GPU scoring path for q8_0: score directly on GPU, no CPU transfer */
         if (use_gpu_scoring && k_tensor->type == GGML_TYPE_Q8_0 && rt->gpu_omega) {
             float layer_weight = rt->stats->layer_budget_scales[li] / layer_weight_mean;

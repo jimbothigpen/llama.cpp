@@ -27,6 +27,7 @@ size_t            g_tria_capture_n = 0;
 
 void llama_tria_capture_alloc(
     void              * kv_ctx,
+    void              * kv_swa_ctx,
     ggml_backend_t      backend_cpu,
     int                 n_layer,
     std::vector<tria_kv_capture> & out_capture,
@@ -39,7 +40,8 @@ void llama_tria_capture_alloc(
 
     if (!kv_ctx || !backend_cpu || n_layer <= 0) return;
 
-    auto * kv = static_cast<llama_kv_cache *>(kv_ctx);
+    auto * kv     = static_cast<llama_kv_cache *>(kv_ctx);
+    auto * kv_swa = static_cast<llama_kv_cache *>(kv_swa_ctx);  /* nullptr for non-SWA models */
 
     /* Create a ggml context just big enough to hold all capture tensor metadata */
     const size_t overhead = ggml_tensor_overhead();
@@ -53,7 +55,16 @@ void llama_tria_capture_alloc(
 
     out_capture.resize(n_layer);
     for (int il = 0; il < n_layer; il++) {
-        ggml_tensor * k_tpl = kv->get_layer_k_raw(il);
+        /* Select the sub-cache that owns this layer. base holds non-SWA layers,
+         * swa holds SWA layers (the iswa filters partition them), so exactly one
+         * of base/swa returns a non-null template tensor per layer. For non-SWA
+         * models kv_swa is null and the base cache owns every layer. */
+        llama_kv_cache * src_kv = kv;
+        ggml_tensor    * k_tpl  = kv->get_layer_k_raw(il);
+        if (!k_tpl && kv_swa) {
+            ggml_tensor * k_swa = kv_swa->get_layer_k_raw(il);
+            if (k_swa) { src_kv = kv_swa; k_tpl = k_swa; }
+        }
         if (k_tpl) {
             out_capture[il].k_buffer = ggml_dup_tensor(tria_ctx, k_tpl);
             if (out_capture[il].k_buffer) {
@@ -62,9 +73,10 @@ void llama_tria_capture_alloc(
                 ggml_set_name(out_capture[il].k_buffer, name);
             }
         }
-        /* V capture: skip transposed V (non-flash-attn path uses transposed layout) */
-        ggml_tensor * v_tpl = kv->get_layer_v_raw(il);
-        if (v_tpl && !kv->get_v_trans()) {
+        /* V capture: skip transposed V (non-flash-attn path uses transposed layout).
+         * Use the SAME sub-cache picked for K above so dims stay consistent. */
+        ggml_tensor * v_tpl = src_kv->get_layer_v_raw(il);
+        if (v_tpl && !src_kv->get_v_trans()) {
             out_capture[il].v_buffer = ggml_dup_tensor(tria_ctx, v_tpl);
             if (out_capture[il].v_buffer) {
                 char name[GGML_MAX_NAME];

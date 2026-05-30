@@ -361,33 +361,50 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
+        // TriAttention needs SWA-layer K/V captured at cell==position alignment.
+        // The SWA cache only satisfies cell==position when it never wraps, i.e.
+        // full-size (swa_full). Force it when TriAttention is active so SWA-layer
+        // scores align with token positions. No-op for non-SWA models (no iswa cache).
+        bool swa_full_eff = params.swa_full;
+        if (g_tria_rt && !swa_full_eff && hparams.is_swa_any()) {
+            swa_full_eff = true;
+            LLAMA_LOG_INFO("%s: TriAttention active on a hybrid SWA model — forcing full-size SWA cache "
+                           "(swa_full) so SWA-layer capture aligns with token positions\n", __func__);
+        }
+
         llama_memory_params params_mem = {
             /*.type_k     =*/ params.type_k,
             /*.type_v     =*/ params.type_v,
             /*.type_k_swa =*/ params.type_k_swa == GGML_TYPE_COUNT ? params.type_k : params.type_k_swa,
             /*.type_v_swa =*/ params.type_v_swa == GGML_TYPE_COUNT ? params.type_v : params.type_v_swa,
-            /*.swa_full   =*/ params.swa_full,
+            /*.swa_full   =*/ swa_full_eff,
             /*.ctx_type   =*/ params.ctx_type,
             /*.oscar_residual_window =*/ params.oscar_residual_window,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
 
-        // TriAttention capture buffer init (Phase A)
+        // TriAttention capture buffer init (Phase A; Part 2: hybrid SWA support)
         if (memory && g_tria_rt) {
-            llama_kv_cache * kv = dynamic_cast<llama_kv_cache *>(memory.get());
+            llama_kv_cache * kv     = dynamic_cast<llama_kv_cache *>(memory.get());
+            llama_kv_cache * kv_swa = nullptr;  // SWA sub-cache for hybrid models
             if (!kv) {
                 auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
                 if (hybrid) kv = hybrid->get_mem_attn();
             }
             if (!kv) {
-                // llama_kv_cache_iswa doesn't inherit llama_kv_cache; use the base sub-cache
+                // llama_kv_cache_iswa doesn't inherit llama_kv_cache; the base sub-cache
+                // owns the non-SWA layers and the swa sub-cache owns the SWA layers.
+                // Pass both so capture buffers are allocated for every layer.
                 auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory.get());
-                if (iswa) kv = iswa->get_base();
+                if (iswa) {
+                    kv     = iswa->get_base();
+                    kv_swa = iswa->get_swa();
+                }
             }
             if (kv) {
                 llama_tria_capture_alloc(
-                    kv, backend_cpu, (int) model.hparams.n_layer,
+                    kv, kv_swa, backend_cpu, (int) model.hparams.n_layer,
                     tria_capture, &tria_capture_ctx, &tria_capture_buf);
                 if (!tria_capture.empty()) {
                     g_tria_capture   = tria_capture.data();

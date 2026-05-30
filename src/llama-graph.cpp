@@ -2608,6 +2608,35 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
 
+    // TriAttention in-graph K/V capture (Phase A harness; Part 2: hybrid SWA path).
+    // Mirrors the non-iswa build_attn capture (above): scatter k_cur/v_cur into the
+    // CPU-backed capture buffer for this layer using the SAME index tensors used to
+    // write the KV cache. For SWA layers we use the SWA idxs; the per-layer capture
+    // buffer was duped from the matching (base or swa) sub-cache tensor, and swa_full
+    // is forced under TriAttention so cell==position alignment holds for SWA layers.
+    if (g_tria_capture && il < (int) g_tria_capture_n) {
+        if (k_cur && g_tria_capture[il].k_buffer) {
+            const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
+            ggml_tensor * k_2d = ggml_view_2d(ctx0, k_cur,
+                k_cur->ne[0] * k_cur->ne[1], k_cur->ne[2], k_cur->nb[2], 0);
+            ggml_tensor * k_cap = g_tria_capture[il].k_buffer;
+            if (k_cap->ne[2] > 1) {
+                k_cap = ggml_reshape_2d(ctx0, k_cap, k_cap->ne[0], k_cap->ne[1] * k_cap->ne[2]);
+            }
+            ggml_build_forward_expand(gf, ggml_set_rows(ctx0, k_cap, k_2d, k_idxs));
+        }
+        if (v_cur && g_tria_capture[il].v_buffer) {
+            const auto & v_idxs = is_swa ? inp->get_v_idxs_swa() : inp->get_v_idxs();
+            ggml_tensor * v_2d = ggml_view_2d(ctx0, v_cur,
+                v_cur->ne[0] * v_cur->ne[1], v_cur->ne[2], v_cur->nb[2], 0);
+            ggml_tensor * v_cap = g_tria_capture[il].v_buffer;
+            if (v_cap->ne[2] > 1) {
+                v_cap = ggml_reshape_2d(ctx0, v_cap, v_cap->ne[0], v_cap->ne[1] * v_cap->ne[2]);
+            }
+            ggml_build_forward_expand(gf, ggml_set_rows(ctx0, v_cap, v_2d, v_idxs));
+        }
+    }
+
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
 
     ggml_tensor * q = q_cur;

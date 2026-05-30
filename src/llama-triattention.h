@@ -21,11 +21,17 @@ extern size_t            g_tria_capture_n;  /* == n_layer when set */
 
 /* Allocate per-layer capture buffers mirroring KV cache K/V tensors.
  * Called in llama_context constructor after KV cache is initialized.
- * kv_ctx: pointer to llama_kv_cache (via llama_get_memory cast)
+ * kv_ctx:     pointer to llama_kv_cache (via llama_get_memory cast). For a hybrid
+ *             sliding-window model this is the BASE (full-attention) sub-cache.
+ * kv_swa_ctx: pointer to the SWA sub-cache (llama_kv_cache*) for hybrid models,
+ *             or nullptr for non-SWA models. Per layer, the template tensor is
+ *             taken from whichever sub-cache owns that layer (base holds non-SWA
+ *             layers, swa holds SWA layers — the cache filters partition them).
  * backend_cpu: CPU backend to allocate on
  * n_layer: number of attention layers */
 void llama_tria_capture_alloc(
     void              * kv_ctx,
+    void              * kv_swa_ctx,
     ggml_backend_t      backend_cpu,
     int                 n_layer,
     std::vector<tria_kv_capture> & out_capture,

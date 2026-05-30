@@ -312,17 +312,38 @@ int main(int argc, char ** argv) {
      * don't carry this key fall back to n_embd / n_heads.  The fallback is
      * wrong for models where head_dim != hidden/n_heads (e.g. Qwen3-0.6B:
      * hidden=1024, n_heads=16 → fallback=64, but actual head_dim=128).
+     *
+     * Hybrid sliding-window models (e.g. Gemma-4) carry TWO head dims:
+     * "<arch>.attention.key_length" for full-attention layers and
+     * "<arch>.attention.key_length_swa" for the (majority) SWA layers. The
+     * TriAttention consumer is single-head_dim and validates against layer 0's
+     * captured K tensor, which on these models is an SWA layer. So when a
+     * "_swa" key is present we calibrate on the SWA dim: it matches layer 0 and
+     * the bulk of layers, and the Q-tensor collection filter below (ne[0] ==
+     * n_heads*head_dim) then matches the SWA layers' Q activations.
      */
     {
         char arch[128] = {};
         bool hd_from_meta = false;
         if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) >= 0) {
-            char key[256];
-            snprintf(key, sizeof(key), "%s.attention.key_length", arch);
             char val[64] = {};
-            if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
+            char key_swa[256];
+            snprintf(key_swa, sizeof(key_swa), "%s.attention.key_length_swa", arch);
+            if (llama_model_meta_val_str(model, key_swa, val, sizeof(val)) >= 0) {
                 long v = strtol(val, nullptr, 10);
-                if (v > 0) { acc.head_dim = (int32_t)v; hd_from_meta = true; }
+                if (v > 0) {
+                    acc.head_dim = (int32_t)v; hd_from_meta = true;
+                    fprintf(stderr, "tria-gen: hybrid SWA model — calibrating on SWA head_dim=%ld "
+                            "(matches layer 0 / majority of layers)\n", v);
+                }
+            }
+            if (!hd_from_meta) {
+                char key[256];
+                snprintf(key, sizeof(key), "%s.attention.key_length", arch);
+                if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
+                    long v = strtol(val, nullptr, 10);
+                    if (v > 0) { acc.head_dim = (int32_t)v; hd_from_meta = true; }
+                }
             }
         }
         if (!hd_from_meta) {

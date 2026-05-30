@@ -11,6 +11,7 @@
 
 #include "llama.h"
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-memory-hybrid.h"
 
 #include <algorithm>
@@ -29,6 +30,15 @@ static llama_kv_cache * get_kv(void * ctx_void) {
 
     auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
     if (hybrid) return hybrid->get_mem_attn();
+
+    // Hybrid sliding-window models (e.g. Gemma-4) use llama_kv_cache_iswa, which
+    // does NOT inherit llama_kv_cache. Return the base (full-attention) sub-cache:
+    // it holds the full token-position space and is the cache TriAttention scoring,
+    // position queries, and physical compaction operate over. SWA layers self-manage
+    // their sliding window; their K/V is captured only to enrich the per-token score
+    // (see llama_tria_capture_alloc).
+    auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
+    if (iswa) return iswa->get_base();
 
     return nullptr;
 }
