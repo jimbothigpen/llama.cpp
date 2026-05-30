@@ -9,11 +9,54 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `60ece65ca` (2026-05-30 — tria-gen TRIA calibration-stats generator landed; MTP Gemma4 §-FLAG-B landed; Qwen3.5 MTP converter converged to mainline; DFlash spec-decode feature doc added).
+HEAD: `7a18fcfe4` (2026-05-30 — imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
 
 In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture (GPU `score_q8_0` path gated off for GQA at `src/triattention-runtime.c:354`, CPU fallback active); full 40-cell spec-decode validation matrix (TODO 103).
 
 **MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port, TODO 148) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
+
+### Added — Imatrix collection for MTP/NextN draft-head layers (`--imat-mtp`) (2026-05-30)
+
+Port of mainline PR #23476: adds `--imat-mtp` flag to `llama-imatrix`. When set on a model with
+bundled NextN layers, creates a second `LLAMA_CONTEXT_TYPE_MTP` context and runs a forward pass
+through the draft head after each trunk batch, feeding `(token[p+1], h[p])` pairs via the pre-norm
+embedding interface. Enables importance-matrix quantization targeting for draft-head layers.
+Fork adaptations: flag renamed `--imat-mtp` (collision with deprecated `--mtp` CLI flag);
+uses fork's 3-arg `llama_set_embeddings_pre_norm` API; reuses existing `llama_model_n_nextn_layer`
+accessor (PR's new headers avoided). **Bug fix: null `mtp_batch.token` after free** (prevents
+double-free in cleanup paths before `llama_batch_free()`); shipped with imatrix port.
+
+### Added — Speed-bench harness for speculative-decode performance validation (2026-05-30)
+
+Adds benchmarking harness (`tools/server/bench/speed-bench/`) for systematic speculative-decode
+throughput measurement across draft strategies. Runs speculative-decode profile against a corpus,
+emits throughput (tokens/s) and accept-rate metrics. Serves TODO 103 (40-cell spec-decode
+validation matrix). Updated `docs/speculative.md` with speed-bench invocation examples.
+
+### Fixed — Suppress JSON schema grammar application during thinking blocks (2026-05-30)
+
+Port of buun `spiritbuun/buun-llama-cpp` commit `633a4f5d7`: fixes crash when `--json-schema-file`
+is used with a thinking model (Qwen3.5/3.6). The chat template prepends thinking tokens
+(e.g., `<think>…</think>`), which JSON schema grammar rejects, causing sampler-init failure.
+
+Three changes to `common/sampling.cpp`:
+1. Skip grammar prefill for `OUTPUT_FORMAT` when reasoning budget is active.
+2. Force-create reasoning-budget sampler for `OUTPUT_FORMAT` grammars (state tracking required).
+3. Suppress grammar enforcement during active thinking blocks; resume after `</think>`.
+
+Smoke: pre-fix reproduces crash (`"Failed to initialize samplers: std::exception"`);
+post-fix clean exit with valid JSON output, thinking block passes through correctly.
+
+### Added — iGPU performance warning for MTP spec-decode (2026-05-30)
+
+MTP spec-decode is a measured net-slowdown on integrated GPUs (0.54x at default n_max=3;
+even n_max=1 with 100% accept stays below pure decode — inherent per-`llama_decode` launch overhead
+dominates). Adds startup warning when MTP is enabled on iGPU-detected systems:
+- Adds `ggml_backend_cuda_device_is_igpu(int device)` to `ggml-cuda.h/cu`: checks HIP device
+  integrated property + gfx arch match (gfx1103/gfx1150 belt-and-suspenders detection).
+- Calls `mtp_warn_igpu_once()` from MTP impl constructors; warning fires once per init, not per-cycle.
+- Explicit `--spec-type mtp` / `--mtp` never blocked; warning is informational only.
+Rationale: iGPU adoption tracking + user-facing guidance until GPU ring-buffer optimization lands.
 
 ### Changed — Qwen3.5/3.6 MTP converter converged to mainline; `--mtp` split-export restored (2026-05-30)
 

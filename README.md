@@ -473,6 +473,13 @@ gate — correctness is verified by output coherence plus accept rate.
 666 LoC) has no mainline equivalent and is kept as a deliberate divergence per
 `conventions/port-fidelity-to-mainline-llamacpp.md §D1`.
 
+**iGPU performance note (2026-05-30):** MTP speculative decoding is a measured net-slowdown
+on integrated GPUs (0.54× at default `n_max=3`; even `n_max=1` with 100% accept stays below pure
+decode). The per-`llama_decode` launch overhead dominates performance. When MTP is auto-enabled on
+iGPU-detected systems, a startup warning is emitted (applies to Ryzen APUs gfx1150/gfx1103). The
+warning is informational — explicit `--spec-type mtp` is never blocked. iGPU ring-buffer optimization
+is queued post-Phase-2 to recover throughput.
+
 **MTP Migration (phases 0-3, 2026-05-23):** The fork's MTP speculative driver, Qwen3.5/MoE
 loader, and graph-builder have been migrated to align with mainline b9246 architecture:
 Phase 0 (preflight recon), Phase 1 (arch constants + server loader to LLAMA_CONTEXT_TYPE_MTP),
@@ -485,6 +492,17 @@ missing the `common_speculative_process(spec, batch_tgt)` call after target deco
 the server already had it but the standalone binary did not. Without it, the MTP head's
 `pending_h` stayed zeroed and drafts were garbage. Adding the call lifted acceptance on
 Qwen3.5-35B-A3B-MTP from 38% → 70.28% (mainline anchor: 71.3%). Throughput: +45% e2e.
+
+**imatrix quantization for MTP draft heads (`--imat-mtp`) (2026-05-30):** Port of mainline PR #23476.
+Adds `--imat-mtp` flag to `llama-imatrix` for collecting importance matrices on MTP/NextN draft-head
+layers. When set on a model with bundled NextN layers, runs a forward pass through the draft head
+after each trunk batch and records activation statistics. Enables importance-aware quantization of
+MTP layers for deployment. Example:
+```bash
+llama-imatrix -m Qwen3.5-9B-MTP-F16.gguf -f calibration.txt -o imatrix.dat --imat-mtp
+llama-quantize --imatrix imatrix.dat \
+    Qwen3.5-9B-MTP-F16.gguf Qwen3.5-9B-MTP-Q4_K.gguf Q4_K_M
+```
 
 ---
 
