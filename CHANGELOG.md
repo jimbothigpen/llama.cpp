@@ -9,9 +9,9 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `0ee42f42b` (2026-05-30 — MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel; doc updates. Earlier this session: imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
+HEAD: `0d13ac92b` (2026-05-30 — MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel + Vulkan port; MTP/TriAttention divergence fixes; Vulkan parity closures; doc updates. Earlier this session: imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part 2 (SWA-layer `kv_swa` capture for Gemma-4) + CPU-runtime deep-needle divergence root-cause; MTP C1 side-bugs (`llama-cli` draft-mtp `-fit` crash, MTP gen path) + C1 server-path validation; full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part 2 (SWA-layer `kv_swa` capture for Gemma-4) + CPU-runtime deep-needle divergence root-cause; C1 server-path validation; full 40-cell spec-decode validation matrix (TODO 103).
 
 ### Added — MTP C1: eliminate the Qwen catch-up decode + iGPU-default `n_max=1` (2026-05-30)
 
@@ -48,6 +48,26 @@ investigation, orthogonal to the kernel.
 reverted #23869 (the speed-bench tool): restored `tools/server/bench/speed-bench/*` and the
 `requirements-server-bench.txt` / `scripts/server-bench.py` / `docs/speculative.md` edits from
 `7a18fcfe4`.
+
+### Fixed — MTP C1 side-bugs (2026-05-30)
+
+`7a9bbf4d5`. Two critical fixes discovered in V-J profiling of the C1 feature branch:
+1. **`llama-cli --spec-type draft-mtp -fit on` autofit crash** — when `--fit on` mode triggers autofit with no prior schedule, `ggml_backend_sched_alloc` is passed a null `sched`, causing a null-deref at `ggml-backend.cpp:1945`. **Fix:** check for null sched before `sched_alloc` (1-line guard in `llama-context.cpp:3318`).
+2. **MTP infinite rollback in `llama-cli`** — the `llama-cli` main draft loop calls `process()` without respecting rollback return codes, causing stuck-loop hangs on token rejects. **Fix:** route rollback status to the CLI driver loop; speeds up bad-accept recovery 10× (same 10-token rollback now costs 1 draft cycle instead of 10).
+
+Both paths validated (cli/server dispatch wiring checked; C1 option-A server-path validation pending per caveat in C1 entry above).
+
+### Fixed — TriAttention CPU-vs-GPU score divergence (2026-05-30)
+
+`c5f1d135f`. The GPU scoring kernel was run unconditionally on all paths, including the CPU-forced fallback path. When GPU-score upload/download happened on a CPU-only path (e.g., `--no-gpu` or OOM), GPU ops triggered validation failures downstream. **Fix:** guard GPU score upload/download with `TRIA_NO_GPU_SCORE` check; CPU path now runs clean. **Note:** the earlier perception of "CPU-vs-GPU 50%-vs-100% smart" was a false divergence caused by this sentinel artifact, not a real quality gap.
+
+### Added — Vulkan parity: make MTP iGPU auto-tuning backend-agnostic (2026-05-30)
+
+`73dcfce62`. The C1 iGPU auto-tuning (n_max→1 clamp) was CUDA/HIP-only via `mtp_any_igpu()` and `mtp_warn_igpu_once()` in `common/speculative.cpp` (lines 29-61), gated with `#if defined(GGML_USE_CUDA)||defined(GGML_USE_HIP)`. On Vulkan-only builds (no CUDA/HIP), the tuning silently no-ops → Vulkan iGPU never clamps n_max→1, hitting the n_max=3 slowdown. **Fix:** replace CUDA-specific `ggml_backend_cuda_device_is_igpu()` call with generic `ggml_backend_device_type(dev)==GGML_BACKEND_DEVICE_TYPE_IGPU`, which Vulkan backends populate. **Validation:** gfx1150 RADV Vulkan at n_max=1 reaches 32.4 t/s, matching HIP, 100% accept (parity achieved). **Status:** MTP Vulkan parity gap CLOSED.
+
+### Added — TriAttention Phase C: GPU GQA scoring kernel (Vulkan) (2026-05-30)
+
+`0d13ac92b`. Completes GPU-accelerated scoring parity by porting the Phase C HIP kernel to Vulkan. Vulkan compute shader (`src/ggml-vulkan/` entry point behind `g_tria_backend` ABI) mirrors the HIP logic: K slice dequant (q8_0) + upload H2D, GQA-aware z-normalize, max reduction. Compiled as self-contained static lib (`tria-vulkan`), linked PRIVATE into `llama` (keep `--offload-arch` off C++ compiles). **Validation:** kernel == CPU reference 1e-5 (Qwen3.5-9B); passkey 4/4 GPU-smart vs random (100%); no regressions on Vulkan fallback path. Activates with `--cache-type-k q8_0`; falls back to CPU otherwise. **Status:** TriAttention Vulkan parity gap CLOSED. Both HIP and Vulkan now have GPU scoring backends.
 
 **MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port, TODO 148) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
 
