@@ -11,7 +11,40 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 HEAD: `d738c4341` (2026-05-29 — IK row-meta weight quants doc added; IQ3_KT landed prior; IQ2_KL phase fix landed).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); **MTP Gemma4 §-FLAG-B fix** (commit `96b487c1c`) — address=0% accept regression on bundled-MTP Gemma4 models due to "mtp." tensor rename happening BEFORE load_all_data (causing name-keyed weight lookup miss); fix validated accept 33.9-61.8%, land pending on convergence bridge branch `feat/mtp-gemma4-guided-port-2026-05-29`; MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) pending.
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); **MTP Gemma4 §-FLAG-B** — ✅ VALIDATED, LANDING-PENDING-APPROVAL on branch `feat/mtp-gemma4-guided-port-2026-05-29` (rebased onto `main`); end-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) integrated on this branch.
+
+### Fixed — MTP Gemma4 §-FLAG-B: end-to-end external-assistant speculative decode (2026-05-30)
+
+Gemma4 Multi-Token Prediction (PR #23398 guided port, TODO 148) now drafts correctly
+end-to-end for the external-assistant path (Gemma4-26B-A4B-it target + `gemma4-assistant`
+drafter). Validated **coherent at 47.3% accept** (`n_drafted=112 n_accept=53`, `--temp 0`,
+ROCm gfx1150, `llama-speculative-simple --spec-type draft-mtp`), near the upstream PR #23398
+CUDA reference of 0.588. The bundled-MTP qwen3.5 path is unaffected (regression-guard re-run:
+coherent, 63.4% accept).
+
+Three ordering/materialization fixes were required, on top of the port:
+
+- **Draft weights materialized** (`fix(mtp): materialize gemma4-assistant draft weights — move
+  "mtp." rename after load`) — the `"mtp."` tensor rename ran *before* `load_all_data`, so the
+  name-keyed weight lookup missed and the draft head read all-zero on GPU → all-`NaN` logits →
+  0% accept (every draft token `<unused2>`). Renaming after load materializes the weights.
+- **External-draft context typed MTP** (`fix(mtp): type external-draft context MTP in
+  speculative-simple`) — the `speculative-simple` external-draft path did not set
+  `cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP`, aborting at `gemma4-assistant.cpp` construction
+  (`GGML_ASSERT(src_mctx)`).
+- **Speculator init hoisted** (`fix(mtp): hoist common_speculative_init before first draft
+  decode`) — `common_speculative_init` (which calls `llama_set_mtp_source`) ran *after* the
+  first draft decode probe, so the draft decoded before its MTP source was wired. Hoisting it
+  before the first draft decode fixes the ordering.
+
+**Harness note (important usage caveat):** `speculative-simple` applies **no chat template** —
+it tokenizes `params.prompt` raw. Instruction-tuned targets (Gemma4-26B-A4B-**it**) therefore
+require a **chat-templated prompt** (e.g. `<|turn>user … <|turn>model\n<|channel>thought\n<channel|>`);
+a raw instruction yields degenerate target output (and the draft trivially agrees on the garbage,
+inflating accept%). Base/completion or raw-tolerant models (qwen3.5) are unaffected. This was the
+sole cause of the earlier "gemma4 output-degenerate" symptom — it was a smoke-harness prompt-format
+bug, not an MTP/graph/conversion defect. A `--jinja`/chat-template option for `speculative-simple`
+is a possible future hardening (out of scope here).
 
 ### Added — IQ3_KT: 3-bit trellis-coded quantization (2026-05-29, `623835cc9`)
 
