@@ -458,10 +458,11 @@ llama-server -m Gemma4-26B-A4B-it-IQ4_XS.gguf \
     --spec-type mtp --parallel 1 --no-mmap -fa on -ngl 999 -ngld 999 -c 4096
 ```
 
-Smoke-verified draft acceptance: ~89% on Qwen3.5-4B-MTP (internal), 85–89%
-on Gemma 4 26B-A4B (external; ROCm + Vulkan). MTP changes the decode path,
-not the output distribution, so there is no PPL gate — correctness is
-verified by output coherence plus accept rate.
+Validated draft acceptance: 47.3% on Gemma 4 26B-A4B-it external-assistant
+(`n_drafted=112 n_accept=53`, `--temp 0`, chat-templated, ROCm gfx1150;
+upstream PR #23398 CUDA reference: 58.8%); bundled-MTP qwen3.5 path: 63.4%.
+MTP changes the decode path, not the output distribution, so there is no PPL
+gate — correctness is verified by output coherence plus accept rate.
 
 **CLI binaries:** Speculative MTP decoding requires an MTP-aware binary.
 - `llama-server --spec-type mtp` (shown above) triggers MTP speculative.
@@ -489,7 +490,7 @@ Qwen3.5-35B-A3B-MTP from 38% → 70.28% (mainline anchor: 71.3%). Throughput: +4
 
 ### Nemotron-Labs Diffusion (NLD) — CLI + server self-spec
 
-Nemotron-Labs Diffusion 14B (`LLM_ARCH_DREAM`) — a masked diffusion LLM that
+`LLM_ARCH_DREAM` (Dream diffusion arch — Dream 7B / NVIDIA Nemotron-Labs-Diffusion 3B/8B/14B) — a masked diffusion LLM that
 generates tokens by iterative block-wise refinement (fill-in-the-blank at masked
 positions). Ported from buun `f339dbebe` (TODO 80: CLI Tier-B port, `49f88e18a`;
 TODO 86: server self-spec loop, `1cb8c4218`).
