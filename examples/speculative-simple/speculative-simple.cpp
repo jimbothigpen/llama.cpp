@@ -125,6 +125,15 @@ int main(int argc, char ** argv) {
         params.speculative.draft.ctx_dft = ctx_dft.get();
     }
 
+    // Init the speculator BEFORE any draft-context decode (§-FLAG-B ordering fix).
+    // common_speculative_init wires the MTP source (llama_set_mtp_source) and
+    // embeddings_pre_norm onto ctx_dft.  The first draft decode happens just below at the
+    // common_context_can_seq_rm probe (and again at the prompt-eval decode further down); for an
+    // MTP-typed draft context that lazy graph_reserve asserts on a missing MTP source unless the
+    // source is wired first.  Its only prerequisites are params.speculative.draft.ctx_tgt/ctx_dft,
+    // both set just above.  common_speculative_begin stays below — it needs prompt_tgt.
+    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
+
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
     const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
@@ -186,11 +195,9 @@ int main(int argc, char ** argv) {
 
     int n_past = inp.size() - 1;
 
-    // init the speculator
     const auto & params_spec = params.speculative;
 
-    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
-
+    // spec was initialized above (before the first draft decode); begin needs prompt_tgt (built above)
     common_speculative_begin(spec, seq_id, prompt_tgt);
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
