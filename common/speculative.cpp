@@ -431,6 +431,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     int64_t n_embd;        // EAGLE3 hidden dim
     int64_t fc_input_size; // n_aux_layers × n_embd_tgt
 
+    // draft-to-target vocab remap; empty when vocabs are identical
+    std::vector<llama_token> d2t_map;
+
     common_speculative_impl_draft_eagle3(const common_params_speculative & sparams, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
         , params(sparams.draft)
@@ -469,8 +472,16 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         int64_t fc_in = llama_model_eagle3_get_fc_weight(model_eagle3, fc_weight_f32.data(), n_elements);
         GGML_ASSERT(fc_in == fc_input_size && "eagle3 fc.weight dimension mismatch");
 
-        LOG_INF("%s: EAGLE3 initialized (n_embd=%lld, fc_in=%lld, n_aux=%d)\n",
-                __func__, (long long)n_embd, (long long)fc_input_size, n_aux);
+        // Load optional draft-to-target vocab remap
+        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model_eagle3));
+        d2t_map.resize(n_vocab);
+        if (llama_model_eagle3_get_d2t(model_eagle3, d2t_map.data(), n_vocab) != n_vocab) {
+            d2t_map.clear(); // tensor absent or unsupported type — no remap
+        }
+
+        LOG_INF("%s: EAGLE3 initialized (n_embd=%lld, fc_in=%lld, n_aux=%d, d2t=%s)\n",
+                __func__, (long long)n_embd, (long long)fc_input_size, n_aux,
+                d2t_map.empty() ? "none" : "present");
     }
 
     ~common_speculative_impl_draft_eagle3() override {
@@ -552,7 +563,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 const llama_token id = cur_p->data[0].id;
 
                 common_sampler_accept(smpl, id, true);
-                dp.result->push_back(id);
+                dp.result->push_back(d2t_map.empty() ? id : d2t_map[id]);
 
                 if (params.n_max <= (int) dp.result->size()) break;
                 if (cur_p->data[0].p < params.p_min)          break;

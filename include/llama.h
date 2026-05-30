@@ -1058,6 +1058,13 @@ extern "C" {
                                float * buf,
                              int64_t   buf_size);
 
+    // EAGLE3 model info: copy d2t (draft-to-target vocab remap) to host int32 buffer.
+    // buf must hold n_vocab int32 entries. Returns n_vocab on success, 0 if tensor absent or wrong type.
+    LLAMA_API int64_t llama_model_eagle3_get_d2t(
+            const struct llama_model * model,
+                             int32_t * buf,
+                             int64_t   buf_size);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 

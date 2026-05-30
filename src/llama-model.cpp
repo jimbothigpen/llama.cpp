@@ -2694,6 +2694,18 @@ int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float
     return fc_input_size;
 }
 
+int64_t llama_model_eagle3_get_d2t(const struct llama_model * model, int32_t * buf, int64_t buf_size) {
+    if (!model || model->arch != LLM_ARCH_EAGLE3 || !model->d2t) {
+        return 0;
+    }
+    const int64_t n = ggml_nelements(model->d2t);
+    if (buf_size < n || model->d2t->type != GGML_TYPE_I32) {
+        return 0;
+    }
+    ggml_backend_tensor_get(model->d2t, buf, 0, n * sizeof(int32_t));
+    return n;
+}
+
 //
 // DFlash drafter model public API
 //

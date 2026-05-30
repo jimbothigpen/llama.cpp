@@ -128,10 +128,11 @@ llama_model_eagle3::graph_decode::graph_decode(const llama_model & model, const 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
@@ -148,10 +149,14 @@ llama_model_eagle3::graph_decode::graph_decode(const llama_model & model, const 
         if (il == n_layer - 1 && inp_out_ids) {
             cur    = ggml_get_rows(ctx0, cur,    inp_out_ids);
             g_embd = ggml_get_rows(ctx0, g_embd, inp_out_ids);
+            if (hparams.eagle3_norm_before_residual) {
+                g_embd_norm = ggml_get_rows(ctx0, g_embd_norm, inp_out_ids);
+            }
         }
 
-        // 5. residual on g_embeddings (not on concat input)
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, g_embd);
+        // 5. residual on g_embeddings; norm_before_residual uses g_embd_norm as the skip connection
+        ggml_tensor * residual = hparams.eagle3_norm_before_residual ? g_embd_norm : g_embd;
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, residual);
         cb(ffn_inp, "ffn_inp", il);
 
         // 6. FFN with pre-norm
