@@ -546,8 +546,15 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             // Seed decoder with g_embd from FC and last target token
             llama_set_eagle3_g_embeddings(ctx_dft, g_embd.data(), 1);
 
+            // The EAGLE3 draft KV is stateless per iteration — the driver rolls it back
+            // to the prompt checkpoint each cycle and accepted tokens are never decoded
+            // into it, so seq_pos_max stays pinned at prompt-end while dp.n_past grows.
+            // Anchor the batch to the drafter's own KV (mirrors DFlash commit 003ecc2d1);
+            // using dp.n_past trips llama_batch_allocr::init()'s Y=X+1 check from cycle 2.
+            const llama_pos dft_pos0 = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+
             common_batch_clear(batch);
-            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+            common_batch_add(batch, dp.id_last, dft_pos0, { seq_id }, true);
 
             if (llama_decode(ctx_dft, batch) != 0) {
                 LOG_WRN("%s: eagle3 decoder failed (seq=%d)\n", __func__, (int) seq_id);
@@ -577,7 +584,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 llama_set_eagle3_g_embeddings(ctx_dft, embd, 1);
 
                 common_batch_clear(batch);
-                common_batch_add(batch, id, dp.n_past + 1 + i, { seq_id }, true);
+                common_batch_add(batch, id, dft_pos0 + 1 + i, { seq_id }, true);
 
                 if (llama_decode(ctx_dft, batch) != 0) {
                     LOG_WRN("%s: eagle3 decoder failed at step %d\n", __func__, i);
