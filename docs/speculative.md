@@ -414,3 +414,10 @@ The DFlash S1 drafter model architecture and GGUF loader are ported from buun
 integration path requires a DFlash S1 drafter GGUF (not yet publicly available
 from z-lab or community sources). Full revival unblocked further by this port —
 remaining gate is drafter GGUF sourcing.
+
+---
+
+## Benchmarking
+
+To measure the end-to-end effect of speculative decoding (throughput, latency, and draft acceptance) across diverse prompts, see the SPEED-Bench client in [tools/server/bench/speed-bench](../tools/server/bench/speed-bench/README.md).
+It runs against a running `llama-server` and can compare a baseline run against a speculative-decoding run.
