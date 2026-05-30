@@ -54,6 +54,14 @@ GGUF files produced from these converters load only in this fork.
 |---|---|---|---|
 | [Zyphra ZAYA1-8B](zaya1.md) | Stable | `LLM_ARCH_ZAYA` | 8.4B hybrid MoE — 80 layers alternating CCA attention and 16-expert top-1 MoE; CPU/ROCm gfx1150/Vulkan RDNA3 validated |
 
+## Speculative Decode
+
+Faster inference via draft-and-verify strategies. Each entry describes its own trigger mechanism — check the doc for whether it uses `--spec-type` or a model-specific flag.
+
+| Feature | Status | Models | Summary |
+|---|---|---|---|
+| [NLD diffusion self-spec](nld-diffusion-self-spec.md) | Stable | Dream / LLaDA / LLaDA-MoE / RND1 | Bidirectional draft + causal verify on shared KV; ~3.7× over block-mode; CLI flag `--diffusion-self-spec`; server auto-detects |
+
 ## Adding a new doc
 
 1. Create `docs/features/<feature-name>.md` using the template in `turboquant-kv-base.md` as the exemplar.
