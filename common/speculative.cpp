@@ -1933,16 +1933,29 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
 
             const int64_t t0 = ggml_time_us();
 
-            int cross_len = build_cross_data(ctx_dft);
+            // build_cross_data injects the target-hidden ring into the drafter context via
+            // llama_set_cross_data (side effect); its return value (the cross-attention ring
+            // length) must NOT be used to position the drafter batch — see below.
+            build_cross_data(ctx_dft);
 
             const int64_t t1 = ggml_time_us();
+
+            // Drafter batch position must follow the drafter context's *own* KV, not the cross
+            // length. The cross-attention ring grows by (n_accepted+1) every iteration as target
+            // hiddens are committed (append_target_hiddens), but the drafter context is stateless
+            // per iteration: speculative-simple trims it back to the prompt checkpoint each round,
+            // so its last KV position stays put. Positioning the batch at the ring length only
+            // coincides with the drafter KV on the first iteration; thereafter it exceeds kv_pos+1
+            // and llama_batch_allocr::init() rejects the batch (Y = X+1 violated), so every draft
+            // decode after the first fails. Anchor the batch to the drafter KV instead.
+            const llama_pos dft_pos0 = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), sid) + 1;
 
             // Build drafter batch: [id_last, mask, mask, ..., mask]
             const int batch_len = n_draft + 1;
             common_batch_clear(batch_dft);
-            common_batch_add(batch_dft, id_last,       cross_len,     { sid }, true);
+            common_batch_add(batch_dft, id_last,       dft_pos0,     { sid }, true);
             for (int i = 1; i < batch_len; ++i) {
-                common_batch_add(batch_dft, mask_token_id, cross_len + i, { sid }, true);
+                common_batch_add(batch_dft, mask_token_id, dft_pos0 + i, { sid }, true);
             }
 
             const int64_t t2 = ggml_time_us();
