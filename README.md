@@ -561,7 +561,7 @@ llama-server --spec-type dflash -m target.gguf -md dflash-draft.gguf \
 
 **Known limitations (open):**
 
-- `--spec-type dflash` with `-md` also activates draft-simple — measured 33.3% combined accept; isolated DFlash-only accept-rate unmeasured (estimated ≥60% if dual-spec disabled).
+- Dual-spec auto-enable suppressed as of `06d570ab5` (`common/speculative.cpp:2389-2392`); `--spec-type dflash` now runs DFlash alone. Solo accept-rate measurement pending: a KV-position tracking bug in `capture_target_hiddens()` (hidden-state buffer accumulates tokens from the `common_context_can_seq_rm` test decode, causing a ±2-token position offset in the DFlash draft batch) prevents a clean measurement with the current binary. The old 33.3% figure was dual-spec (DFlash + draft-simple combined) and is obsolete.
 - Gemma-4 DFlash converter path exists but is not yet smoke-tested (z-lab Gemma-4 directory missing tokenizer files at last check).
 - Build must be ≥ `2726a56c0` (`mask_token_id` type fix is required to load any z-lab DFlash drafter).
 
