@@ -473,12 +473,16 @@ gate — correctness is verified by output coherence plus accept rate.
 666 LoC) has no mainline equivalent and is kept as a deliberate divergence per
 `conventions/port-fidelity-to-mainline-llamacpp.md §D1`.
 
-**iGPU performance note (2026-05-30):** MTP speculative decoding is a measured net-slowdown
-on integrated GPUs (0.54× at default `n_max=3`; even `n_max=1` with 100% accept stays below pure
-decode). The per-`llama_decode` launch overhead dominates performance. When MTP is auto-enabled on
-iGPU-detected systems, a startup warning is emitted (applies to Ryzen APUs gfx1150/gfx1103). The
-warning is informational — explicit `--spec-type mtp` is never blocked. iGPU ring-buffer optimization
-is queued post-Phase-2 to recover throughput.
+**iGPU performance note (2026-05-30, updated post-C1):** with the **C1 optimization** (defer+batch
+the Qwen catch-up decode into the next cycle's lead draft — eliminates one `llama_decode` per cycle)
+plus an **iGPU-default of `n_max=1`**, MTP speculative decoding is now a measured **speedup on
+integrated GPUs: ~1.16× pure decode** (32.4 vs 28.0 t/s @ 100% accept, Qwen3.5-35B-A3B-MTP-IQ4_XS on
+gfx1150). `n_max≥2` remains a net-slowdown — the per-`llama_decode` launch overhead dominates once
+multiple draft decodes stack — which is why iGPU-detected systems auto-clamp `n_max` to 1 (Ryzen APUs
+gfx1150/gfx1103); override with `--spec-draft-n-max`. The startup warning is now informational/tuning
+guidance, not a discouragement, and explicit `--spec-type mtp` is never blocked. (Pre-C1, MTP was
+0.54× at the old `n_max=3` default.) See `docs/development/mtp-igpu-perf-2026-05-30.md` for the full
+table. C1 server-path wiring is CLI-validated only — validate before enabling C1 in the server.
 
 **MTP Migration (phases 0-3, 2026-05-23):** The fork's MTP speculative driver, Qwen3.5/MoE
 loader, and graph-builder have been migrated to align with mainline b9246 architecture:

@@ -9,9 +9,45 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `7a18fcfe4` (2026-05-30 — imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
+HEAD: `0ee42f42b` (2026-05-30 — MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel; doc updates. Earlier this session: imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture (GPU `score_q8_0` path gated off for GQA at `src/triattention-runtime.c:354`, CPU fallback active); full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part 2 (SWA-layer `kv_swa` capture for Gemma-4) + CPU-runtime deep-needle divergence root-cause; MTP C1 side-bugs (`llama-cli` draft-mtp `-fit` crash, MTP gen path) + C1 server-path validation; full 40-cell spec-decode validation matrix (TODO 103).
+
+### Added — MTP C1: eliminate the Qwen catch-up decode + iGPU-default `n_max=1` (2026-05-30)
+
+`54bd1e120`. Driver-only change to `common_speculative_impl_draft_mtp` (`common/speculative.cpp`):
+the per-cycle Qwen catch-up `llama_decode(ctx_dft)` is removed; instead `process()` stashes the
+verified committed span (tokens + pre-norm h-feeds) and the next `draft()` prepends it KV-only
+(logits off) before the lead token, so one decode writes both the catch-up KV and the lead
+(**−1 `llama_decode`/cycle**). Plus iGPU auto-clamp of `n_max` to 1 (`common.h` `n_max_set`,
+`arg.cpp`). Bug fixed mid-gate: after the KV-only prefix the lead token is off batch index 0, so
+chain sampling tracked the lead's true batch index (`lead_ibatch`) to fix a `sampling.cpp`
+`GGML_ASSERT(logits)`. **Gate (gfx1150, Qwen3.5-35B-A3B-MTP-IQ4_XS): ON C1 `n_max=1` = 32.4 t/s /
+100% accept = 1.16× pure decode (28.0)** — the MTP V-J net-slowdown is resolved for the iGPU-default
+config. PPL identical-by-construction (perplexity never invokes the spec path). Option-A iGPU warning
+reworded from "net-slowdown, don't use" → tuning guidance. **Caveat:** C1 server-path wiring is
+CLI-validated only — validate before enabling C1 in the server.
+
+### Added — TriAttention Phase C: GPU GQA scoring kernel (HIP) (2026-05-30)
+
+`51a64b43c` + `88f94232c`. Activates the dormant `triattention-hip.hip` (never previously compiled
+upstream): fixes host-vs-device K pointer (uploads the scored q8_0 K slice H2D internally) and adds
+GQA aggregation for `nh != nkv` (mirrors the CPU reference: per-query-head z-normalize → max across
+the KV head's query heads → z-normalize + layer-weight → max into `global_scores`), removing the old
+`nh==nkv` gate. Compiled as an isolated `tria-hip` HIP static lib linked PRIVATE into `llama` (keeps
+`--offload-arch` off the host C++ compiles). Validated: kernel == CPU reference to 1e-5 at Qwen3-8B
+scale (keep-set 100%); passkey/needle on GPU = 12/12 (100%) vs random 17%. Activates with
+`--cache-type-k q8_0`; falls back to CPU otherwise; skips `nonrot_dim>0` models. **Part 2 (SWA-layer
+`kv_swa` capture) is a follow-on.** Known: end-to-end the GPU path (100%) beats the current
+CPU-runtime path (50%) on deep needles — a pre-existing CPU-integration quality issue under
+investigation, orthogonal to the kernel.
+
+### Fixed — restore #23869 speed-bench files dropped by a stale-based merge (2026-05-30)
+
+`009e4f427`. The C1 feature branch was based on a pre-#23869 `main`, so FF-merging it silently
+reverted #23869 (the speed-bench tool): restored `tools/server/bench/speed-bench/*` and the
+`requirements-server-bench.txt` / `scripts/server-bench.py` / `docs/speculative.md` edits from
+`7a18fcfe4`.
 
 **MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port, TODO 148) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
 
