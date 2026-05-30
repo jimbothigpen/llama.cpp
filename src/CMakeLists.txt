@@ -63,6 +63,31 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+# TriAttention Phase C: GPU GQA scoring kernel (HIP).
+# Compiled only for ROCm/HIP builds; enables the TRIA_HIP_BACKEND path in
+# triattention-backend.c so g_tria_backend resolves to the real GPU kernels.
+if (GGML_HIP)
+    # Mirror ggml-hip's GPU target -> HIP architecture mapping (subdirectory-local).
+    if (AMDGPU_TARGETS AND NOT GPU_TARGETS)
+        set(GPU_TARGETS ${AMDGPU_TARGETS})
+    endif()
+    if (GPU_TARGETS AND NOT CMAKE_HIP_ARCHITECTURES)
+        set(CMAKE_HIP_ARCHITECTURES ${GPU_TARGETS})
+    endif()
+    enable_language(HIP)
+    find_package(hip REQUIRED)
+    set_source_files_properties(triattention-hip.hip PROPERTIES LANGUAGE HIP)
+    target_sources(llama PRIVATE triattention-hip.hip triattention-hip.h)
+    target_compile_definitions(llama PRIVATE TRIA_HIP_BACKEND)
+    target_link_libraries(llama PRIVATE hip::device)
+    # The llama target was created before this block, so it did not inherit a
+    # HIP architecture. Set it explicitly (required once a HIP source is added).
+    if (NOT CMAKE_HIP_ARCHITECTURES)
+        set(CMAKE_HIP_ARCHITECTURES ${GPU_TARGETS})
+    endif()
+    set_target_properties(llama PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

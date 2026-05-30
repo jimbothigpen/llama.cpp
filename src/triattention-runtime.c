@@ -140,6 +140,8 @@ void tria_runtime_free(struct tria_runtime * rt) {
     /* Free GPU scoring stats */
     if (g_tria_backend.stats_free) {
         g_tria_backend.stats_free(rt->gpu_omega, rt->gpu_q_mean_real, rt->gpu_q_mean_imag);
+        if (rt->gpu_q_abs_mean)
+            g_tria_backend.stats_free(rt->gpu_q_abs_mean, NULL, NULL);
         if (rt->gpu_global_scores)
             g_tria_backend.stats_free(rt->gpu_global_scores, NULL, NULL);
     }
@@ -351,56 +353,69 @@ int tria_maybe_score(
         if (score_stride < 1) score_stride = 1;
 
         /* GPU scoring path: use for q8_0 if GPU stats are available.
-         * Disabled for GQA models (nh != nkv) — GPU kernel doesn't aggregate
-         * across query heads correctly. Falls back to CPU path which does
-         * proper per-query-head z-normalize + max aggregation (eq 12-13). */
-        int nh = rt->stats->num_heads;
+         * Phase C: the kernel aggregates query heads for GQA (nh != nkv), so the
+         * old nh==nkv restriction is gone. Non-rotary models (nonrot_dim>0) still
+         * fall back to CPU because the GPU kernel does not implement the content
+         * (non-rotary) term — see triattention-hip.hip. */
+        int nh  = rt->stats->num_heads;
+        int ndr = rt->stats->nonrot_dim;
         {
             static int s_logged_gate = 0;
             if (!s_logged_gate) {
                 const char * reason = "eligible";
                 if (use_gpu_scoring < 0)            reason = "disabled by TRIA_NO_GPU_SCORE";
                 else if (!is_q8_0)                  reason = "K cache not Q8_0 (need --cache-type-k q8_0)";
-                else if (nh != nkv)                 reason = "GQA model (nh != nkv) — GPU kernel does not aggregate query heads";
+                else if (nkv == 0 || nh % nkv != 0) reason = "nh not a multiple of nkv";
                 else if (hd > 128 || hd % 32 != 0)  reason = "head_dim ineligible";
-                fprintf(stderr, "tria: gpu gate — is_q8_0=%d nh=%d nkv=%d hd=%d -> %s\n",
-                        is_q8_0, nh, nkv, hd, reason);
+                else if (ndr != 0)                  reason = "nonrot_dim>0 (GPU lacks content term) — CPU only";
+                fprintf(stderr, "tria: gpu gate — is_q8_0=%d nh=%d nkv=%d hd=%d nonrot=%d -> %s\n",
+                        is_q8_0, nh, nkv, hd, ndr, reason);
                 s_logged_gate = 1;
             }
         }
-        if (is_q8_0 && nh == nkv && hd <= 128 && hd % 32 == 0 && use_gpu_scoring >= 0) {
-            /* Lazy upload GPU stats on first use */
-            if (!rt->gpu_omega || rt->gpu_q_mean_layers != nl || rt->gpu_q_mean_kv_heads != nkv) {
-                /* Build flat q_mean_real/imag arrays [nl * nkv * fc] */
-                float * qmr = (float *)malloc((size_t)nl * nkv * fc * sizeof(float));
-                float * qmi = (float *)malloc((size_t)nl * nkv * fc * sizeof(float));
-                if (qmr && qmi) {
-                    for (int li = 0; li < nl; li++) {
-                        for (int kvi = 0; kvi < nkv; kvi++) {
-                            struct tria_head_stats * hs = &rt->stats->heads[li * nkv + kvi];
-                            const size_t base = ((size_t)li * nkv + kvi) * fc;
+        if (is_q8_0 && nkv > 0 && nh % nkv == 0 && hd <= 128 && hd % 32 == 0 && ndr == 0 && use_gpu_scoring >= 0) {
+            /* Lazy upload GPU stats on first use. q_mean_*/q_abs_mean cover ALL
+             * query heads [nl * nh * fc] so the kernel can do GQA aggregation. */
+            if (!rt->gpu_omega || rt->gpu_q_mean_layers != nl || rt->gpu_q_mean_kv_heads != nh) {
+                const size_t qcount = (size_t)nl * nh * fc;
+                float * qmr = (float *)malloc(qcount * sizeof(float));
+                float * qmi = (float *)malloc(qcount * sizeof(float));
+                float * qab = (float *)malloc(qcount * sizeof(float));
+                if (qmr && qmi && qab) {
+                    for (int li2 = 0; li2 < nl; li2++) {
+                        for (int h = 0; h < nh; h++) {
+                            struct tria_head_stats * hs = &rt->stats->heads[li2 * nh + h];
+                            const size_t base = ((size_t)li2 * nh + h) * fc;
                             for (int f = 0; f < fc; f++) {
                                 qmr[base + f] = hs->q_mean_real[f];
                                 qmi[base + f] = hs->q_mean_imag[f];
+                                qab[base + f] = hs->q_abs_mean[f];
                             }
                         }
                     }
-                    if (g_tria_backend.stats_free)
+                    if (g_tria_backend.stats_free) {
                         g_tria_backend.stats_free(rt->gpu_omega, rt->gpu_q_mean_real, rt->gpu_q_mean_imag);
+                        g_tria_backend.stats_free(rt->gpu_q_abs_mean, NULL, NULL);
+                    }
                     rt->gpu_omega = NULL;
                     rt->gpu_q_mean_real = NULL;
                     rt->gpu_q_mean_imag = NULL;
+                    rt->gpu_q_abs_mean = NULL;
                     rt->gpu_q_mean_layers = 0;
                     rt->gpu_q_mean_kv_heads = 0;
                     if (g_tria_backend.stats_upload &&
-                        g_tria_backend.stats_upload(rt->stats->omega, fc, qmr, qmi, nl * nkv,
+                        g_tria_backend.stats_upload(rt->stats->omega, fc, qmr, qmi, nl * nh,
                                               &rt->gpu_omega, &rt->gpu_q_mean_real, &rt->gpu_q_mean_imag) == 0) {
                         rt->gpu_q_mean_layers = nl;
-                        rt->gpu_q_mean_kv_heads = nkv;
+                        rt->gpu_q_mean_kv_heads = nh;
+                        /* q_abs_mean via the q_mean_real slot (count nl*nh*fc) */
+                        g_tria_backend.stats_upload(NULL, fc, qab, NULL, nl * nh,
+                                              NULL, &rt->gpu_q_abs_mean, NULL);
                     }
                 }
                 free(qmr);
                 free(qmi);
+                free(qab);
             }
             if (rt->gpu_omega) {
                 use_gpu_scoring = 1;
@@ -493,14 +508,15 @@ int tria_maybe_score(
             if (layer_weight > 4.0f)  layer_weight = 4.0f;
 
             if (rt->gpu_global_scores) {
+                int nh_q = rt->stats->num_heads;
                 g_tria_backend.score_q8_0(
                     k_tensor->data,
                     n_new, score_start, n_kv,
-                    n_embd_k_gqa, nkv, hd, fc,
+                    n_embd_k_gqa, nkv, nh_q, hd, fc, rt->rope_neox,
                     key_pos + score_start,
                     rt->gpu_omega,
-                    rt->gpu_q_mean_real, rt->gpu_q_mean_imag,
-                    li * nkv * fc,
+                    rt->gpu_q_mean_real, rt->gpu_q_mean_imag, rt->gpu_q_abs_mean,
+                    li * nh_q * fc,
                     layer_weight,
                     rt->gpu_global_scores,
                     TRIA_N_OFFSETS, offsets);
