@@ -90,7 +90,7 @@ Status updated per layer landing. Initial state derived from
 | IK quants row-meta KS/KT (IQ4_KS, IQ4_KSS, IQ3_KS, IQ4_KT) | 5 (5b-1b) | **RELEASED** — ROCm + Vulkan (PPL gate 20-chunk Δ ≤ 0.043) | **RELEASED** — Vulkan SEGV fixed via `is_empty()` dequant-to-f16 fallback | n/a (released) |
 | IK quants extended (IQ5_K, IQ6_K) | 5 (5b-2) | **RELEASED** — Phase 5b-2 CPU+CUDA/HIP `8e19be061` | **RELEASED** — Vulkan dequant + matvec shaders `0ade7ff86` 2026-05-25 | n/a (released) |
 | IK quant IQ2_KL (2.6875 bpw) | 5 (5b-1c) | **RELEASED** — Phase 5b-1c CPU+CUDA/HIP `f18a92a42` | **RELEASED** — Vulkan dequant + matvec shaders `3723c1f61` 2026-05-25 | n/a (released) |
-| IK Trellis IQ2_KT (Phase P3a) | 5 (Trellis P3a) | **RELEASED** — template refactor `e9520caac` + port `0dac276d9` + cluster-accel `1e8501e46` 2026-05-25 | not yet ported | P1 — Vulkan port pending |
+| IK Trellis IQ2_KT (Phase P3a) | 5 (Trellis P3a) | **RELEASED (§-FLAG)** — CPU+ROCm only; `0dac276d9` + cluster-accel `1e8501e46` 2026-05-25; known issues: 0.8B PPL anomaly open; cluster-accel PPL +8.3% above ≤+5% gate | not yet ported | P1 — Vulkan port pending |
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
 | Fused MoE | 6 | source has CUDA | source has none | P2 |

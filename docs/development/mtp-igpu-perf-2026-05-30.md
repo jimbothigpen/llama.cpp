@@ -1,6 +1,6 @@
 # MTP speculative decoding on iGPU (gfx1150 APU): perf characterization
 
-**Date:** 2026-05-30. **Host:** ai00 (Strix Halo gfx1150 APU, ROCm).
+**Date:** 2026-05-30. **Host:** gfx1150 (Strix Halo APU, ROCm).
 **Status:** characterized; product default decision escalated to user.
 
 ## Summary
@@ -59,9 +59,8 @@ cost is per-*decode* launch overhead × decode count, which that fix does not ad
   multiple drafts per decode). Both are architectural changes requiring correctness
   validation.
 
-See escalation `kernel-work/orchestrator-inbox/escalated/mtp-vj-perf-2026-05-30-igpu-inherent-default.md`
-for the product options (default-off on iGPU / iGPU n_max=1 / invest in catch-up
-elimination).
+Product options (default-off on iGPU / iGPU n_max=1 / invest in catch-up elimination)
+documented in the session escalation notes.
 
 ## Update 2026-05-30 — C1 (catch-up elimination) lands the iGPU win
 
@@ -89,5 +88,5 @@ not the catch-up.)
 
 ## Reproduction
 
-`kernel-work/worker-scratch/mtp-vj-perf-2026-05-30/runs/` — `batch-p0.sh` (baseline),
-`sweep-ndraft.sh` (depth sweep), summaries and per-run logs.
+Run scripts (`batch-p0.sh` baseline, `sweep-ndraft.sh` depth sweep) and per-run logs
+are in internal session storage.

@@ -295,7 +295,7 @@ static_assert(sizeof(block_turboq2_0) == sizeof(ggml_half) + QK_TURBOQ2/4, "wron
 // TurboQuant 3-bit TCQ: Trellis-Coded Quantization (right-shift bitshift trellis, k=3, L=9)
 // One block = one 128-element rotation group. Bitstream: 6 zero-prefix + 128×3-bit outputs = 390 bits = 49 bytes.
 // Decode: state_t = read_9_bits(qs, t*3), recon_t = codebook[state_t] * norm
-// = 3.1875 bits/value → 5.0× compression vs fp16
+// = 3.25 bits/value → 4.9× compression vs fp16
 #define QK_TURBOQ3_TCQ 128
 typedef struct {
     ggml_half  norm;                    //  2 bytes: corrected group L2 norm
