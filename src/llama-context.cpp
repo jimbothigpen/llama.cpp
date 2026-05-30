@@ -3316,9 +3316,10 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
         }
     }
     if (model.hparams.no_alloc) {
+        // sched may be null for MTP draft contexts (deferred until llama_set_mtp_source);
+        // use backend_buft directly — same values used to construct the scheduler.
         for (size_t i = 0; i < backends.size(); ++i) {
-            ggml_backend_t             backend = backends[i].get();
-            ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
+            ggml_backend_buffer_type_t buft = backend_buft[i];
             ret[buft].compute += backend_buf_exp_size[i];
         }
     } else {

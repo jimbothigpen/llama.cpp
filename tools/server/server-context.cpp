@@ -3672,7 +3672,13 @@ private:
                             // repeats with no forward progress. This is the dense-Qwen3.5 + draft-simple hang
                             // (n_decoded freezes ~38) and the matching ngram-cache runaway-draft regression.
                             // Gate the workaround to MTP only so both fixes coexist.
-                            if (slot.is_mtp_enabled) {
+                            //
+                            // Partial-only: only pop the resampled tail when accepted.size() > 1 (i.e. at least one
+                            // draft was accepted and there IS a resampled tail to strip). When accepted.size() == 1
+                            // (zero drafts matched) the resampled-tail desync cannot occur, and keeping accepted[0]
+                            // in spec_draft lets the next cycle re-verify the target's own prediction — which the
+                            // target will always accept, breaking the full-rejection infinite rollback loop.
+                            if (slot.is_mtp_enabled && accepted.size() > 1) {
                                 accepted.pop_back();
                             }
                             slot.spec_draft = std::move(accepted);
