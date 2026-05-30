@@ -178,33 +178,20 @@ The knob is applied at encode time
   temporary peak-VRAM cost per FA call (see §2 Vulkan note).
 - **`head_dim % 128 == 0` required** — same constraint as the base TurboQuant types.
 
-### PPL anchors
+### Qualitative observations
 
-> **Note:** the anchors below were measured in separate sessions on different
-> checkpoints; they are **not directly comparable** to each other or to the base
-> TurboQuant anchors. A controlled comparison will be published in the benchmark
-> matrix below once measured under identical conditions.
-
-Illustrative ROCm anchors (Qwen3.5-9B-Q4_K_M, n_seq=1, c=4096, wiki.test.raw):
-
-| KV type | ROCm PPL | vs F16 KV (6.49) |
-|---|---|---|
-| F16 / F16 | 6.49 | — |
-| `turboq2_tcq` / `turboq2_tcq` | 6.53 ± 0.079 | +0.6% |
-| `turboq3_tcq` / `turboq3_tcq` | 6.90 ± 0.053 | +6.3% |
-
-The apparent reversal (`turboq2_tcq` scoring lower PPL than `turboq3_tcq`) is
-a measurement artifact from different sessions and likely reflects model/prompt
-sensitivity at these compression levels. The benchmark matrix will resolve this
-under controlled conditions.
+In measurement data not controlled for session-to-session variance, `turboq2_tcq` has
+occasionally scored better perplexity than `turboq3_tcq` despite fewer bits, reflecting
+model and prompt sensitivity at these compression levels. The benchmark matrix will resolve
+this under controlled conditions.
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** Qwen3.5-9B-Q4_K_M, context=4096 tokens. Separate Vulkan
-> rows use the same logical K/V intent but annotated with the actual Vulkan KV
-> format as stored. GPU class will be stated per row.
+*TBD (pending benchmark)*
+
+**Configuration:** Qwen3.5-9B-Q4_K_M, context=4096 tokens. Separate Vulkan
+rows use the same logical K/V intent but annotated with the actual Vulkan KV
+format as stored. GPU class will be stated per row.
 
 #### ROCm — primary matrix
 

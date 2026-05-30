@@ -107,9 +107,9 @@ See `src/llama-kv-cache.cpp:277` for the full mode dispatch.
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** model=TBD, context=TBD tokens, backend=TBD, GPU class=TBD.
+*TBD (pending benchmark)*
+
+**Configuration:** model=TBD, context=TBD tokens, backend=TBD, GPU class=TBD.
 
 | Configuration | PPL | TG (t/s) | PP (t/s) | Memory vs F16 KV |
 |---|---|---|---|---|
@@ -131,13 +131,6 @@ See `src/llama-kv-cache.cpp:277` for the full mode dispatch.
 | **Cross-fork sanity (TheTom's build, equivalent combos)** | | | | |
 | turbo3 K / turbo3 V | TBD | TBD | TBD | TBD |
 | turbo2 K / turbo2 V | TBD | TBD | TBD | TBD |
-
-Illustrative PPL anchor (legacy methodology — Qwen3.5-9B-BF16, 32 chunks, c=512, wikitext-2-raw-test; see README for current harness):
-
-| KV type | ROCm PPL | Vulkan PPL | Cross-backend Δ | vs F16 KV (6.8168) |
-|---|---|---|---|---|
-| `turboq2` | 7.8041 | 7.8059 | +0.023% | +14.5% |
-| `turboq3` | 7.5939 | 7.6065 | +0.17% | +11.4% |
 
 ---
 

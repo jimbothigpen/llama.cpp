@@ -155,11 +155,11 @@ llama-server \
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** Qwen3.5-9B (dense) and Qwen3.6-35B-A3B (MoE), context=4096
-> tokens. GPU class stated per row (RDNA3.5 / RDNA3); backends ROCm and Vulkan.
-> Each IK type shown alongside its mainline comparator at matched bpw.
+*TBD (pending benchmark)*
+
+**Configuration:** Qwen3.5-9B (dense) and Qwen3.6-35B-A3B (MoE), context=4096
+tokens. GPU class stated per row (RDNA3.5 / RDNA3); backends ROCm and Vulkan.
+Each IK type shown alongside its mainline comparator at matched bpw.
 
 #### Dense model (Qwen3.5-9B)
 

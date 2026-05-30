@@ -1,6 +1,6 @@
 # InnerQ KV Cache (`turboq2_innerq` / `turboq3_innerq`)
 
-> **Status: Experimental** — CUDA/HIP only (no Vulkan); requires a short online calibration.
+> **Status: Experimental** — CUDA/HIP only (no Vulkan); optional online calibration.
 
 ---
 
@@ -181,12 +181,12 @@ the K/V asymmetry rationale.
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** model TBD, context TBD tokens, CUDA/HIP backend, GPU class TBD.
-> InnerQ rows measured with `TURBO_INNERQ=256` active (or as noted). Results are model-dependent;
-> benefit is largest on models with high K-channel variance imbalance.
-> No Vulkan section — InnerQ has no Vulkan encode support.
+*TBD (pending benchmark)*
+
+**Configuration:** model TBD, context TBD tokens, CUDA/HIP backend, GPU class TBD.
+InnerQ rows measured with `TURBO_INNERQ=256` active (or as noted). Results are model-dependent;
+benefit is largest on models with high K-channel variance imbalance.
+No Vulkan section — InnerQ has no Vulkan encode support.
 
 | # | K / V | PPL | TG (t/s) | PP (t/s) | Memory vs F16 KV |
 |---|---|---|---|---|---|

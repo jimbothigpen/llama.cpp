@@ -166,11 +166,11 @@ llama-server \
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** Qwen3.5-9B (dense) and Qwen3.6-35B-A3B (MoE), context=4096 tokens.
-> GPU class stated per row (RDNA3.5 / RDNA3); backends ROCm and Vulkan.
-> The **Q8_0 anchor** is the relevant near-lossless reference for high-bit quants.
+*TBD (pending benchmark)*
+
+**Configuration:** Qwen3.5-9B (dense) and Qwen3.6-35B-A3B (MoE), context=4096 tokens.
+GPU class stated per row (RDNA3.5 / RDNA3); backends ROCm and Vulkan.
+The **Q8_0 anchor** is the relevant near-lossless reference for high-bit quants.
 
 #### Dense model (Qwen3.5-9B)
 

@@ -144,11 +144,8 @@ savings from the SWA cache being smaller are lost.
 ### Benefits
 
 - **Catastrophe-avoidance on hybrid SWA models.** Uniform aggressive KV quant on Gemma 4
-  collapses perplexity to >100 000 (vs ~25 F16 baseline). Keeping at least one layer class
-  at a higher precision dramatically reduces the damage. Reference stress-test data point:
-  — uniform `turboq3` → PPL **>100 000**;
-  — `turboq3` global + `f16` SWA → PPL **~28 000**;
-  — `f16` baseline → PPL **~25 000**.
+  can catastrophically degrade perplexity. Keeping at least one layer class at a higher
+  precision dramatically reduces the damage.
 - **SWA sub-cache is window-sized.** The SWA cache is sized to the attention window
   (`n_swa` tokens), not the full context, so it is already smaller than `kv_base`.
   Quantizing it adds memory savings at lower cost than quantizing the full cache.
@@ -168,13 +165,11 @@ savings from the SWA cache being smaller are lost.
 
 ### Benchmark matrix
 
-> Numbers to be filled in after benchmarking. See caption for configuration.
->
-> **Configuration:** a Gemma-4-class hybrid SWA model · context length TBD · backend TBD ·
-> GPU class TBD. Rows 1–3 establish baselines; rows 4–6 show split configurations;
-> row 7 (reverse split) isolates which layer class is more sensitive to quantization.
+*TBD (pending benchmark)*
 
-*(TBD — pending benchmark. See TODO 154.)*
+**Configuration:** a Gemma-4-class hybrid SWA model · context length TBD · backend TBD ·
+GPU class TBD. Rows 1–3 establish baselines; rows 4–6 show split configurations;
+row 7 (reverse split) isolates which layer class is more sensitive to quantization.
 
 | # | Global K/V | SWA K/V | Category | PPL | TG (t/s) | PP (t/s) | KV mem vs F16 |
 |---|---|---|---|---|---|---|---|
