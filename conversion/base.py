@@ -102,6 +102,11 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
+    # MTP (multi-token prediction) export modes; set by main() before instantiation.
+    # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
+    mtp_only: bool = False
+    no_mtp: bool = False
+
     # Mistral format specifics
     is_mistral_format: bool = False
     disable_mistral_community_chat_template: bool = False

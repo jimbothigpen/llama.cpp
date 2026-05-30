@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -536,84 +535,86 @@ class _Qwen35MRopeMixin:
 
 
 class _Qwen35MtpMixin:
-    """Shared MTP wiring for Qwen3.5/3.6 text variants. HF config carries the MTP block
-    under `mtp_num_hidden_layers` and the tensors under `mtp.*`; we extend block_count,
-    emit the nextn metadata key, and remap `mtp.*` to the standard layer-indexed nextn
-    naming so the existing tensor_map handles them. Output GGUF tags base arch
-    (`qwen35` / `qwen35moe`) with `nextn_predict_layers` set; the yggdrasil loader
-    detects this in src/models/qwen35{,moe}.cpp via base-arch-nextn detection."""
+    """Shared MTP wiring for Qwen3.5/3.6 text variants. The HF config carries
+    the MTP block under `mtp_num_hidden_layers` and the tensors under
+    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
+    `mtp.*` to the standard layer-indexed nextn naming so the existing
+    tensor_map handles them."""
 
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
     block_count: int
     tensor_map: gguf.TensorNameMap
+    no_mtp: bool
+    mtp_only: bool
+    _original_block_count: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("mtp_num_hidden_layers", 0)
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._original_block_count = hparams.get(key)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+
     @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+    def filter_tensors(cls, item):
+        assert cls._original_block_count is not None
+        # TODO: change TextModel to super()
+        if (titem := TextModel.filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+        if name.startswith("model.mtp."):
+            name = name.replace("model.", "", 1)
         if name.startswith("mtp."):
-            # Bundled-MTP (default): pass mtp.* through to modify_tensors for remapping.
-            # --no-mtp: drop the MTP head entirely (Qwen3NextModel behaviour preserved).
-            # This overrides Qwen3NextModel.filter_tensors which unconditionally drops mtp.*.
-            if getattr(cls, 'no_mtp', False):
+            if cls.no_mtp:
                 return None
-            return item
-        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
+            remapper = {
+                "fc":                    "eh_proj",
+                "pre_fc_norm_embedding": "enorm",
+                "pre_fc_norm_hidden":    "hnorm",
+                "norm":                  "shared_head.norm",
+            }
+            parts = name.split(".", 3)
+            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
+                mtp_idx = int(parts[2])
+                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+            elif len(parts) == 3 and parts[1] in remapper:
+                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
+        elif cls.mtp_only:
+            keep = name in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+                "embed_tokens.weight", "norm.weight",
+            )
+            if not keep:
+                return None
+        return name, gen
 
     def set_gguf_parameters(self):
-        n = self.hparams.get("mtp_num_hidden_layers", 0)
-        no_mtp = getattr(self, 'no_mtp', False)
-        if n > 0 and no_mtp:
-            # Strip MTP from block_count so the base-class add_block_count() writes the
-            # trunk-only count; filter_tensors already dropped all mtp.* tensors.
-            self.block_count -= n
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if n > 0 and not no_mtp:
+        if self.no_mtp:
+            return
+        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Multimodal Qwen3.5/3.6 wrap the text model under `model.language_model.*`.
-        if name.startswith("model.language_model."):
-            name = "model." + name[len("model.language_model."):]
-        elif name.startswith("language_model."):
-            name = name[len("language_model."):]
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
 
-        # Remap MTP block tensors to llama.cpp's layer-indexed nextn naming.
-        # HF: mtp.layers.0.*  (transformer block at MTP slot 0)
-        #     mtp.fc / mtp.pre_fc_norm_embedding / mtp.pre_fc_norm_hidden / mtp.norm
-        if name.startswith("mtp."):
-            n_layer = self.hparams["num_hidden_layers"]
-            if name.find("layers.") != -1:
-                assert bid is not None
-                # Translate the MTP-local layer index (0-based) to the GGUF block index
-                # (trunk_layers + mtp_local_idx).  This is required for correct quantisation
-                # type dispatch (e.g. SSM_CONV1D → F32) and for MoE expert merging in
-                # Qwen2MoeModel.modify_tensors which keys experts by GGUF block index.
-                corrected_bid = bid + n_layer
-                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{corrected_bid}")
-                yield from super().modify_tensors(data_torch, name, corrected_bid)  # ty: ignore[unresolved-attribute]
-                return
-            else:
-                remapper = {
-                    "mtp.fc":                    "model.layers.{bid}.eh_proj",
-                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
-                    "mtp.pre_fc_norm_hidden":    "model.layers.{bid}.hnorm",
-                    "mtp.norm":                  "model.layers.{bid}.shared_head.norm",
-                }
-                stem   = Path(name).stem
-                suffix = Path(name).suffix
-                tmpl   = remapper[stem] + suffix
-                for b in range(n_layer, self.block_count):
-                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)  # ty: ignore[unresolved-attribute]
-                return
+        if not self.mtp_only or not from_dir:
+            return
 
-        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")

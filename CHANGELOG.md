@@ -13,6 +13,35 @@ HEAD: `d738c4341` (2026-05-29 — IK row-meta weight quants doc added; IQ3_KT la
 
 In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C GPU GQA kernel + SWA-layer capture; full 40-cell spec-decode validation matrix (TODO 103); **MTP Gemma4 §-FLAG-B** — ✅ VALIDATED, LANDING-PENDING-APPROVAL on branch `feat/mtp-gemma4-guided-port-2026-05-29` (rebased onto `main`); end-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below); MTP Convergence Phase B-2 cherry-pick PR #23398 (Gemma4 MTP mainline integration) integrated on this branch.
 
+### Changed — Qwen3.5/3.6 MTP converter converged to mainline; `--mtp` split-export restored (2026-05-30)
+
+Per user directive (2026-05-29: "drop our divergence and use mainline's implementation unless we
+genuinely improved it"), the fork's divergent `_Qwen35MtpMixin` rewrite (TODOs 145/146,
+`7d8fefc82`/`d8ec65064`/`c0d71d750`/`36164e428`) is **dropped and replaced verbatim with current
+mainline master's mixin** (`conversion/qwen.py`, byte-identical to ggml-org `0821c5fcf`; origin am17an
+PR #22673). Plus a 4-line `conversion/base.py` add of the `mtp_only`/`no_mtp` ModelBase defaults the
+mainline mixin relies on. **No loader (`src/models/qwen35*.cpp`) change, no C++ rebuild** — recon
+confirmed the loader is converter-agnostic (keys off `nextn_predict_layers` metadata + `blk.N.nextn.*`
+tensor names, identical between the two converters).
+
+This **restores the previously-broken `--mtp` split-export** (the fork rewrite set `mtp_only=True` but
+dropped its `prepare_metadata`/`filter_tensors` consumers → silently emitted a full bundled GGUF).
+**TODOs 145/146 are SUPERSEDED-BY-CONVERGENCE** — they fixed regressions the fork's own rewrite
+introduced; mainline was already correct for both the bundled-`attn_norm` and `--no-mtp` paths.
+
+The two divergence bits assessed as fork "improvements" both proved **non-unique**: the multimodal
+`language_model.` unwrap already lives in mainline's base `TextModel.filter_tensors` (routed through by
+the mainline mixin), and the `bid + n_layer` block-index correction is subsumed by mainline-master's
+`index_tensors`/`_original_block_count` design (rename precedes bid-parsing). Nothing fork-unique lost.
+
+Verified on Qwen3.5-9B (dense, q8_0, ROCm gfx1150, `llama-speculative-simple --spec-type draft-mtp`):
+- **bundled** (default) → arch `qwen35`, block_count 33, `nextn_predict_layers=1`, nextn tensors at
+  blk.32; loads + speculates **coherent, 75.56% accept** (`n_drafted=45 n_accept=34`, `-m`/`-md` both bundled).
+- **`--no-mtp`** → block_count 32, no nextn metadata/tensors (trunk-only); loads as target.
+- **`--mtp`** → `mtp-`prefixed 18-tensor draft-head GGUF; loads as draft, same **75.56% accept** paired
+  with the `--no-mtp` trunk as target (split-export round-trip).
+MoE Qwen3.5/3.6-35B-A3B path untested (stretch goal; mainline mixin handles MoE expert-merge identically).
+
 ### Fixed — MTP Gemma4 §-FLAG-B: end-to-end external-assistant speculative decode (2026-05-30)
 
 Gemma4 Multi-Token Prediction (PR #23398 guided port, TODO 148) now drafts correctly
