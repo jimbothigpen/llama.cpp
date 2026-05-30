@@ -22,6 +22,27 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
+// Emit a one-time warning when MTP is enabled on a detected iGPU/APU, where it is a
+// measured net-slowdown regardless of accept rate (see docs/development/mtp-igpu-perf-2026-05-30.md).
+static void mtp_warn_igpu_once() {
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
+    static bool warned = false;
+    if (warned) return;
+    const int n_dev = ggml_backend_cuda_get_device_count();
+    for (int d = 0; d < n_dev; d++) {
+        if (ggml_backend_cuda_device_is_igpu(d)) {
+            LOG_WRN("%s: MTP speculative decoding is a measured net-slowdown on integrated GPUs "
+                    "(0.54x at default n_max=3; even n_max=1 with 100%% accept is slower than pure decode). "
+                    "Enable explicitly only if you have measured a benefit on your specific workload. "
+                    "See docs/development/mtp-igpu-perf-2026-05-30.md\n", __func__);
+            warned = true;
+            return;
+        }
+    }
+    warned = true;
+#endif
+}
+
 const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
@@ -605,6 +626,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 ctx_tgt ? "yes" : "no",
                 ctx_dft ? "yes" : "no",
                 common_speculative_get_devices_str(this->params.devices).c_str());
+        mtp_warn_igpu_once();
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
@@ -979,6 +1001,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
                 ctx_tgt ? "yes" : "no",
                 ctx_dft ? "yes" : "no",
                 common_speculative_get_devices_str(this->params.devices).c_str());
+        mtp_warn_igpu_once();
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd, /*n_seq_max=*/ 1);

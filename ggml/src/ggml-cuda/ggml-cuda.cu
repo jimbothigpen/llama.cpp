@@ -4924,6 +4924,26 @@ void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * tot
     CUDA_CHECK(cudaMemGetInfo(free, total));
 }
 
+bool ggml_backend_cuda_device_is_igpu(int device) {
+#if defined(GGML_USE_HIP)
+    hipDeviceProp_t prop;
+    if (hipGetDeviceProperties(&prop, device) != hipSuccess) {
+        return false;
+    }
+    // prop.integrated is reliable for APU detection; ggml-cuda disables it for UMA
+    // memory decisions (issue #15034) but the raw value is correct for this query.
+    if (prop.integrated) {
+        return true;
+    }
+    // Belt-and-suspenders: catch APUs whose integrated flag may lag driver updates
+    const char * arch = prop.gcnArchName;
+    return strncmp(arch, "gfx1103", 7) == 0 || strncmp(arch, "gfx1150", 7) == 0;
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif
+}
+
 bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
     if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
         return false;
