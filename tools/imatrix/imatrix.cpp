@@ -1101,6 +1101,7 @@ static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const 
                 llama_batch_free(batch);
                 if (mtp_enabled) {
                     free(mtp_batch.token);
+                    mtp_batch.token = nullptr;
                     llama_batch_free(mtp_batch);
                 }
                 return false;
@@ -1115,6 +1116,7 @@ static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const 
                                          pos_first, n_embd, /*seq_id=*/0, mtp_batch)) {
                     llama_batch_free(batch);
                     free(mtp_batch.token);
+                    mtp_batch.token = nullptr;
                     llama_batch_free(mtp_batch);
                     return false;
                 }
@@ -1181,6 +1183,7 @@ static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const 
     llama_batch_free(batch);
     if (mtp_enabled) {
         free(mtp_batch.token);
+        mtp_batch.token = nullptr;
         llama_batch_free(mtp_batch);
     }
 
