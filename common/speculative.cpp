@@ -26,13 +26,13 @@
 // catch-up decode) MTP is iGPU-tuned to n_max=1, where it measures ~1.16x of pure decode on
 // gfx1150 (32.4 vs 28.0 t/s). n_max>=2 remains a net slowdown even with C1, so the iGPU default
 // is clamped to n_max=1 (see the constructor + docs/development/mtp-igpu-perf-2026-05-30.md).
+// Uses the generic backend device registry so CUDA, HIP, and Vulkan iGPUs are all detected.
 static void mtp_warn_igpu_once() {
-#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
     static bool warned = false;
     if (warned) return;
-    const int n_dev = ggml_backend_cuda_get_device_count();
-    for (int d = 0; d < n_dev; d++) {
-        if (ggml_backend_cuda_device_is_igpu(d)) {
+    const size_t n_dev = ggml_backend_dev_count();
+    for (size_t d = 0; d < n_dev; d++) {
+        if (ggml_backend_dev_type(ggml_backend_dev_get(d)) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
             LOG_WRN("%s: MTP on integrated GPUs is tuned to n_max=1 (C1 catch-up batching): "
                     "measured ~1.16x of pure decode at n_max=1; n_max>=2 remains a net slowdown. "
                     "The iGPU default is n_max=1; override with --spec-draft-n-max. "
@@ -42,21 +42,20 @@ static void mtp_warn_igpu_once() {
         }
     }
     warned = true;
-#endif
 }
 
-// True if any visible CUDA/HIP device is an integrated GPU (APU). Used to pick the iGPU-tuned
-// MTP draft depth (n_max=1), where defer+batch catch-up (C1) makes MTP a net win (~1.09x of
-// pure decode); n_max>=2 stays a slowdown even with C1. See docs/development/mtp-igpu-perf-2026-05-30.md.
+// True if any device in the generic backend registry is an integrated GPU (APU). Used to pick
+// the iGPU-tuned MTP draft depth (n_max=1), where defer+batch catch-up (C1) makes MTP a net
+// win (~1.09x of pure decode); n_max>=2 stays a slowdown even with C1.
+// Covers CUDA, HIP, and Vulkan iGPUs uniformly via GGML_BACKEND_DEVICE_TYPE_IGPU.
+// See docs/development/mtp-igpu-perf-2026-05-30.md.
 static bool mtp_any_igpu() {
-#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
-    const int n_dev = ggml_backend_cuda_get_device_count();
-    for (int d = 0; d < n_dev; d++) {
-        if (ggml_backend_cuda_device_is_igpu(d)) {
+    const size_t n_dev = ggml_backend_dev_count();
+    for (size_t d = 0; d < n_dev; d++) {
+        if (ggml_backend_dev_type(ggml_backend_dev_get(d)) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
             return true;
         }
     }
-#endif
     return false;
 }
 
