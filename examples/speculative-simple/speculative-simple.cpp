@@ -112,6 +112,13 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+        if (want_mtp) {
+            // External MTP draft (e.g. gemma4-assistant): type the draft context MTP so its
+            // graph reserve is deferred until llama_set_mtp_source wires the target context;
+            // otherwise the assistant graph asserts on a missing MTP source during the
+            // construction-time sched_reserve (gemma4-assistant.cpp:84).
+            cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        }
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
