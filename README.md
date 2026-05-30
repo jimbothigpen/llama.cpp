@@ -533,12 +533,37 @@ matrix (see [In-flight workstreams](#in-flight-workstreams)).
 
 ### PHANTOM-X speculative decoder — Phase 4
 
-Ported PHANTOM-X from carlosfundora `1-bit-turbo` (`2199e8445`; Phase 2 factory
-dispatch adapter `4fd52ddc0`). PHANTOM-X uses a learned per-model n-gram pattern
-lookup for draft generation. The Phase 2 adapter wires it into the `--spec-type`
-factory dispatch so it can be selected alongside other spec-decode mechanisms.
+Ported PHANTOM-X from carlosfundora `1-bit-turbo` (`2199e8445`; Phase 2 factory wiring
+`4fd52ddc0`). PHANTOM-X is a complete self-speculative n-gram drafter — no separate draft
+model required. It maintains per-token bloom-filtered n-gram pattern tables in
+`--phantom-buffers` ghost-buffer ring slots, using an adaptive eviction policy to prioritize
+high-frequency n-gram transitions. Phase 2 wired it into the `--spec-type` factory dispatch
+so it can be selected alongside other spec-decode mechanisms; the factory wiring was the
+Phase-2 contribution — PHANTOM-X itself is not an adapter.
 
 Backend-agnostic — CPU n-gram lookup; no novel GPU kernels.
+
+**Invocation (self-speculative, no `-md` draft model needed):**
+
+```bash
+llama-speculative-simple --spec-type phantom -m <model> \
+    --phantom-buffers 2 --phantom-bloom-bits 16384 \
+    -ngl 99 --no-mmap -fa on
+```
+
+**Measured performance** (Qwen3.5-9B-Q4_K_M, ROCm gfx1150, `--temp 0 --ignore-eos -n 256`):
+
+| Arm | Spec type | Prompt domain | Accept | Tok/s | vs baseline |
+|-----|-----------|---------------|--------|-------|-------------|
+| A | `phantom` | Code — repetitive C impl (LRU cache) | 86.6% | 18.2 | **+34%** |
+| B | `phantom` | Novel prose | 71.1% | 13.9 | +3% (flat) |
+| C | `ngram-cache` | Code — same prompt as A | 63.3% | 13.7 | +1% (flat) |
+| — | none (baseline) | — | — | 13.6 | 1.00× |
+
+Phantom's bloom+adaptive machinery substantially outperforms plain `--spec-type ngram-cache`
+on repetitive code (+34% vs flat). Novel-prose generation sees near-zero net benefit due to
+low n-gram repetition — the workload dependence is expected. PHANTOM-X is recommended for
+code-heavy, context-repetitive tasks; avoid for general-chat or creative-writing workloads.
 
 ---
 
