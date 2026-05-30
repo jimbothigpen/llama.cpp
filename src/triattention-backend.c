@@ -1,5 +1,9 @@
 /*
- * triattention-backend.c — resolve HIP acceleration at init time
+ * triattention-backend.c — resolve GPU acceleration at init time
+ *
+ * Exactly one GPU backend is compiled in (per the build): TRIA_HIP_BACKEND for
+ * ROCm/HIP, or TRIA_VULKAN_BACKEND for Vulkan. Both implement the same
+ * g_tria_backend function-pointer table; the runtime is backend-agnostic.
  */
 #include "triattention-backend.h"
 #include <string.h>
@@ -17,6 +21,21 @@ int tria_backend_init(void) {
     g_tria_backend.score_q8_0      = tria_hip_score_q8_0;
     g_tria_backend.scores_download = tria_hip_scores_download;
     g_tria_backend.compact_rows    = tria_hip_compact_rows;
+    return 1;
+}
+
+#elif defined(TRIA_VULKAN_BACKEND)
+/* Phase C GPU scoring on Vulkan — requires triattention-vulkan.cpp +
+   TRIA_VULKAN_BACKEND define. Self-contained Vulkan compute context (its own
+   device/pipelines); falls back to CPU at runtime if device init fails. */
+#include "triattention-vulkan.h"
+
+int tria_backend_init(void) {
+    g_tria_backend.stats_upload    = tria_vk_stats_upload;
+    g_tria_backend.stats_free      = tria_vk_stats_free;
+    g_tria_backend.score_q8_0      = tria_vk_score_q8_0;
+    g_tria_backend.scores_download = tria_vk_scores_download;
+    g_tria_backend.compact_rows    = tria_vk_compact_rows;
     return 1;
 }
 

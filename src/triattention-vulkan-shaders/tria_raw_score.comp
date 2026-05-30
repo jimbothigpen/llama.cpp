@@ -1,0 +1,128 @@
+#version 450
+
+/*
+ * TriAttention Phase-C raw per-token score (Vulkan port of tria_raw_score_kernel
+ * in triattention-hip.hip). One invocation per token. Reproduces, for one query
+ * head, eq 6-11 with max_beta == 0 and nonrot_dim == 0 (content term skipped):
+ *
+ *   out[s] = mean_offsets( sum_f rel_r*cos(omega*delta) - rel_i*sin(omega*delta) ) + extra
+ *   rel_r = qmr*kr + qmi*ki ; rel_i = qmi*kr - qmr*ki ; delta = cur_pos - pos + offset
+ *   extra = sum_f max(0, q_abs_mean - |q_mean|) * |k_f|   (only when use_qab != 0)
+ *
+ * The K head slice is q8_0; the same slice is shared across the KV head's gqa
+ * query heads (the host loops query heads, varying only push constants).
+ *
+ * Precision note: the trig argument can reach ~67000 rad (omega[0]==1, delta up
+ * to 65536+cur_pos). GLSL sin/cos lose accuracy for large arguments, while the
+ * CPU/HIP reference uses sincosf with accurate range reduction. We therefore form
+ * the float32 product omega*delta exactly as the reference does, then range-reduce
+ * that value to [-pi,pi] in double precision before the float sin/cos call.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer KQ8      { uint  kdata[];   };
+layout(std430, binding = 1) readonly buffer KeyPos   { int   key_pos[]; };
+layout(std430, binding = 2) readonly buffer Omega    { float omega[];   };
+layout(std430, binding = 3) readonly buffer QMR      { float qmr[];     };
+layout(std430, binding = 4) readonly buffer QMI      { float qmi[];     };
+layout(std430, binding = 5) readonly buffer QAB      { float qab[];     };
+layout(std430, binding = 6) readonly buffer Offsets  { int   offs[];    };
+layout(std430, binding = 7) writeonly buffer ScoresOut { float scores_out[]; };
+
+layout(push_constant) uniform Push {
+    int n_tokens;
+    int cur_pos;
+    int n_embd_k_gqa;
+    int kvi;
+    int head_dim;
+    int freq_count;
+    int rope_neox;
+    int n_offsets;
+    int q_off;     // element offset into qmr/qmi/qab for this query head
+    int use_qab;   // 0 disables the residual "extra" term
+} pc;
+
+const int  QK8        = 32;
+const int  BLK_BYTES  = 34;   // fp16 scale (2) + 32 int8
+const double TWO_PI     = 6.283185307179586476925286766559;
+const double INV_TWO_PI = 0.159154943091895335768883763373;
+
+uint getByte(uint byteIdx) {
+    uint w = kdata[byteIdx >> 2u];
+    return (w >> ((byteIdx & 3u) * 8u)) & 0xffu;
+}
+
+// IEEE fp16 -> fp32, bit-identical to tria_fp16_to_fp32 in the HIP kernel.
+float f16tof32(uint bits) {
+    uint sign = (bits >> 15u) & 1u;
+    uint expo = (bits >> 10u) & 0x1fu;
+    uint mant =  bits        & 0x3ffu;
+    if (expo == 0u) {
+        return (sign == 1u ? -1.0 : 1.0) * float(mant) * exp2(-24.0);
+    } else if (expo == 31u) {
+        return (sign == 1u ? -1.0 : 1.0) * (1.0 / 0.0);
+    }
+    uint f32bits = (sign << 31u) | ((expo + 112u) << 23u) | (mant << 13u);
+    return uintBitsToFloat(f32bits);
+}
+
+void main() {
+    const int s = int(gl_GlobalInvocationID.x);
+    if (s >= pc.n_tokens) return;
+
+    const int row_bytes        = (pc.n_embd_k_gqa / QK8) * BLK_BYTES;
+    const int n_head_blocks     = pc.head_dim / QK8;
+    const int head_block_start  = pc.kvi * (pc.head_dim / QK8);
+    const uint row_base         = uint(s) * uint(row_bytes);
+
+    float k_f32[128];
+    for (int b = 0; b < n_head_blocks; b++) {
+        const uint blk = row_base + uint(head_block_start + b) * uint(BLK_BYTES);
+        const uint lo = getByte(blk);
+        const uint hi = getByte(blk + 1u);
+        const float d = f16tof32(lo | (hi << 8u));
+        for (int j = 0; j < QK8; j++) {
+            int q = int(getByte(blk + 2u + uint(j)));
+            q = (q << 24) >> 24;            // sign-extend int8
+            k_f32[b * QK8 + j] = d * float(q);
+        }
+    }
+
+    const int fc = pc.freq_count;
+    float rel_r[64];
+    float rel_i[64];
+    float extra = 0.0;
+    for (int f = 0; f < fc; f++) {
+        float kr, ki;
+        if (pc.rope_neox != 0) { kr = k_f32[f];        ki = k_f32[fc + f];   }
+        else                   { kr = k_f32[2 * f];    ki = k_f32[2 * f + 1]; }
+        const float qr = qmr[pc.q_off + f];
+        const float qi = qmi[pc.q_off + f];
+        rel_r[f] = qr * kr + qi * ki;
+        rel_i[f] = qi * kr - qr * ki;
+        if (pc.use_qab != 0) {
+            const float qma = sqrt(qr * qr + qi * qi);
+            const float residual = qab[pc.q_off + f] - qma;
+            if (residual > 0.0) {
+                extra += residual * sqrt(kr * kr + ki * ki);
+            }
+        }
+    }
+
+    const int pos = key_pos[s];
+    float trig_sum = 0.0;
+    for (int oi = 0; oi < pc.n_offsets; oi++) {
+        const float delta = float(pc.cur_pos - pos + offs[oi]);
+        float trig = 0.0;
+        for (int f = 0; f < fc; f++) {
+            const float  angle_f = omega[f] * delta;   // float32 product, as in the reference
+            const double a       = double(angle_f);
+            const double kk      = round(a * INV_TWO_PI);
+            const float  reduced = float(a - kk * TWO_PI);
+            trig += rel_r[f] * cos(reduced) - rel_i[f] * sin(reduced);
+        }
+        trig_sum += trig;
+    }
+    scores_out[s] = trig_sum / float(pc.n_offsets) + extra;
+}

@@ -93,6 +93,42 @@ if (GGML_HIP)
     set_target_properties(llama PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
 endif()
 
+# TriAttention Phase C: GPU GQA scoring kernel (Vulkan).
+# Compiled only for Vulkan builds; enables the TRIA_VULKAN_BACKEND path in
+# triattention-backend.c. Built as an isolated static library (its own Vulkan
+# device/pipelines) so it stays independent of ggml-vulkan and works whether or
+# not GGML_BACKEND_DL is set. The GLSL compute shaders are compiled to SPIR-V at
+# build time with glslc and embedded as C arrays (no runtime shader files).
+if (GGML_VULKAN)
+    find_package(Vulkan COMPONENTS glslc REQUIRED)
+    set(TRIA_VK_SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/triattention-vulkan-shaders)
+    set(TRIA_VK_SHADER_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR}/triattention-vulkan-shaders)
+    file(MAKE_DIRECTORY ${TRIA_VK_SHADER_BIN_DIR})
+    set(TRIA_VK_SPV_INCS "")
+    foreach(shader tria_raw_score tria_znorm_agg tria_znorm_global)
+        set(_src ${TRIA_VK_SHADER_SRC_DIR}/${shader}.comp)
+        set(_out ${TRIA_VK_SHADER_BIN_DIR}/${shader}.comp.spv.inc)
+        add_custom_command(
+            OUTPUT ${_out}
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -mfmt=num --target-env=vulkan1.2
+                    ${_src} -o ${_out}
+            DEPENDS ${_src}
+            COMMENT "glslc (embed) ${shader}.comp -> ${shader}.comp.spv.inc"
+            VERBATIM)
+        list(APPEND TRIA_VK_SPV_INCS ${_out})
+    endforeach()
+    add_custom_target(tria-vulkan-shaders DEPENDS ${TRIA_VK_SPV_INCS})
+
+    add_library(tria-vulkan STATIC triattention-vulkan.cpp)
+    add_dependencies(tria-vulkan tria-vulkan-shaders)
+    target_include_directories(tria-vulkan PRIVATE . ${TRIA_VK_SHADER_BIN_DIR})
+    target_compile_features(tria-vulkan PRIVATE cxx_std_17)
+    set_target_properties(tria-vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(tria-vulkan PRIVATE Vulkan::Vulkan)
+    target_link_libraries(llama PRIVATE tria-vulkan)
+    target_compile_definitions(llama PRIVATE TRIA_VULKAN_BACKEND)
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
