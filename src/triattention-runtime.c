@@ -374,8 +374,8 @@ int tria_maybe_score(
             }
         }
         if (is_q8_0 && nkv > 0 && nh % nkv == 0 && hd <= 128 && hd % 32 == 0 && ndr == 0 && use_gpu_scoring >= 0) {
-            /* Lazy upload GPU stats on first use. q_mean_*/q_abs_mean cover ALL
-             * query heads [nl * nh * fc] so the kernel can do GQA aggregation. */
+            /* Lazy upload GPU stats on first use. q_mean and q_abs_mean cover
+             * ALL query heads [nl * nh * fc] so the kernel can do GQA aggregation. */
             if (!rt->gpu_omega || rt->gpu_q_mean_layers != nl || rt->gpu_q_mean_kv_heads != nh) {
                 const size_t qcount = (size_t)nl * nh * fc;
                 float * qmr = (float *)malloc(qcount * sizeof(float));

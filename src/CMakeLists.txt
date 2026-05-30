@@ -76,15 +76,20 @@ if (GGML_HIP)
     endif()
     enable_language(HIP)
     find_package(hip REQUIRED)
+    # Compile the scoring kernel as a HIP-ONLY static library so the HIP
+    # architecture flags (--offload-arch) stay isolated from the host C++
+    # compilation of the rest of the llama target.
+    add_library(tria-hip STATIC triattention-hip.hip)
     set_source_files_properties(triattention-hip.hip PROPERTIES LANGUAGE HIP)
-    target_sources(llama PRIVATE triattention-hip.hip triattention-hip.h)
+    set_target_properties(tria-hip PROPERTIES
+        HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}"
+        POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(tria-hip PRIVATE hip::device)
+    target_link_libraries(llama PRIVATE tria-hip)
     target_compile_definitions(llama PRIVATE TRIA_HIP_BACKEND)
-    target_link_libraries(llama PRIVATE hip::device)
-    # The llama target was created before this block, so it did not inherit a
-    # HIP architecture. Set it explicitly (required once a HIP source is added).
-    if (NOT CMAKE_HIP_ARCHITECTURES)
-        set(CMAKE_HIP_ARCHITECTURES ${GPU_TARGETS})
-    endif()
+    # llama device-links tria-hip's static device code, so it needs a HIP arch.
+    # llama has no HIP *sources* and links hip::device only transitively-PRIVATE
+    # through tria-hip, so --offload-arch does not reach its host C++ compiles.
     set_target_properties(llama PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
 endif()
 
