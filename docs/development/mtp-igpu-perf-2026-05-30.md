@@ -63,6 +63,30 @@ See escalation `kernel-work/orchestrator-inbox/escalated/mtp-vj-perf-2026-05-30-
 for the product options (default-off on iGPU / iGPU n_max=1 / invest in catch-up
 elimination).
 
+## Update 2026-05-30 — C1 (catch-up elimination) lands the iGPU win
+
+The catch-up decode WAS eliminated from the steady-state cost (C1, "Path C"): the per-cycle
+Qwen catch-up `llama_decode(ctx_dft)` is deferred and **batched into the next cycle's lead draft
+decode** (one decode writes both the catch-up KV and the new lead), netting **−1 `llama_decode`
+per speculation cycle**. Implemented in `common_speculative_impl_draft_mtp`
+(`common/speculative.cpp`) — driver-only, no model/graph change.
+
+Measured on the same rig (Qwen3.5-35B-A3B-MTP-IQ4_XS, v-j-545, -c2048 -ngl99 --no-mmap -fa on
+--temp0 -n200, fresh ROCm build @ f83746fb1+C1):
+
+| config | t/s | accept | vs pure |
+|--------|-----|--------|---------|
+| OFF (pure decode) | 28.0 | — | 1.00x |
+| **ON C1 n_max=1** | **32.4** | **100%** | **1.16x** |
+| ON C1 n_max=3 | 21.1 | 96.95% | 0.75x |
+
+So **C1 + iGPU-default n_max=1 turns the 0.54x slowdown into a 1.16x speedup** — MTP is now a net
+win on gfx1150 *at n_max=1*. n_max>=2 stays a slowdown even with C1 (still 4 decodes/cycle at
+n_max=3), so the iGPU default is clamped to n_max=1 (`common_speculative_impl_draft_mtp` ctor;
+explicit `--spec-draft-n-max` always honored). The startup note was updated accordingly.
+(C2, in-graph chain heads, remains an orthogonal later lever — it amortizes the draft decodes,
+not the catch-up.)
+
 ## Reproduction
 
 `kernel-work/worker-scratch/mtp-vj-perf-2026-05-30/runs/` — `batch-p0.sh` (baseline),

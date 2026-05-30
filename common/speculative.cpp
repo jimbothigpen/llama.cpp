@@ -22,8 +22,10 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-// Emit a one-time warning when MTP is enabled on a detected iGPU/APU, where it is a
-// measured net-slowdown regardless of accept rate (see docs/development/mtp-igpu-perf-2026-05-30.md).
+// Emit a one-time note when MTP is enabled on a detected iGPU/APU. After C1 (defer+batch the
+// catch-up decode) MTP is iGPU-tuned to n_max=1, where it measures ~1.16x of pure decode on
+// gfx1150 (32.4 vs 28.0 t/s). n_max>=2 remains a net slowdown even with C1, so the iGPU default
+// is clamped to n_max=1 (see the constructor + docs/development/mtp-igpu-perf-2026-05-30.md).
 static void mtp_warn_igpu_once() {
 #if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
     static bool warned = false;
@@ -31,9 +33,9 @@ static void mtp_warn_igpu_once() {
     const int n_dev = ggml_backend_cuda_get_device_count();
     for (int d = 0; d < n_dev; d++) {
         if (ggml_backend_cuda_device_is_igpu(d)) {
-            LOG_WRN("%s: MTP speculative decoding is a measured net-slowdown on integrated GPUs "
-                    "(0.54x at default n_max=3; even n_max=1 with 100%% accept is slower than pure decode). "
-                    "Enable explicitly only if you have measured a benefit on your specific workload. "
+            LOG_WRN("%s: MTP on integrated GPUs is tuned to n_max=1 (C1 catch-up batching): "
+                    "measured ~1.16x of pure decode at n_max=1; n_max>=2 remains a net slowdown. "
+                    "The iGPU default is n_max=1; override with --spec-draft-n-max. "
                     "See docs/development/mtp-igpu-perf-2026-05-30.md\n", __func__);
             warned = true;
             return;
@@ -41,6 +43,21 @@ static void mtp_warn_igpu_once() {
     }
     warned = true;
 #endif
+}
+
+// True if any visible CUDA/HIP device is an integrated GPU (APU). Used to pick the iGPU-tuned
+// MTP draft depth (n_max=1), where defer+batch catch-up (C1) makes MTP a net win (~1.09x of
+// pure decode); n_max>=2 stays a slowdown even with C1. See docs/development/mtp-igpu-perf-2026-05-30.md.
+static bool mtp_any_igpu() {
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP)
+    const int n_dev = ggml_backend_cuda_get_device_count();
+    for (int d = 0; d < n_dev; d++) {
+        if (ggml_backend_cuda_device_is_igpu(d)) {
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
@@ -605,6 +622,20 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     // pre-advancement before process() mirrored the verify batch.
     std::vector<uint16_t> last_n_drafted;
 
+    // === C1 (Path C): defer + batch the catch-up decode ===
+    // Instead of running a standalone "catch-up" llama_decode in process() to write the draft
+    // KV for the just-verified committed span, we STASH that span here and prepend it (KV-only,
+    // logits off) to the NEXT cycle's lead draft decode. One decode then does both the catch-up
+    // KV write and the lead — saving exactly one llama_decode per speculation cycle. The deferred
+    // span occupies committed positions (< the driver's seq_rm rollback boundary ckpt.pos_max+1),
+    // so it survives the per-cycle ctx_dft rollback automatically — no driver change needed.
+    // This relies on the MTP draft context using partial seq_rm (load_dft a no-op, i.e.
+    // use_ckpt_dft == false), which holds for all attention-KV MTP heads (Qwen NextN/MTP).
+    std::vector<std::vector<llama_token>> defer_tokens;    // [n_seq][k+1] verified committed tokens
+    std::vector<std::vector<float>>       defer_h;         // [n_seq][(k+1)*n_embd] verified h-feeds
+    std::vector<int32_t>                  defer_n_full;    // [n_seq] rows captured (drafted span + 1)
+    std::vector<uint16_t>                 last_n_accepted; // [n_seq] set by accept(), read by draft()
+
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
         , params(params.draft)
@@ -626,6 +657,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 ctx_tgt ? "yes" : "no",
                 ctx_dft ? "yes" : "no",
                 common_speculative_get_devices_str(this->params.devices).c_str());
+
+        // iGPU default: MTP only beats pure decode on an integrated GPU at n_max=1 (after
+        // C1's defer+batch catch-up). Unless the user set --spec-draft-n-max explicitly,
+        // clamp the draft depth to 1 on iGPU. Explicit override is always honored.
+        if (!this->params.n_max_set && this->params.n_max > 1 && mtp_any_igpu()) {
+            LOG_INF("%s: iGPU detected - defaulting MTP draft n_max %d -> 1 "
+                    "(iGPU-tuned; ~1.09x of pure decode after C1 catch-up batching). "
+                    "Override with --spec-draft-n-max.\n", __func__, this->params.n_max);
+            this->params.n_max = 1;
+        }
+
         mtp_warn_igpu_once();
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
@@ -674,6 +716,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         verify_h_rows.assign(n_seq, 0);
 
         last_n_drafted.assign(n_seq, 0);
+
+        defer_tokens.assign(n_seq, {});
+        defer_h.assign(n_seq, {});
+        defer_n_full.assign(n_seq, 0);
+        last_n_accepted.assign(n_seq, 0);
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -742,7 +789,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         auto * ctx_tgt = this->params.ctx_tgt;
-        auto * ctx_dft = this->params.ctx_dft;
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
@@ -750,38 +796,41 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // subsequent rows read from this pointer with offset arithmetic (no extra sync per row).
         const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
 
-        // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
+        // If kv is shared with target (e.g Gemma4) there is no catch-up at all.
+        // Otherwise (Qwen NextN/MTP, own KV) C1 Path C DEFERS the catch-up decode: instead of
+        // re-decoding the just-verified committed span into ctx_dft here, stash it (tokens +
+        // positions + verified h-feeds) and let the next cycle's draft() prepend it (KV-only) to
+        // the lead decode. One decode then writes both the catch-up KV and the lead — saving one
+        // llama_decode per cycle. Must run BEFORE the pending_h update loop below: row 0's h-feed
+        // is the *current* pending_h (h of the previously committed token), not the new one.
         if (!kv_shared_with_target) {
-            common_batch_clear(batch);
-
-            for (int k = 0; k < n_tokens; ++k) {
-                common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
-            }
-
-            // shift the tgt embeddings to the right by one position
-            // assumes that the tokens in the batch are sequential for each sequence
-            // i.e. we cannot have seq_id like this: [0, 0, 0, 1, 1, 0, 1, 1]
-            //                                                       ^--- this is a problem
-            // TODO:this is generally true, but would be nice to assert it
-            std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
-
-            // fill the pending embeddings from a previous run
-            auto set_h = [&](int idx, const float * h_row) {
-                std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
-            };
-
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (i_batch_beg[seq_id] < 0) {
+                const int32_t beg = i_batch_beg[seq_id];
+                const int32_t end = i_batch_end[seq_id];
+                if (beg < 0) {
+                    defer_n_full[seq_id] = 0;
                     continue;
                 }
 
-                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
-            }
+                // Assumes each sequence occupies a contiguous run in the batch (same assumption
+                // the previous catch-up's right-shift made). Holds for the spec drivers.
+                const int32_t n_rows = end - beg + 1;
+                defer_n_full[seq_id] = n_rows;
+                defer_tokens[seq_id].resize(n_rows);
+                defer_h[seq_id].resize((size_t) n_rows * n_embd);
 
-            const int32_t rc = llama_decode(ctx_dft, batch);
-            if (rc != 0) {
-                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (pos=%d)\n", __func__, (int) rc, (int) batch_in.pos[0]);
-                return false;
+                for (int32_t j = 0; j < n_rows; ++j) {
+                    defer_tokens[seq_id][j] = batch_in.token[beg + j];
+
+                    // To write KV at this position we feed the verified pre-norm hidden of the
+                    // PREVIOUS position: row 0 (the verified id_last) pairs with the current
+                    // pending_h; row j>=1 pairs with h_tgt[beg+j-1] (target's verified hidden,
+                    // shifted right by one — same shift the old catch-up batch applied).
+                    const float * src = (j == 0)
+                        ? pending_h[seq_id].data()
+                        : (h_tgt + (size_t) (beg + j - 1) * n_embd);
+                    std::memcpy(defer_h[seq_id].data() + (size_t) j * n_embd, src, row_bytes);
+                }
             }
         }
 
@@ -815,6 +864,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         int n_drafting = 0;
         std::vector<bool> drafting(n_seq);
 
+        // C1: batch index of each seq's lead token in the FIRST decode. Because we prepend the
+        // deferred catch-up span (KV-only, logits off) before each lead, the lead is no longer at
+        // batch index 0/1/2…; the chain-sampling logits/embd reads index by BATCH position
+        // (get_logits_ith / get_embeddings_pre_norm_ith resolve via output_ids), so the first pass
+        // must read at the lead's true batch index, not the sequential per-seq counter.
+        std::vector<int32_t> lead_ibatch(n_seq, -1);
+
         const float * h_row = nullptr;
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
@@ -829,6 +885,25 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
+            // C1 Path C: prepend the deferred catch-up span - the verified committed tokens
+            // (id_last + last cycle's accepted drafts) whose draft-KV was not written because
+            // the standalone catch-up decode was removed. KV-only (logits off); their verified
+            // h-feeds were stashed in process(). One decode below writes this span's KV and the
+            // new lead together. No-op for shared-KV (defer_n_full=0) and the first cycle.
+            const int32_t n_def = std::min<int32_t>((int32_t) last_n_accepted[seq_id] + 1, defer_n_full[seq_id]);
+            // The deferred span is exactly the n_def committed tokens immediately before the new
+            // lead, so derive their positions from dp.n_past (current/authoritative) rather than
+            // storing absolute positions in process() — robust to a context-shift in between.
+            for (int32_t j = 0; j < n_def; ++j) {
+                const llama_pos p = dp.n_past - n_def + j;
+                common_batch_add(batch, defer_tokens[seq_id][j], p, { seq_id }, false);
+                std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1),
+                            defer_h[seq_id].data() + (size_t) j * n_embd, row_bytes);
+            }
+
+            // lead token (logits on). Record its batch index for the first chain-sampling pass
+            // (the KV-only prefix above shifts it off the sequential position).
+            lead_ibatch[seq_id] = batch.n_tokens;
             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
 
             h_row = pending_h[seq_id].data();
@@ -842,6 +917,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         int i = 0;
+        bool first_pass = true;
 
         while (n_drafting > 0) {
             int i_batch = 0;
@@ -855,8 +931,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                common_sampler_sample(smpl, ctx_dft, i_batch, true);
-                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, i_batch);
+                // First pass reads the lead's logits/embd at its TRUE batch index (the KV-only
+                // deferred prefix shifts the lead off the sequential position; get_logits_ith /
+                // get_embeddings_pre_norm_ith index by batch position via output_ids). Later passes
+                // rebuild a prefix-free batch, so the sequential counter equals the batch index.
+                const int32_t s_idx = first_pass ? lead_ibatch[seq_id] : i_batch;
+                common_sampler_sample(smpl, ctx_dft, s_idx, true);
+                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, s_idx);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -906,6 +987,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
+            first_pass = false;
             ++i;
         }
 
@@ -927,6 +1009,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
+
+        // C1: the next draft() prepends the verified committed span [id_last, accepted...]
+        // - that is (n_accepted + 1) rows of the deferred stash captured in process().
+        last_n_accepted[seq_id] = n_accepted;
 
         const int32_t n_rows = verify_h_rows[seq_id];
         if (n_rows <= 0) {

@@ -307,6 +307,7 @@ struct common_params_model {
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+    bool n_max_set = false; // true if n_max set explicitly on CLI (suppresses iGPU MTP auto-default)
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
     float p_split = 0.1f; // speculative decoding split probability
