@@ -38,7 +38,7 @@ but with an architecture co-designed with the target backbone:
 | `gguf-dump` inspection | ✅ |
 | Model load (`llama_model_load_from_file`) | ✅ |
 | Forward pass / `llama_decode` | ✅ foreign-KV external-assistant path shipped |
-| Speculative-decoding integration | ✅ external-assistant MTP shipped; ~85–89% accept on Gemma4-26B-A4B (ROCm + Vulkan) |
+| Speculative-decoding integration | ✅ external-assistant MTP shipped; validated 47.3% accept on Gemma4-26B-A4B-it (external drafter, `--temp 0`, chat-templated, ROCm gfx1150; upstream PR #23398 CUDA reference: 58.8%); bundled-MTP qwen3.5 path: 63.4%; accept varies with draft budget and prompt |
 
 The runtime path is intentionally gated: completing it requires plumbing the
 target context's last-layer K/V tensors into the drafter context, which is a
@@ -107,10 +107,18 @@ Tensor schema (per-block tensors are written for `blk.0..3`):
 The three pieces described below were all resolved and shipped as part of the
 fork's Phase 2 Gemma4 external-assistant MTP work (see CHANGELOG.md).
 
+**Validated accept rate:** 47.3% on Gemma4-26B-A4B-it with the external drafter
+(`n_drafted=112 n_accept=53`, `--temp 0`, chat-templated prompt, ROCm gfx1150,
+`llama-speculative-simple --spec-type draft-mtp`; commits `ca62c0756`, `6506eb25a`,
+`f2558d258`). The bundled-MTP qwen3.5 path registers 63.4% accept on the same
+validation run. Upstream PR #23398 CUDA reference: 58.8%. Accept rate varies with
+draft budget, temperature, and prompt; chat templates are required for
+instruction-tuned targets.
+
 The three pieces that were required:
 
-Implementing decoding faithfully needs three pieces that don't exist yet
-in mainline llama.cpp (implemented as fork-divergence, 666 LoC, per §D1):
+Implementing decoding faithfully needs three pieces that do not exist in
+mainline llama.cpp; they were implemented as fork-divergence (+666 LoC):
 
 1. **Cross-context K/V exposure.** Reading the target context's last-layer
    K/V at decode time and passing those tensors as graph inputs to the
@@ -118,13 +126,9 @@ in mainline llama.cpp (implemented as fork-divergence, 666 LoC, per §D1):
    `shared_kv_states` keyword argument of the drafter's `forward`.
 2. **Bidirectional attention with external K/V.** Each drafter layer attends
    over the target's existing tokens (causal-by-construction since they're
-   already decoded), with a flipped sliding window. ggml has no `flip` op
-   yet — we'll most likely materialise the index map at graph build time.
+   already decoded), with a flipped sliding window.
 3. **Centroid masked logits.** A `top_k` + `get_rows` + scatter combination
    over the LM head. ggml's existing `top_k` covers the first step; the
    scatter requires either a dense fill plus `set_rows`, or a new graph op.
 
-These will be addressed in a follow-up PR so they can be reviewed apart
-from the data-format changes here. The architecture-level guard
-(`build_arch_graph` aborts with a pointer back to this document) prevents
-silently-wrong logits in the meantime.
+Upstreaming these pieces is deferred to a dedicated PR for separate review.
