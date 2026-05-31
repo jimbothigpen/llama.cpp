@@ -238,3 +238,15 @@ depths. This is the upstream fix path for the ceiling documented in §2.
 available for the current validated target (Qwen3.5-9B). Tracking: TODO 174 covers the 32K-vocab +
 d2t loader prerequisite required before any compressed-vocab EAGLE3 drafter (v2-style or 3.1-style)
 can be loaded. Monitor upstream vLLM and EAGLE3 repositories for weight and spec releases.
+
+### Ledger entry: EAGLE 3.1 future-watch (2026-05-31)
+
+| Item | Value |
+|---|---|
+| **Status** | FUTURE-WATCH — awaiting 3.1 checkpoint + compatible loader |
+| **Canonical upstream** | SafeAILab EAGLE + vLLM v0.22.0 (released 2026-05-26) |
+| **Architecture change** | FC-norm (prenorm) + post-norm dual-path `g_embd` at d1+ steps — signals closer approximation of `FC(target_hidden)` rather than drafter prenorm output |
+| **Impact** | Dissolves 1/*n_draft* ceiling; d1+ accept could approach d0 rate (near 100 %) at all depths |
+| **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) AND TODO 174 (32K-vocab loader) is resolved |
+| **Cross-reference** | TODO 149 (EAGLE3 converge-on-rebase, PR #18039); see §2 for ceiling explanation |
+| **Next step** | Monitor SafeAILab EAGLE and vLLM repositories for weight releases; import when available + validate accept on Qwen3.5-9B |
