@@ -40,6 +40,7 @@ Offline quantization — produce a smaller GGUF from an F16/BF16 source with
 | [IK Base-K weight quants](ik-base-k.md) | Stable | `IQ2_K`, `IQ3_K`, `IQ4_K` | 2–4.5 bpw; imatrix required; better PPL than mainline K-quants at matched bpw |
 | [IK High-Bit-K weight quants](ik-high-bit-k.md) | Stable | `IQ5_K`, `IQ6_K` | 5.5–6.625 bpw; imatrix required; near-lossless quality below Q8_0's footprint |
 | [IK Row-Meta weight quants](ik-ks-row-meta.md) | Stable | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL` | 2.6875–4.25 bpw; per-row scale prefix; imatrix required; near-twin IQ4_KS/IQ4_KSS differ by 0.25 bpw |
+| [WHT weight quants](wht-weight-quants.md) | Stable | `WHT3_0` (~4.0 bpw), `WHT4_0` (~5.0 bpw) | TurboQuant weight family (TheTom); WHT rotation → Lloyd-Max codebook; imatrix required; WHT4_0 peers Q5_K_M, WHT3_0 peers Q4_0/IQ4_XS |
 
 More IK sub-family docs are in progress — see the
 [IK quantization family primer](concepts/ik-quantization-family.md) for the full
@@ -60,6 +61,7 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 
 | Feature | Status | Models | Summary |
 |---|---|---|---|
+| [MTP speculative decode](mtp.md) | Stable | Qwen3.5/3.6 (internal NextN-tail), Gemma 4 26B-A4B (external assistant) | MTP head drafts tokens from inside the target GGUF or a separate assistant; 75.56% accept (Qwen3.5/3.6 9B), 47.3% (Gemma 4); ~1.16× on iGPU, 1.5–2.5× on dGPU; `--spec-type draft-mtp` |
 | [NLD diffusion self-spec](nld-diffusion-self-spec.md) | Stable | Dream / LLaDA / LLaDA-MoE / RND1 | Bidirectional draft + causal verify on shared KV; ~3.7× over block-mode; CLI flag `--diffusion-self-spec`; server auto-detects |
 | [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 | [PHANTOM-X self-speculative n-gram drafter](phantom-x.md) | Stable | Any causal-LM GGUF | Bloom-filtered n-gram tables; no separate draft model; `--spec-type phantom`; +34% on repetitive code (86.6% accept); flat on prose; ported from carlosfundora 1-bit-turbo |
