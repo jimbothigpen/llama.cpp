@@ -21,6 +21,41 @@ static ggml_tensor * get_tensor(ggml_context * ctx, const char * name) {
 	return t;
 }
 
+// ─── Per-architecture feature table ───────────────────────────────────────────
+// Maps general.architecture strings → scorer feature flags.
+// Extend this table to add new scorer-compatible architectures.
+struct pflash_arch_info {
+	const char *     arch_str;
+	bool             has_qk_norm;       // per-head QK norms (Qwen3/Qwen3.5)
+	bool             has_attn_bias;     // QKV projection biases (Qwen2/Qwen2.5)
+	pflash_norm_type norm_type;
+	pflash_ffn_act   ffn_act;
+	const char *     ffn_norm_fmt;      // format string for FFN norm tensor name
+	const char *     full_attn_key;     // GGUF key for hybrid attn interval (nullptr = pure-attn)
+	float            norm_eps_default;  // used when GGUF key absent
+};
+
+static const pflash_arch_info PFLASH_ARCH_TABLE[] = {
+	// arch_str    qk   bias  norm               act             ffn_norm_fmt                          full_attn_key                    eps
+	{ "qwen3",    true, false, PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-6f },
+	{ "qwen35",   true, false, PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.post_attention_norm.weight", "qwen35.full_attention_interval", 1e-6f },
+	{ "qwen2",    false,true,  PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-6f },
+	{ "llama",    false,false, PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-5f },
+	{ "mistral3", false,false, PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-5f },
+	{ "mistral4", false,false, PFLASH_NORM_RMS,  PFLASH_FFN_SILU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-5f },
+	{ "gemma3",   false,false, PFLASH_NORM_LAYER,PFLASH_FFN_GELU, "blk.%d.ffn_norm.weight",            nullptr,                         1e-6f },
+};
+static const int PFLASH_ARCH_TABLE_N = (int)(sizeof(PFLASH_ARCH_TABLE) / sizeof(PFLASH_ARCH_TABLE[0]));
+
+static const pflash_arch_info * pflash_arch_lookup(const char * arch_str) {
+	for (int i = 0; i < PFLASH_ARCH_TABLE_N; i++) {
+		if (strcmp(PFLASH_ARCH_TABLE[i].arch_str, arch_str) == 0) {
+			return &PFLASH_ARCH_TABLE[i];
+		}
+	}
+	return nullptr;
+}
+
 int pflash_model_load(pflash_model & model, const std::string & gguf_path, int gpu_device) {
 	// mmap the GGUF file
 	model.mmap_fd = open(gguf_path.c_str(), O_RDONLY);
@@ -58,11 +93,25 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		return idx >= 0 ? gguf_get_val_f32(gctx, idx) : def;
 	};
 
-	// Detect architecture: qwen3 (pure-attention) vs qwen35 (hybrid SSM+attention)
+	// Detect architecture from GGUF and look up feature flags.
 	int arch_key_idx = gguf_find_key(gctx, "general.architecture");
-	const char * arch_str = arch_key_idx >= 0 ? gguf_get_val_str(gctx, arch_key_idx) : "qwen3";
-	bool is_qwen35 = (strncmp(arch_str, "qwen35", 6) == 0);
-	const char * pfx = is_qwen35 ? "qwen35" : "qwen3";
+	const char * arch_str = arch_key_idx >= 0 ? gguf_get_val_str(gctx, arch_key_idx) : "";
+	const pflash_arch_info * ainfo = pflash_arch_lookup(arch_str);
+	if (!ainfo) {
+		fprintf(stderr, "pflash: unsupported scorer architecture '%s' — supported: qwen3, qwen35, qwen2, llama, mistral3, mistral4, gemma3\n", arch_str);
+		gguf_free(gctx);
+		pflash_model_free(model);
+		return -1;
+	}
+
+	// Propagate feature flags to model
+	model.has_qk_norm   = ainfo->has_qk_norm;
+	model.has_attn_bias = ainfo->has_attn_bias;
+	model.norm_type     = ainfo->norm_type;
+	model.ffn_act       = ainfo->ffn_act;
+
+	// GGUF key prefix matches general.architecture by llama.cpp convention
+	const char * pfx = arch_str;
 
 	// Helper: build "<arch>.<suffix>" key on the stack
 	char pk_buf[128];
@@ -76,11 +125,15 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	model.n_kv_heads = (int)get_u32(pk("attention.head_count_kv"), 8);
 	model.n_ff       = (int)get_u32(pk("feed_forward_length"),     3072);
 	// key_length is the per-head QK dimension; may differ from n_embd/n_heads
-	model.d_head          = (int)get_u32(pk("attention.key_length"), model.n_embd / model.n_heads);
-	model.rope_freq_base  = get_f32(pk("rope.freq_base"), 1000000.0f);
-	model.rope_type       = 2; // NEOX
+	model.d_head         = (int)get_u32(pk("attention.key_length"), model.n_embd / model.n_heads);
+	model.rope_freq_base = get_f32(pk("rope.freq_base"), 1000000.0f);
+	model.rope_type      = 2; // NEOX (RoPE is intentionally omitted from scorer graph)
 
-	// vocab_size: prefer arch key; qwen35 GGUFs omit it — fall back to tokenizer array count
+	// RMSNorm epsilon: read from GGUF if present, else use per-arch default
+	model.norm_eps = get_f32(pk("attention.layer_norm_rms_epsilon"), ainfo->norm_eps_default);
+
+	// vocab_size: prefer arch key; some GGUFs omit it — fall back to tokenizer array count.
+	// Fail loudly if neither is available rather than silently using a wrong vocab size.
 	{
 		char vkey[128];
 		snprintf(vkey, sizeof(vkey), "%s.vocab_size", pfx);
@@ -89,13 +142,24 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 			model.n_vocab = (int)gguf_get_val_u32(gctx, vidx);
 		} else {
 			int tidx = gguf_find_key(gctx, "tokenizer.ggml.tokens");
-			model.n_vocab = (tidx >= 0) ? (int)gguf_get_arr_n(gctx, tidx) : 151936;
+			if (tidx >= 0) {
+				model.n_vocab = (int)gguf_get_arr_n(gctx, tidx);
+			} else {
+				fprintf(stderr, "pflash: cannot determine vocab_size for arch '%s' — GGUF has neither '%s' nor tokenizer.ggml.tokens\n",
+					arch_str, vkey);
+				gguf_free(gctx);
+				pflash_model_free(model);
+				return -1;
+			}
 		}
 	}
 
 	// full_attention_interval > 0: hybrid SSM+attention model; only every N-th layer
 	// (0-indexed: layers where (i+1) % interval == 0) has separate Q/K/V attention weights.
-	int full_attn_interval = is_qwen35 ? (int)get_u32("qwen35.full_attention_interval", 0) : 0;
+	int full_attn_interval = 0;
+	if (ainfo->full_attn_key) {
+		full_attn_interval = (int)get_u32(ainfo->full_attn_key, 0);
+	}
 	auto is_full_attn = [&](int i) -> bool {
 		return full_attn_interval <= 0 || (i + 1) % full_attn_interval == 0;
 	};
@@ -108,8 +172,9 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 	}
 	model.n_layers = n_scoring_layers;
 
-	fprintf(stderr, "pflash: %s scorer — %d scoring layers (/%d total), %d embd, %d heads (%d kv), d=%d, vocab=%d\n",
-		arch_str, model.n_layers, n_total_layers, model.n_embd, model.n_heads, model.n_kv_heads, model.d_head, model.n_vocab);
+	fprintf(stderr, "pflash: %s scorer — %d scoring layers (/%d total), %d embd, %d heads (%d kv), d=%d, vocab=%d, qk_norm=%d, bias=%d\n",
+		arch_str, model.n_layers, n_total_layers, model.n_embd, model.n_heads, model.n_kv_heads,
+		model.d_head, model.n_vocab, (int)model.has_qk_norm, (int)model.has_attn_bias);
 
 	// If tok_embd is quantized, override its type to F32 before backend allocation so
 	// ggml_get_rows works on all backends (quantized get_rows unsupported on GPU backends).
@@ -196,31 +261,54 @@ int pflash_model_load(pflash_model & model, const std::string & gguf_path, int g
 		model.output = model.tok_embd; // tied embeddings
 	}
 
-	// qwen35 uses post_attention_norm for the FFN layer-norm; qwen3 uses ffn_norm
-	const char * ffn_norm_fmt = is_qwen35 ? "blk.%d.post_attention_norm.weight"
-	                                       : "blk.%d.ffn_norm.weight";
-
 	model.layers.resize(model.n_layers);
 	char buf[256];
 	int fa_idx = 0;
 	for (int i = 0; i < n_total_layers; i++) {
 		if (!is_full_attn(i)) continue; // skip SSM-only layers in hybrid architectures
 		auto & l = model.layers[fa_idx++];
+
+		// Tensor name helper: format string with layer index
 		auto tn = [&](const char * fmt) -> ggml_tensor * {
 			snprintf(buf, sizeof(buf), fmt, i);
 			return get_tensor(model.ctx_ggml, buf);
 		};
+		// Tensor name helper: returns nullptr (no error) if tensor is absent
+		auto tn_opt = [&](const char * fmt) -> ggml_tensor * {
+			snprintf(buf, sizeof(buf), fmt, i);
+			return ggml_get_tensor(model.ctx_ggml, buf);
+		};
+
 		l.attn_norm = tn("blk.%d.attn_norm.weight");
 		l.wq        = tn("blk.%d.attn_q.weight");
 		l.wk        = tn("blk.%d.attn_k.weight");
 		l.wv        = tn("blk.%d.attn_v.weight");
 		l.wo        = tn("blk.%d.attn_output.weight");
-		l.q_norm    = tn("blk.%d.attn_q_norm.weight");
-		l.k_norm    = tn("blk.%d.attn_k_norm.weight");
-		l.ffn_norm  = tn(ffn_norm_fmt);
+		l.ffn_norm  = tn(ainfo->ffn_norm_fmt);
 		l.ffn_gate  = tn("blk.%d.ffn_gate.weight");
 		l.ffn_up    = tn("blk.%d.ffn_up.weight");
 		l.ffn_down  = tn("blk.%d.ffn_down.weight");
+
+		// QK per-head norms: only present on Qwen3/Qwen3.5.
+		// Use tn_opt to avoid spurious "missing tensor" errors on other arches.
+		if (model.has_qk_norm) {
+			l.q_norm = tn("blk.%d.attn_q_norm.weight");
+			l.k_norm = tn("blk.%d.attn_k_norm.weight");
+		} else {
+			l.q_norm = nullptr;
+			l.k_norm = nullptr;
+		}
+
+		// Attention projection biases: only present on Qwen2/Qwen2.5.
+		if (model.has_attn_bias) {
+			l.attn_q_b = tn_opt("blk.%d.attn_q.bias");
+			l.attn_k_b = tn_opt("blk.%d.attn_k.bias");
+			l.attn_v_b = tn_opt("blk.%d.attn_v.bias");
+		} else {
+			l.attn_q_b = nullptr;
+			l.attn_k_b = nullptr;
+			l.attn_v_b = nullptr;
+		}
 	}
 
 	ggml_backend_free(backend);

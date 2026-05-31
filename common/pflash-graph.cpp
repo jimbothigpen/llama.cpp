@@ -11,8 +11,7 @@
 #include <vector>
 #include <algorithm>
 
-static constexpr int   N_LOOKAHEAD = 8;
-static constexpr float NORM_EPS    = 1e-6f;
+static constexpr int N_LOOKAHEAD = 8;
 
 // ─── Placeholder scorer (used when scorer_path == "test") ─────────────────
 void pflash_generate_placeholder_scores(float * out, int n_lookahead, int S,
@@ -53,6 +52,23 @@ static void tensor_get_f32(const ggml_tensor * t, std::vector<float> & dst) {
     }
 }
 
+// ─── Arch-dispatched norm helper ──────────────────────────────────────────
+// PFLASH_NORM_RMS:   rms_norm(x) * weight           (Llama, Qwen, Mistral)
+// PFLASH_NORM_LAYER: rms_norm(x) * (1 + weight)     (Gemma3)
+static ggml_tensor * pflash_build_norm(
+        ggml_context    * ctx,
+        ggml_tensor     * x,
+        ggml_tensor     * weight,
+        float             eps,
+        pflash_norm_type  norm_type) {
+    ggml_tensor * rn = ggml_rms_norm(ctx, x, eps);
+    if (norm_type == PFLASH_NORM_LAYER) {
+        // Gemma3 uses (1 + w) scaling: weight is initialized near 0, effective scale ≈ 1
+        return ggml_mul(ctx, rn, ggml_add(ctx, weight, ggml_new_f32(ctx, 1.0f)));
+    }
+    return ggml_mul(ctx, rn, weight);
+}
+
 // ─── Real scorer forward pass ──────────────────────────────────────────────
 //
 // Builds a single ggml graph covering N_LOOKAHEAD layers.
@@ -81,6 +97,7 @@ pflash_scorer_result pflash_score(
     const int d_head    = model.d_head;
     const int gqa_ratio = n_heads / n_kv;
     const float scale_attn = 1.0f / sqrtf((float)d_head);
+    const float norm_eps   = model.norm_eps;
 
     pflash_scorer_result result;
     result.n_lookahead = n_layers; // actual scoring layers (may be < N_LOOKAHEAD for hybrid models)
@@ -142,9 +159,7 @@ pflash_scorer_result pflash_score(
         const auto & lw = model.layers[l];
 
         // ── Attention norm ─────────────────────────────────────────────────
-        ggml_tensor * h_norm = ggml_mul(ctx,
-            ggml_rms_norm(ctx, h, NORM_EPS),
-            lw.attn_norm);
+        ggml_tensor * h_norm = pflash_build_norm(ctx, h, lw.attn_norm, norm_eps, model.norm_type);
 
         // ── Q for last token only (position S-1) ──────────────────────────
         // h_norm: [n_embd, S] — extract last column (ne[0]=n_embd is fast dim)
@@ -160,8 +175,11 @@ pflash_scorer_result pflash_score(
         // Qwen3:   q_proj_dim = n_heads * d_head (Q only)
         // Qwen3.5: q_proj_dim = n_heads * 2 * d_head (Q interleaved with gate per head)
         ggml_tensor * Q_flat = ggml_mul_mat(ctx, lw.wq, h_last);
+        if (lw.attn_q_b) {
+            Q_flat = ggml_add(ctx, Q_flat, lw.attn_q_b);
+        }
 
-        // Reshape to [d_head, n_heads], apply per-head Q-norm.
+        // Reshape to [d_head, n_heads], apply per-head Q-norm if present.
         // For Qwen3.5, extract Q (first d_head of each 2*d_head block) via stride view.
         ggml_tensor * Q_3d;
         if (Q_flat->ne[0] == (int64_t)n_heads * 2 * d_head) {
@@ -174,28 +192,48 @@ pflash_scorer_result pflash_score(
         } else {
             Q_3d = ggml_reshape_2d(ctx, Q_flat, d_head, n_heads);
         }
-        ggml_tensor * Q_normed = ggml_mul(ctx, ggml_rms_norm(ctx, Q_3d, NORM_EPS), lw.q_norm);
+
+        // G4 fix: guard QK norm — lw.q_norm is NULL for arches without per-head norms
+        ggml_tensor * Q_normed;
+        if (lw.q_norm) {
+            Q_normed = ggml_mul(ctx, ggml_rms_norm(ctx, Q_3d, norm_eps), lw.q_norm);
+        } else {
+            Q_normed = Q_3d;
+        }
         ggml_set_output(Q_normed);
         out_Q[l] = Q_normed;
 
         // ── K for all tokens ───────────────────────────────────────────────
         // K_flat = wk^T @ h_norm → [n_kv*d_head, S]
         ggml_tensor * K_flat = ggml_mul_mat(ctx, lw.wk, h_norm);
+        if (lw.attn_k_b) {
+            K_flat = ggml_add(ctx, K_flat, lw.attn_k_b);
+        }
 
-        // Reshape to [d_head, n_kv, S], apply per-head K-norm
-        ggml_tensor * K_3d     = ggml_reshape_3d(ctx, K_flat, d_head, n_kv, S);
-        ggml_tensor * K_normed = ggml_mul(ctx, ggml_rms_norm(ctx, K_3d, NORM_EPS), lw.k_norm);
+        // Reshape to [d_head, n_kv, S]; apply per-head K-norm if present.
+        ggml_tensor * K_3d = ggml_reshape_3d(ctx, K_flat, d_head, n_kv, S);
+
+        // G5 fix: guard QK norm — lw.k_norm is NULL for arches without per-head norms
+        ggml_tensor * K_normed;
+        if (lw.k_norm) {
+            K_normed = ggml_mul(ctx, ggml_rms_norm(ctx, K_3d, norm_eps), lw.k_norm);
+        } else {
+            K_normed = K_3d;
+        }
         ggml_set_output(K_normed);
         out_K[l] = K_normed;
 
         // ── FFN residual (advances h for next layer without O(S²) attention) ─
-        ggml_tensor * h_ffn_norm = ggml_mul(ctx,
-            ggml_rms_norm(ctx, h, NORM_EPS),
-            lw.ffn_norm);
+        ggml_tensor * h_ffn_norm = pflash_build_norm(ctx, h, lw.ffn_norm, norm_eps, model.norm_type);
 
         ggml_tensor * gate    = ggml_mul_mat(ctx, lw.ffn_gate, h_ffn_norm); // [n_ff, S]
         ggml_tensor * up      = ggml_mul_mat(ctx, lw.ffn_up,   h_ffn_norm); // [n_ff, S]
-        ggml_tensor * act     = ggml_mul(ctx, ggml_silu(ctx, gate), up);    // [n_ff, S]
+        ggml_tensor * act;
+        if (model.ffn_act == PFLASH_FFN_GELU) {
+            act = ggml_mul(ctx, ggml_gelu(ctx, gate), up);                  // GeGLU (Gemma3)
+        } else {
+            act = ggml_mul(ctx, ggml_silu(ctx, gate), up);                  // SwiGLU (default)
+        }
         ggml_tensor * ffn_out = ggml_mul_mat(ctx, lw.ffn_down, act);        // [n_embd, S]
 
         h = ggml_add(ctx, h, ffn_out);
@@ -258,8 +296,8 @@ pflash_scorer_result pflash_score(
             int kv_h = h / gqa_ratio;
             // Q layout [d_head, n_heads]: Q[d, h] = Q_host[d + h*d_head]
             // K layout [d_head, n_kv, S]:  K[d, kv_h, t] = K_host[d + kv_h*d_head + t*n_kv*d_head]
-            const float * q       = Q_host.data() + (size_t)h    * d_head;
-            const float * K_kv    = K_host.data() + (size_t)kv_h * d_head; // base for this kv head
+            const float * q    = Q_host.data() + (size_t)h    * d_head;
+            const float * K_kv = K_host.data() + (size_t)kv_h * d_head; // base for this kv head
 
             for (int t = 0; t < S; t++) {
                 const float * k = K_kv + (size_t)t * (size_t)n_kv * d_head; // step n_kv*d_head per token
