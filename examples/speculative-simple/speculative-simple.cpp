@@ -111,6 +111,10 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        // Compact-vocab EAGLE3 drafts inherit the target's tok_embd. Must run before the draft
+        // context is created, since graph reserve dereferences model.tok_embd.
+        common_speculative_setup_draft_model(model_dft.get(), model_tgt);
+
         auto cparams = common_context_params_to_llama(params_dft);
         if (want_mtp) {
             // External MTP draft (e.g. gemma4-assistant): type the draft context MTP so its

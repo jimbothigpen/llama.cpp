@@ -1065,6 +1065,12 @@ extern "C" {
                              int32_t * buf,
                              int64_t   buf_size);
 
+    // EAGLE3 weight inheritance: compact-vocab drafts ship no token embeddings and borrow the
+    // target's. Returns the model's tok_embd tensor (may be null); the setter shares a tensor
+    // pointer into the draft model before its context/graph is built.
+    LLAMA_API struct ggml_tensor * llama_model_eagle3_get_tok_embd(const struct llama_model * model);
+    LLAMA_API void                 llama_model_eagle3_set_tok_embd(struct llama_model * model, struct ggml_tensor * tensor);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 

@@ -2503,6 +2503,20 @@ void common_speculative_free(common_speculative * spec) {
     delete spec;
 }
 
+void common_speculative_setup_draft_model(struct llama_model * model_dft, const struct llama_model * model_tgt) {
+    if (model_dft == nullptr || model_tgt == nullptr) {
+        return;
+    }
+    // Compact-vocab EAGLE3 drafts have no token embeddings of their own; inherit the target's.
+    if (llama_model_eagle3_get_tok_embd(model_dft) == nullptr) {
+        struct ggml_tensor * tgt_tok_embd = llama_model_eagle3_get_tok_embd(model_tgt);
+        if (tgt_tok_embd != nullptr) {
+            llama_model_eagle3_set_tok_embd(model_dft, tgt_tok_embd);
+            LOG_INF("%s: draft inheriting target's tok_embd (compact-vocab EAGLE3)\n", __func__);
+        }
+    }
+}
+
 common_speculative_draft_params & common_speculative_get_draft_params(
         common_speculative * spec,
         llama_seq_id seq_id) {

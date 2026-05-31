@@ -5,13 +5,50 @@ from typing import Iterable, TYPE_CHECKING
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import ModelBase, TextModel, LazyTorchTensor, logger, gguf
 from .llama import LlamaModel
 
 
 @ModelBase.register("LlamaForCausalLMEagle3")
 class LlamaEagle3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.EAGLE3
+
+    def _has_local_tokenizer(self) -> bool:
+        return any(
+            (self.dir_model / f).is_file()
+            for f in ("tokenizer.json", "tokenizer_config.json", "tokenizer.model")
+        )
+
+    def set_vocab(self) -> None:
+        # SpecForge compact-vocab EAGLE3 drafts bundle no tokenizer; the GGUF must carry the
+        # FULL target vocab (input embeddings + d2t scatter live in target-token space). Swap
+        # dir_model to --target-model-dir to load the target's tokenizer (mirrors DFlashDraftModel).
+        target_dir = getattr(self, "target_model_dir", None)
+        needs_target = not self._has_local_tokenizer()
+
+        if needs_target and target_dir is not None:
+            logger.info("EAGLE3: no tokenizer in draft dir; loading tokenizer from --target-model-dir %s", target_dir)
+            original_dir = self.dir_model
+            self.dir_model = target_dir
+        elif needs_target:
+            raise ValueError(
+                "EAGLE3: no tokenizer files in the draft model directory. Provide the base model "
+                "path via --target-model-dir so the tokenizer can be loaded from there "
+                "(e.g. --target-model-dir /path/to/Qwen3.5-35B-A3B)."
+            )
+        else:
+            original_dir = None
+
+        try:
+            try:
+                self._set_vocab_sentencepiece()
+                return
+            except FileNotFoundError:
+                pass
+            self._set_vocab_gpt2()
+        finally:
+            if original_dir is not None:
+                self.dir_model = original_dir
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -25,9 +62,13 @@ class LlamaEagle3Model(TextModel):
         if name == "t2d":
             return
 
-        # d2t: draft-to-target vocab mapping
+        # d2t: draft-to-target vocab mapping. Compact-vocab drafts store it as an int offset table
+        # (target_id = j + d2t[j]); keep it as raw I64 (written in prepare_tensors) so the parent
+        # F32 quantize path does not mangle it.
         if name == "d2t":
-            yield ("d2t.weight", data_torch)
+            if not hasattr(self, "_eagle3_int_tensors"):
+                self._eagle3_int_tensors = {}
+            self._eagle3_int_tensors["d2t.weight"] = data_torch
             return
 
         # fc encoder projection
@@ -100,3 +141,15 @@ class LlamaEagle3Model(TextModel):
                 return
 
         raise ValueError(f"Unhandled EAGLE3 tensor: {name}")
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        # Write stashed integer tensors (d2t) as raw I64 — bypasses the F32 quantize path.
+        # The lazy numpy() path has no int64 mapping, so materialize eagerly first.
+        import torch
+        for tensor_name, data_torch in getattr(self, "_eagle3_int_tensors", {}).items():
+            data = LazyTorchTensor.to_eager(data_torch).to(torch.int64).numpy()
+            shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+            logger.info(f"{tensor_name + ',':<24} I64, shape = {shape_str}")
+            self.gguf_writer.add_tensor(tensor_name, data, raw_dtype=gguf.GGMLQuantizationType.I64)

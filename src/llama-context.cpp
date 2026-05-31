@@ -2091,7 +2091,38 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+
+                // Compact-vocab EAGLE3 (SpecForge): the draft output head produces draft_vocab
+                // (< n_vocab) logits. Scatter them into full target-vocab rows (target_id = j + d2t[j],
+                // d2t being the draft->target offset table) so downstream sampling runs in target space.
+                if (model.arch == LLM_ARCH_EAGLE3 && model.d2t && t_logits->ne[0] < n_vocab) {
+                    const int64_t draft_vocab = t_logits->ne[0];
+
+                    static thread_local std::vector<int64_t> d2t_map;
+                    if ((int64_t) d2t_map.size() != model.d2t->ne[0]) {
+                        d2t_map.resize(model.d2t->ne[0]);
+                        ggml_backend_tensor_get(model.d2t, d2t_map.data(), 0, d2t_map.size()*sizeof(int64_t));
+                    }
+
+                    std::vector<float> draft_logits((size_t) n_outputs * draft_vocab);
+                    ggml_backend_tensor_get_async(backend_res, t_logits, draft_logits.data(), 0,
+                                                  n_outputs*draft_vocab*sizeof(float));
+                    synchronize();
+
+                    std::fill(logits_out, logits_out + (size_t) n_outputs * n_vocab,
+                              -std::numeric_limits<float>::infinity());
+                    for (int64_t r = 0; r < n_outputs; ++r) {
+                        const float * src = draft_logits.data() + r * draft_vocab;
+                        float       * dst = logits_out          + r * n_vocab;
+                        for (int64_t j = 0; j < draft_vocab; ++j) {
+                            const int64_t target_id = j + d2t_map[j];
+                            GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
+                            dst[target_id] = src[j];
+                        }
+                    }
+                } else {
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
                 if (!sidecars->empty()) {
                     sidecars_post_compute_pending = true;
                 }

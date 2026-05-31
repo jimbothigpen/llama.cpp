@@ -24,6 +24,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
 void common_speculative_free(common_speculative * spec);
 
+// Call once after loading the draft model but BEFORE creating its context (graph reserve derefs
+// tok_embd). Compact-vocab EAGLE3 drafts ship no token embeddings; this shares the target model's
+// tok_embd into the draft so the draft can embed target-space tokens. No-op for self-contained drafts.
+void common_speculative_setup_draft_model(struct llama_model * model_dft, const struct llama_model * model_tgt);
+
 struct common_speculative_draft_params {
     // this flag is used to chain the drafts through all the available implementations
     // after the first successful draft from an implementation, we set it

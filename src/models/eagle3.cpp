@@ -12,24 +12,34 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
     type = LLM_TYPE_UNKNOWN;
 }
 
-void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
+void llama_model_eagle3::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_embd_fc_in = 3 * n_embd;
     const int64_t n_embd_2x    = 2 * n_embd;
 
-    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
-    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},           0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
-    if (!output) {
+    // Compact-vocab EAGLE3 (SpecForge): the output head + d2t use a smaller draft vocab than the
+    // full target token space. Input embeddings (tok_embd) stay full-vocab and are inherited from
+    // the target model at runtime when absent from the draft. Derive draft vocab from d2t width.
+    int64_t n_draft_vocab = n_vocab;
+    const struct ggml_tensor * d2t_meta = ml.get_tensor_meta(tn(LLM_TENSOR_EAGLE3_D2T, "weight").str().c_str());
+    if (d2t_meta) {
+        n_draft_vocab = d2t_meta->ne[0];
+    }
+
+    // tok_embd is full target vocab; optional so compact drafts can inherit it from the target.
+    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab},       TENSOR_NOT_REQUIRED);
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},                0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, TENSOR_NOT_REQUIRED);
+    if (!output && tok_embd) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
     // encoder: fc projection [n_embd_fc_in → n_embd]
     fc  = create_tensor(tn(LLM_TENSOR_EAGLE3_FC,  "weight"), {n_embd_fc_in, n_embd}, 0);
 
-    // draft-to-target vocab mapping (optional)
-    d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T, "weight"), {n_vocab}, TENSOR_NOT_REQUIRED);
+    // draft-to-target vocab mapping (compact-vocab only; absent for full-vocab drafts)
+    d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T, "weight"), {n_draft_vocab}, TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];

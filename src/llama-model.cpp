@@ -2706,6 +2706,16 @@ int64_t llama_model_eagle3_get_d2t(const struct llama_model * model, int32_t * b
     return n;
 }
 
+struct ggml_tensor * llama_model_eagle3_get_tok_embd(const struct llama_model * model) {
+    return model ? model->tok_embd : nullptr;
+}
+
+void llama_model_eagle3_set_tok_embd(struct llama_model * model, struct ggml_tensor * tensor) {
+    if (model) {
+        model->tok_embd = tensor;
+    }
+}
+
 //
 // DFlash drafter model public API
 //
