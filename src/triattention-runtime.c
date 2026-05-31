@@ -181,8 +181,28 @@ int tria_maybe_score(
 
     int nl  = rt->stats->num_layers;
     int nkv = rt->stats->num_kv_heads;
-    int fc  = rt->stats->freq_count;
-    int hd  = rt->stats->head_dim;
+    int fc  = rt->stats->freq_count;   /* scalar / layer-0 (GPU path + uniform models) */
+    int hd  = rt->stats->head_dim;     /* scalar / layer-0 */
+
+    /* Per-layer head_dim tables (v4). For v<=3 / non-hybrid every layer == the scalar,
+     * so the per-layer loop below reduces exactly to single-head_dim behavior. */
+    const uint32_t * layer_hd = rt->stats->layer_head_dim;
+    const uint32_t * layer_fc = rt->stats->layer_freq_count;
+    int max_hd = hd, max_fc = fc;
+    for (int l = 0; l < nl; l++) {
+        if ((int)layer_hd[l] > max_hd) max_hd = (int)layer_hd[l];
+        if ((int)layer_fc[l] > max_fc) max_fc = (int)layer_fc[l];
+    }
+
+    /* A/B toggle (spec §5): reproduce SWA-only (pre-Part-3) behavior by skipping the
+     * full-attention layers, so the lift from scoring them can be isolated. */
+    static int tria_no_fullattn = -1;
+    if (tria_no_fullattn < 0) {
+        const char * e = getenv("TRIA_NO_FULLATTN");
+        tria_no_fullattn = (e && e[0] == '1') ? 1 : 0;
+        if (tria_no_fullattn)
+            fprintf(stderr, "tria: FULL-ATTN SCORING DISABLED (TRIA_NO_FULLATTN — SWA-only A/B mode)\n");
+    }
 
     int n_old = n_used - rt->window;
     if (n_old <= 0) return 0;
@@ -278,14 +298,15 @@ int tria_maybe_score(
         }
     }
 
-    int n_embd_k_gqa = nkv * hd;
-    /* Overflow check for element count (Codex review #2) */
-    size_t n_elem = (size_t)n_new * (size_t)n_embd_k_gqa;
-    if (n_elem / (size_t)n_new != (size_t)n_embd_k_gqa) {
+    int n_embd_k_gqa = nkv * hd;        /* scalar (layer-0); GPU path / uniform models */
+    int n_embd_k_max = nkv * max_hd;    /* alloc width — buffers sized to the widest layer */
+    /* Overflow check for element count (Codex review #2) — on the max alloc width */
+    size_t n_elem_max = (size_t)n_new * (size_t)n_embd_k_max;
+    if (n_elem_max / (size_t)n_new != (size_t)n_embd_k_max) {
         rt->n_scored = n_kv;
         return 0;
     }
-    size_t k_bytes = n_elem * sizeof(float);
+    size_t k_bytes = n_elem_max * sizeof(float);
     float * k_f32 = (float *)malloc(k_bytes);
     float * scores = (float *)malloc(n_new * sizeof(float));
     int * key_pos = (int *)malloc(n_old * sizeof(int));
@@ -318,8 +339,8 @@ int tria_maybe_score(
     rt->global_budget = budget;
     rt->compaction_active = 0;
 
-    float * k_real = (float *)malloc((size_t)n_new * fc * sizeof(float));
-    float * k_imag = (float *)malloc((size_t)n_new * fc * sizeof(float));
+    float * k_real = (float *)malloc((size_t)n_new * max_fc * sizeof(float));
+    float * k_imag = (float *)malloc((size_t)n_new * max_fc * sizeof(float));
 
     if (!k_f32 || !scores || !key_pos || !rt->global_scores || !k_real || !k_imag) {
         free(k_f32); free(scores); free(key_pos); free(k_real); free(k_imag);
@@ -506,27 +527,31 @@ int tria_maybe_score(
             }
         }
 
-        /* Hybrid mixed-head_dim guard (e.g. Gemma-4: SWA layers head_dim=256,
-         * full-attn layers head_dim=512). The calibration stats are single-head_dim
-         * (the SWA dim — see tria-gen), so layers whose captured K row matches neither
-         * the calibrated row (nkv*hd) nor its 128-padded form would be mis-strided by
-         * the freq decomposition / GPU kernel below. Skip them: their stats are
-         * uncalibrated anyway, so scoring is driven by the matching (SWA) layers.
-         * Non-hybrid models are unaffected (every layer matches). */
+        /* Part 3: score every layer at its OWN head_dim (v4 per-layer tables).
+         * Gemma-4 has SWA layers (hd=256, fc=128) and full-attention layers (hd=512,
+         * fc=256) — both are calibrated now, so the full-attn layers (which carry the
+         * long-range retrieval signal) vote in their own eviction. Validate the captured
+         * K row against THIS layer's width (or its 128-padded turbo form); skip only a
+         * genuinely unexpected width. For v<=3 / non-hybrid models every layer == hd. */
+        int hd_l = (int)layer_hd[li];
+        int fc_l = (int)layer_fc[li];
+        int n_embd_l = nkv * hd_l;
         {
             int64_t actual_row = k_tensor->ne[0];
-            int exp_row    = nkv * hd;
-            int exp_padded = nkv * (((hd + 127) / 128) * 128);
+            int exp_row    = n_embd_l;
+            int exp_padded = nkv * (((hd_l + 127) / 128) * 128);
             if (actual_row != exp_row && actual_row != exp_padded) {
                 static int s_warned_mixed = 0;
                 if (!s_warned_mixed) {
                     s_warned_mixed = 1;
-                    fprintf(stderr, "tria_score: layer %d K row %lld != calibrated %d/%d "
-                            "(hybrid mixed head_dim) — skipping uncalibrated layers\n",
-                            li, (long long)actual_row, exp_row, exp_padded);
+                    fprintf(stderr, "tria_score: layer %d K row %lld != expected %d/%d "
+                            "(per-layer head_dim %d) — skipping\n",
+                            li, (long long)actual_row, exp_row, exp_padded, hd_l);
                 }
                 continue;
             }
+            /* A/B (SWA-only mode): skip full-attention layers (hd_l != scalar/layer-0 hd). */
+            if (tria_no_fullattn && hd_l != hd) continue;
         }
 
         /* GPU scoring path for q8_0: score directly on GPU, no CPU transfer */
@@ -553,11 +578,11 @@ int tria_maybe_score(
         }
 
         /* Compute per-layer physical row width (turbo types may pad to 128 multiples) */
-        int layer_phys_hd = hd;
-        int n_embd_k_phys = n_embd_k_gqa;
+        int layer_phys_hd = hd_l;
+        int n_embd_k_phys = n_embd_l;
         {
             int64_t actual_row = k_tensor->ne[0];
-            if (actual_row != n_embd_k_gqa) {
+            if (actual_row != n_embd_l) {
                 layer_phys_hd = (int)(actual_row / nkv);
                 n_embd_k_phys = (int)actual_row;
             }
@@ -565,30 +590,31 @@ int tria_maybe_score(
         size_t row_size = ggml_row_size(k_tensor->type, n_embd_k_phys);
         size_t read_offset = (size_t)score_start * row_size;
         size_t read_bytes = (size_t)n_new * row_size;
+        size_t n_elem_l = (size_t)n_new * (size_t)n_embd_l;  /* logical element count, this layer */
 
         if (k_tensor->type == GGML_TYPE_F16) {
             uint16_t * k_f16 = (uint16_t *)malloc(read_bytes);
             if (!k_f16) continue;
             ggml_backend_tensor_get(k_tensor, k_f16, read_offset, read_bytes);
-            for (size_t i = 0; i < n_elem; i++) {
+            for (size_t i = 0; i < n_elem_l; i++) {
                 k_f32[i] = ggml_fp16_to_fp32(((ggml_fp16_t *)k_f16)[i]);
             }
             free(k_f16);
         } else if (k_tensor->type == GGML_TYPE_F32) {
-            ggml_backend_tensor_get(k_tensor, k_f32, read_offset, n_elem * sizeof(float));
+            ggml_backend_tensor_get(k_tensor, k_f32, read_offset, n_elem_l * sizeof(float));
         } else if (k_tensor->type == GGML_TYPE_Q8_0) {
             /* Q8_0 block: [fp16 scale d][32 x int8 qs] — sizeof = 34 bytes.
              * Only reached when score_stride reduces layer count to manageable. */
             #define TRIA_QK8_0 32
             #define TRIA_Q8_0_BLOCK_SIZE (sizeof(ggml_fp16_t) + TRIA_QK8_0)
-            if (n_embd_k_gqa % TRIA_QK8_0 != 0) { continue; }
+            if (n_embd_l % TRIA_QK8_0 != 0) { continue; }
             uint8_t * k_q8 = (uint8_t *)malloc(read_bytes);
             if (!k_q8) continue;
             ggml_backend_tensor_get(k_tensor, k_q8, read_offset, read_bytes);
-            const int nb = n_embd_k_gqa / TRIA_QK8_0;
+            const int nb = n_embd_l / TRIA_QK8_0;
             for (int s = 0; s < n_new; s++) {
                 const uint8_t * row_q8 = k_q8 + (size_t)s * row_size;
-                float * dst = k_f32 + (size_t)s * n_embd_k_gqa;
+                float * dst = k_f32 + (size_t)s * n_embd_l;
                 for (int b = 0; b < nb; b++) {
                     const uint8_t * blk = row_q8 + b * TRIA_Q8_0_BLOCK_SIZE;
                     ggml_fp16_t d_fp16;
@@ -615,17 +641,17 @@ int tria_maybe_score(
                             k_tensor->type == GGML_TYPE_TURBOQ4_0);
             for (int s = 0; s < n_new; s++) {
                 traits->to_float(k_raw + (size_t)s * row_size, k_phys, n_embd_k_phys);
-                if (is_turbo && layer_phys_hd != hd) {
+                if (is_turbo && layer_phys_hd != hd_l) {
                     /* Inverse WHT per head, then copy logical hd prefix */
-                    tria_inverse_wht_row(k_phys, k_f32 + (size_t)s * n_embd_k_gqa,
-                                         nkv, layer_phys_hd, hd);
+                    tria_inverse_wht_row(k_phys, k_f32 + (size_t)s * n_embd_l,
+                                         nkv, layer_phys_hd, hd_l);
                 } else if (is_turbo) {
                     /* No padding but still WHT domain — inverse WHT in-place */
-                    tria_inverse_wht_row(k_phys, k_f32 + (size_t)s * n_embd_k_gqa,
-                                         nkv, hd, hd);
+                    tria_inverse_wht_row(k_phys, k_f32 + (size_t)s * n_embd_l,
+                                         nkv, hd_l, hd_l);
                 } else {
-                    memcpy(k_f32 + (size_t)s * n_embd_k_gqa, k_phys,
-                           (size_t)n_embd_k_gqa * sizeof(float));
+                    memcpy(k_f32 + (size_t)s * n_embd_l, k_phys,
+                           (size_t)n_embd_l * sizeof(float));
                 }
             }
             free(k_raw);
@@ -634,19 +660,19 @@ int tria_maybe_score(
 
         for (int kvi = 0; kvi < nkv; kvi++) {
             for (int s = 0; s < n_new; s++) {
-                float * row = k_f32 + s * n_embd_k_gqa + kvi * hd;
+                float * row = k_f32 + s * n_embd_l + kvi * hd_l;
                 /* Extract complex pairs from post-RoPE K.
                  * NEOX/IMROPE: split-half [r0..r_{fc-1}, i0..i_{fc-1}]
                  * NORMAL:      interleaved [r0, i0, r1, i1, ...] */
                 if (rt->rope_neox) {
-                    for (int f = 0; f < fc; f++) {
-                        k_real[s * fc + f] = row[f];
-                        k_imag[s * fc + f] = row[fc + f];
+                    for (int f = 0; f < fc_l; f++) {
+                        k_real[s * fc_l + f] = row[f];
+                        k_imag[s * fc_l + f] = row[fc_l + f];
                     }
                 } else {
-                    for (int f = 0; f < fc; f++) {
-                        k_real[s * fc + f] = row[2*f + 0];
-                        k_imag[s * fc + f] = row[2*f + 1];
+                    for (int f = 0; f < fc_l; f++) {
+                        k_real[s * fc_l + f] = row[2*f + 0];
+                        k_imag[s * fc_l + f] = row[2*f + 1];
                     }
                 }
             }
@@ -654,12 +680,12 @@ int tria_maybe_score(
             /* Extract non-rotary K dims (suffix after rotary portion) */
             int nd = rt->stats->nonrot_dim;
             float *k_nr = NULL;
-            if (nd > 0 && 2 * fc + nd <= hd) {
+            if (nd > 0 && 2 * fc_l + nd <= hd_l) {
                 k_nr = malloc((size_t)n_new * nd * sizeof(float));
                 if (k_nr) {
                     for (int s = 0; s < n_new; s++) {
-                        float *row = k_f32 + s * n_embd_k_gqa + kvi * hd;
-                        memcpy(k_nr + s * nd, row + 2 * fc, nd * sizeof(float));
+                        float *row = k_f32 + s * n_embd_l + kvi * hd_l;
+                        memcpy(k_nr + s * nd, row + 2 * fc_l, nd * sizeof(float));
                     }
                 }
             }

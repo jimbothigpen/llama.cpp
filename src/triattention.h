@@ -42,14 +42,23 @@ struct tria_stats {
     uint32_t num_layers;
     uint32_t num_heads;      /* attention heads */
     uint32_t num_kv_heads;
-    uint32_t head_dim;
-    uint32_t freq_count;     /* head_dim / 2 */
+    uint32_t head_dim;       /* layer-0 / scalar value (v<=3 uniform; v4 hybrid = layer 0) */
+    uint32_t freq_count;     /* head_dim / 2 (layer-0 / scalar) */
     uint32_t nonrot_dim;     /* v3: non-rotary dimensions (0 for full-RoPE) */
     float    rope_theta;
     float    attn_scale;
     float   *layer_budget_scales;  /* [num_layers] */
-    float   *omega;                /* [freq_count] precomputed */
+    float   *omega;                /* [freq_count] precomputed (layer-0 / scalar) */
     struct tria_head_stats *heads;  /* [num_layers * num_heads] */
+
+    /* v4: per-layer head_dim (hybrid models e.g. Gemma-4: SWA hd=256, full-attn hd=512).
+     * Always populated by the loader — for v<=3 / non-hybrid models these are uniform
+     * (every layer == the scalar head_dim/freq_count/omega above), so scoring reduces
+     * exactly to the single-head_dim behavior. The per-head q_* arrays in `heads` are
+     * sized by their own layer's freq_count (ragged). */
+    uint32_t *layer_head_dim;   /* [num_layers] */
+    uint32_t *layer_freq_count; /* [num_layers] = layer_head_dim/2 */
+    float   **layer_omega;      /* [num_layers], each [layer_freq_count[l]] */
 };
 
 /* Load TRIA v1/v2 binary stats file. Returns NULL on error. */

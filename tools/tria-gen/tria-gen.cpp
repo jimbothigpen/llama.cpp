@@ -44,14 +44,22 @@ struct tria_acc {
     int32_t n_layers;
     int32_t n_heads;
     int32_t n_kv_heads;
-    int32_t head_dim;
-    int32_t n_embd_q;     /* n_heads * head_dim */
-    int32_t freq_count;
+    int32_t head_dim;        /* layer-0 / scalar (SWA dim for hybrid models) */
+    int32_t freq_count;      /* head_dim / 2 (scalar) */
+    int32_t max_head_dim;    /* widest layer (full-attn dim for hybrid) */
+    int32_t max_freq_count;  /* max_head_dim / 2 — buffer stride */
+    int32_t hd_a;            /* valid per-layer head_dim #1 (full key_length) */
+    int32_t hd_b;            /* valid per-layer head_dim #2 (key_length_swa); 0 if none */
     int     rope_neox;
     bool    initialized;
     int64_t token_count;
 
-    /* [n_layers * n_heads * freq_count], indexed (l * n_heads + h) * freq_count + f */
+    /* Per-layer dims, derived from each layer's captured Qcur width (0 = layer unseen). */
+    std::vector<int32_t> layer_head_dim;    /* [n_layers] */
+    std::vector<int32_t> layer_freq_count;  /* [n_layers] = layer_head_dim/2 */
+
+    /* [n_layers * n_heads * max_freq_count], indexed (l*n_heads + h)*max_freq_count + f.
+     * Ragged: only [0, layer_freq_count[l]) is populated for layer l. */
     std::vector<double> sum_real;
     std::vector<double> sum_imag;
     std::vector<double> sum_abs;
@@ -82,51 +90,60 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
 
     /*
      * Select the 2D MUL_MAT result (pre-RoPE):
-     *   ne[0] == n_embd_q  (n_heads * head_dim)
+     *   ne[0] == n_heads * head_dim(il)  (PER-LAYER — hybrid models vary it)
      *   ne[1] == n_tokens  (batch size, > 0)
      *   ne[2] == 1         (2D tensor)
      *
-     * The RESHAPE (3D) op is skipped by the scheduler's eval callback.
-     * The post-RoPE ROPE op has shape [head_dim, n_heads, n_tokens],
-     * so ne[0] == head_dim != n_embd_q. This filter is unambiguous.
+     * The RESHAPE (3D) op is skipped by the scheduler's eval callback. The post-RoPE
+     * ROPE op is named "Qcur_pos" (not "Qcur") and is 3D (ne[2]==n_tokens). Part 3:
+     * each layer's head_dim is derived from ne[0]/n_heads and validated against the two
+     * known dims (full key_length, swa key_length), so SWA *and* full-attention layers
+     * are both collected (the old single-width filter dropped the full-attn layers).
      */
-    if (t->ne[0] != acc->n_embd_q || t->ne[2] != 1) return false;
+    if (t->ne[2] != 1) return false;
     int64_t n_tokens = t->ne[1];
     if (n_tokens <= 0) return false;
+    if (acc->n_heads <= 0 || t->ne[0] % acc->n_heads != 0) return false;
+    int hd_l = (int)(t->ne[0] / acc->n_heads);
+    if (hd_l != acc->hd_a && hd_l != acc->hd_b) return false;   /* reject unexpected widths */
 
     if (ask) return true;
 
     /* ask == false: data is ready; copy to host if needed */
-    int     fc      = acc->freq_count;
+    int     fc_l    = hd_l / 2;
     int     nh      = acc->n_heads;
-    int32_t n_embd  = acc->n_embd_q;   /* = nh * head_dim */
-    int32_t hd      = acc->head_dim;
+    int32_t n_embd  = (int32_t)t->ne[0];   /* = nh * hd_l (this layer's projection width) */
+    int     stride  = acc->max_freq_count; /* uniform per-head stride; layout is ragged */
     size_t  nbytes  = (size_t)n_tokens * n_embd * sizeof(float);
+
+    /* Record this layer's dims (idempotent across chunks). */
+    acc->layer_head_dim[il]   = hd_l;
+    acc->layer_freq_count[il] = fc_l;
 
     cbctx->buf.resize((size_t)n_tokens * n_embd);
     ggml_backend_tensor_get(t, cbctx->buf.data(), 0, nbytes);
 
     /*
      * 2D layout: element [dim, tok] at buf[tok * n_embd + dim]
-     * Head h occupies dims [h*hd .. (h+1)*hd).
-     * NEOX split: real[f] = dim h*hd+f, imag[f] = dim h*hd+fc+f
-     * NORM split: real[f] = dim h*hd+2f, imag[f] = dim h*hd+2f+1
+     * Head h occupies dims [h*hd_l .. (h+1)*hd_l).
+     * NEOX split: real[f] = dim h*hd_l+f, imag[f] = dim h*hd_l+fc_l+f
+     * NORM split: real[f] = dim h*hd_l+2f, imag[f] = dim h*hd_l+2f+1
      */
     for (int64_t tok = 0; tok < n_tokens; tok++) {
         const float * row = cbctx->buf.data() + tok * n_embd;
         for (int h = 0; h < nh; h++) {
-            const float * q = row + h * hd;
-            int base = (il * nh + h) * fc;
+            const float * q = row + h * hd_l;
+            int base = (il * nh + h) * stride;
             if (acc->rope_neox) {
-                for (int f = 0; f < fc; f++) {
+                for (int f = 0; f < fc_l; f++) {
                     float r  = q[f];
-                    float im = q[fc + f];
+                    float im = q[fc_l + f];
                     acc->sum_real[base + f] += (double)r;
                     acc->sum_imag[base + f] += (double)im;
                     acc->sum_abs [base + f] += (double)sqrtf(r*r + im*im);
                 }
             } else {
-                for (int f = 0; f < fc; f++) {
+                for (int f = 0; f < fc_l; f++) {
                     float r  = q[2*f];
                     float im = q[2*f + 1];
                     acc->sum_real[base + f] += (double)r;
@@ -137,7 +154,8 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
         }
     }
 
-    /* Count tokens from layer 0 only (each batch fires once per layer) */
+    /* Count tokens from layer 0 only (each batch fires once per layer; all layers see
+     * every token, so a single per-chunk count is the correct denominator for all). */
     if (il == 0) {
         acc->token_count += n_tokens;
     }
@@ -154,7 +172,7 @@ static void print_usage(int, char ** argv) {
     LOG("\n");
 }
 
-static bool write_tria_v1(
+static bool write_tria_v4(
     const char * out_path,
     tria_acc   * acc,
     float        rope_theta,
@@ -166,85 +184,91 @@ static bool write_tria_v1(
         return false;
     }
 
-    FILE * fp = fopen(out_path, "wb");
-    if (!fp) { perror(out_path); return false; }
-
     int nl  = acc->n_layers;
     int nh  = acc->n_heads;
     int nkv = acc->n_kv_heads;
-    int hd  = acc->head_dim;
-    int fc  = acc->freq_count;
+    int stride = acc->max_freq_count;   /* in-memory per-head stride */
+
+    /* Every layer must have been seen (its Qcur captured) — else its stats are zero. */
+    for (int l = 0; l < nl; l++) {
+        if (acc->layer_head_dim[l] <= 0) {
+            fprintf(stderr, "tria-gen: ERROR layer %d never captured (head_dim unknown) — "
+                    "cannot emit complete v4\n", l);
+            return false;
+        }
+    }
+    /* Header scalar head_dim/fc = layer 0 (matches the runtime's layer-0 K-row check). */
+    int hd0 = acc->layer_head_dim[0];
+    int fc0 = acc->layer_freq_count[0];
+
+    FILE * fp = fopen(out_path, "wb");
+    if (!fp) { perror(out_path); return false; }
 
     /*
-     * 64-byte header layout (triattention.c:22-159):
-     * [0]   magic         4   = 0x54524941
-     * [4]   version       4   = 1
-     * [8]   num_layers    4
-     * [12]  num_heads     4
-     * [16]  num_kv_heads  4
-     * [20]  head_dim      4
-     * [24]  freq_count    4
-     * [28]  rope_theta    4 (float32)
-     * [32]  attn_scale    4 (float32)
-     * [36]  nonrot_dim    4   = 0 (v1; loader reads only for version>=3)
-     * [40-63] reserved   24
-     * Total: 64 bytes; loader seeks to TRIA_HEADER_SIZE (64) before body.
+     * 64-byte header (triattention.c loader):
+     * [0] magic [4] version=4 [8] num_layers [12] num_heads [16] num_kv_heads
+     * [20] head_dim(layer0) [24] freq_count(layer0) [28] rope_theta(f32)
+     * [32] attn_scale(f32) [36] nonrot_dim=0 [40-63] reserved
+     * Body: layer_budget_scales[nl] (f32, version>=2), then layer_head_dim[nl] (u32,
+     * version==4), then per-head bodies at each layer's own fc.
      */
-    uint32_t magic    = 0x54524941u;
-    uint32_t version  = 1u;
-    uint32_t unl      = (uint32_t)nl;
-    uint32_t unh      = (uint32_t)nh;
-    uint32_t unkv     = (uint32_t)nkv;
-    uint32_t uhd      = (uint32_t)hd;
-    uint32_t ufc      = (uint32_t)fc;
-    uint32_t nonrot   = 0u;
+    uint32_t magic   = 0x54524941u;
+    uint32_t version = 4u;
+    uint32_t unl     = (uint32_t)nl;
+    uint32_t unh     = (uint32_t)nh;
+    uint32_t unkv    = (uint32_t)nkv;
+    uint32_t uhd     = (uint32_t)hd0;
+    uint32_t ufc     = (uint32_t)fc0;
+    uint32_t nonrot  = 0u;
 
-    fwrite(&magic,     4, 1, fp);
-    fwrite(&version,   4, 1, fp);
-    fwrite(&unl,       4, 1, fp);
-    fwrite(&unh,       4, 1, fp);
-    fwrite(&unkv,      4, 1, fp);
-    fwrite(&uhd,       4, 1, fp);
-    fwrite(&ufc,       4, 1, fp);
+    fwrite(&magic,      4, 1, fp);
+    fwrite(&version,    4, 1, fp);
+    fwrite(&unl,        4, 1, fp);
+    fwrite(&unh,        4, 1, fp);
+    fwrite(&unkv,       4, 1, fp);
+    fwrite(&uhd,        4, 1, fp);
+    fwrite(&ufc,        4, 1, fp);
     fwrite(&rope_theta, 4, 1, fp);
     fwrite(&attn_scale, 4, 1, fp);
-    fwrite(&nonrot,    4, 1, fp);   /* nonrot_dim = 0 */
+    fwrite(&nonrot,     4, 1, fp);
 
     uint8_t pad[24] = {};
     fwrite(pad, 1, sizeof(pad), fp);   /* pad to offset 64 */
 
-    /* v1: no layer_budget_scales (loader fills 1.0f for version < 2) */
+    /* layer_budget_scales[nl] (version>=2): uniform 1.0 (calibration here is hd-only). */
+    std::vector<float> budget(nl, 1.0f);
+    fwrite(budget.data(), 4, nl, fp);
+
+    /* layer_head_dim[nl] (version==4) */
+    std::vector<uint32_t> lhd(nl);
+    for (int l = 0; l < nl; l++) lhd[l] = (uint32_t)acc->layer_head_dim[l];
+    fwrite(lhd.data(), 4, nl, fp);
 
     /*
-     * Per-head body (layer-major, head-minor):
-     *   q_mean_real [fc] float32
-     *   q_mean_imag [fc] float32
-     *   q_abs_mean  [fc] float32
-     *   mrl         [fc] float32 = 0 (field unused by scorer; loader skips via fseek)
-     * Each entry: 4 * fc * 4 = 1024 bytes (for fc=64)
-     * Total body: nl*nh * 1024 = 28*32*1024 = 917,504 bytes
-     * File total: 64 + 917,504 = 917,568 bytes
+     * Per-head body (layer-major, head-minor), each at its layer's fc_l:
+     *   q_mean_real[fc_l], q_mean_imag[fc_l], q_abs_mean[fc_l], mrl[fc_l]=0
      */
-    std::vector<float> mrl(fc, 0.0f);
-    std::vector<float> tmp(fc);
+    std::vector<float> tmp(acc->max_freq_count);
+    std::vector<float> mrl(acc->max_freq_count, 0.0f);
 
     for (int l = 0; l < nl; l++) {
+        int fc_l = acc->layer_freq_count[l];
         for (int h = 0; h < nh; h++) {
-            int base = (l * nh + h) * fc;
+            int base = (l * nh + h) * stride;   /* in-memory stride = max_freq_count */
 
-            for (int f = 0; f < fc; f++)
+            for (int f = 0; f < fc_l; f++)
                 tmp[f] = (float)(acc->sum_real[base + f] / (double)tc);
-            fwrite(tmp.data(), 4, fc, fp);   /* q_mean_real */
+            fwrite(tmp.data(), 4, fc_l, fp);   /* q_mean_real */
 
-            for (int f = 0; f < fc; f++)
+            for (int f = 0; f < fc_l; f++)
                 tmp[f] = (float)(acc->sum_imag[base + f] / (double)tc);
-            fwrite(tmp.data(), 4, fc, fp);   /* q_mean_imag */
+            fwrite(tmp.data(), 4, fc_l, fp);   /* q_mean_imag */
 
-            for (int f = 0; f < fc; f++)
+            for (int f = 0; f < fc_l; f++)
                 tmp[f] = (float)(acc->sum_abs[base + f] / (double)tc);
-            fwrite(tmp.data(), 4, fc, fp);   /* q_abs_mean */
+            fwrite(tmp.data(), 4, fc_l, fp);   /* q_abs_mean */
 
-            fwrite(mrl.data(), 4, fc, fp);   /* mrl (zeros, skipped by loader) */
+            fwrite(mrl.data(), 4, fc_l, fp);   /* mrl (zeros, skipped by loader) */
         }
     }
 
@@ -253,8 +277,8 @@ static bool write_tria_v1(
 
     fprintf(stderr,
         "tria-gen: wrote %ld bytes → %s "
-        "(v1, %d layers, %d heads/%d kv, fc=%d, %" PRId64 " tokens)\n",
-        final_size, out_path, nl, nh, nkv, fc, tc);
+        "(v4, %d layers, %d heads/%d kv, layer0 fc=%d, max fc=%d, %" PRId64 " tokens)\n",
+        final_size, out_path, nl, nh, nkv, fc0, acc->max_freq_count, tc);
     return true;
 }
 
@@ -324,34 +348,36 @@ int main(int argc, char ** argv) {
      */
     {
         char arch[128] = {};
-        bool hd_from_meta = false;
+        int32_t hd_full = 0, hd_swa = 0;
         if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) >= 0) {
             char val[64] = {};
-            char key_swa[256];
-            snprintf(key_swa, sizeof(key_swa), "%s.attention.key_length_swa", arch);
-            if (llama_model_meta_val_str(model, key_swa, val, sizeof(val)) >= 0) {
+            char key[256];
+            snprintf(key, sizeof(key), "%s.attention.key_length", arch);
+            if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
                 long v = strtol(val, nullptr, 10);
-                if (v > 0) {
-                    acc.head_dim = (int32_t)v; hd_from_meta = true;
-                    fprintf(stderr, "tria-gen: hybrid SWA model — calibrating on SWA head_dim=%ld "
-                            "(matches layer 0 / majority of layers)\n", v);
-                }
+                if (v > 0) hd_full = (int32_t)v;
             }
-            if (!hd_from_meta) {
-                char key[256];
-                snprintf(key, sizeof(key), "%s.attention.key_length", arch);
-                if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
-                    long v = strtol(val, nullptr, 10);
-                    if (v > 0) { acc.head_dim = (int32_t)v; hd_from_meta = true; }
-                }
+            snprintf(key, sizeof(key), "%s.attention.key_length_swa", arch);
+            if (llama_model_meta_val_str(model, key, val, sizeof(val)) >= 0) {
+                long v = strtol(val, nullptr, 10);
+                if (v > 0) hd_swa = (int32_t)v;
             }
         }
-        if (!hd_from_meta) {
-            acc.head_dim = llama_model_n_embd(model) / acc.n_heads;
-        }
+        if (hd_full <= 0) hd_full = llama_model_n_embd(model) / acc.n_heads;  /* fallback */
+
+        /* Layer-0 / scalar dim = the SWA dim for hybrid models (layer 0 is SWA), else full.
+         * Part 3 collects EVERY layer at its own width (full-attn AND SWA); the scalar
+         * just feeds the header / back-compat omega and the runtime's layer-0 check. */
+        acc.head_dim     = (hd_swa > 0) ? hd_swa : hd_full;
+        acc.max_head_dim = (hd_full > acc.head_dim) ? hd_full : acc.head_dim;
+        acc.hd_a = hd_full;
+        acc.hd_b = (hd_swa > 0 && hd_swa != hd_full) ? hd_swa : 0;
+        if (hd_swa > 0)
+            fprintf(stderr, "tria-gen: hybrid SWA model — full head_dim=%d, SWA head_dim=%d "
+                    "(collecting BOTH per-layer for v4)\n", hd_full, hd_swa);
     }
-    acc.n_embd_q   = acc.n_heads * acc.head_dim;
-    acc.freq_count = acc.head_dim / 2;   /* full-RoPE assumption: freq_count = head_dim/2 */
+    acc.freq_count     = acc.head_dim / 2;       /* full-RoPE: freq_count = head_dim/2 */
+    acc.max_freq_count = acc.max_head_dim / 2;
 
     /* rope_neox: NEOX/IMROPE = split-half; NORM = interleaved */
     {
@@ -361,7 +387,10 @@ int main(int argc, char ** argv) {
 
     acc.initialized  = false;   /* will enable after buffers allocated */
     acc.token_count  = 0;
-    size_t buf_elems = (size_t)acc.n_layers * acc.n_heads * acc.freq_count;
+    acc.layer_head_dim.assign(acc.n_layers, 0);
+    acc.layer_freq_count.assign(acc.n_layers, 0);
+    /* Buffers sized to the widest layer's fc (uniform stride, ragged content). */
+    size_t buf_elems = (size_t)acc.n_layers * acc.n_heads * acc.max_freq_count;
     acc.sum_real.assign(buf_elems, 0.0);
     acc.sum_imag.assign(buf_elems, 0.0);
     acc.sum_abs .assign(buf_elems, 0.0);
@@ -384,8 +413,9 @@ int main(int argc, char ** argv) {
     float attn_scale = 1.0f / sqrtf((float)acc.head_dim);
 
     fprintf(stderr,
-        "tria-gen: layers=%d heads=%d kv=%d head_dim=%d fc=%d\n",
-        acc.n_layers, acc.n_heads, acc.n_kv_heads, acc.head_dim, acc.freq_count);
+        "tria-gen: layers=%d heads=%d kv=%d head_dim=%d fc=%d (max head_dim=%d fc=%d)\n",
+        acc.n_layers, acc.n_heads, acc.n_kv_heads, acc.head_dim, acc.freq_count,
+        acc.max_head_dim, acc.max_freq_count);
     fprintf(stderr,
         "tria-gen: rope_neox=%d rope_theta=%.0f attn_scale=%.6f\n",
         acc.rope_neox, rope_theta, attn_scale);
@@ -445,7 +475,7 @@ int main(int argc, char ** argv) {
 
     llama_batch_free(batch);
 
-    if (!write_tria_v1(params.out_file.c_str(), &acc, rope_theta, attn_scale)) {
+    if (!write_tria_v4(params.out_file.c_str(), &acc, rope_theta, attn_scale)) {
         return 1;
     }
 

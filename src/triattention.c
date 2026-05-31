@@ -28,7 +28,7 @@ struct tria_stats * tria_load(const char *path) {
         fprintf(stderr, "tria_load: truncated header\n");
         fclose(fp); return NULL;
     }
-    if (magic != TRIA_MAGIC || (version != 1 && version != 2 && version != 3)) {
+    if (magic != TRIA_MAGIC || (version != 1 && version != 2 && version != 3 && version != 4)) {
         fprintf(stderr, "tria_load: bad magic/version: %x v%u\n", magic, version);
         fclose(fp); return NULL;
     }
@@ -93,43 +93,84 @@ struct tria_stats * tria_load(const char *path) {
         for (uint32_t i = 0; i < nl; i++) s->layer_budget_scales[i] = 1.0f;
     }
 
-    /* Precompute omega: theta^(-2i/head_dim) */
+    /* Per-layer head_dim tables (v4). For v<=3 / non-hybrid, fill uniformly from the
+     * scalar so scoring reduces exactly to single-head_dim behavior. */
+    s->layer_head_dim   = malloc(nl * sizeof(uint32_t));
+    s->layer_freq_count = malloc(nl * sizeof(uint32_t));
+    s->layer_omega      = calloc(nl, sizeof(float *));   /* calloc: NULL-init for safe free */
+    if (!s->layer_head_dim || !s->layer_freq_count || !s->layer_omega) {
+        fclose(fp); tria_free(s); return NULL;
+    }
+    if (version >= 4) {
+        /* Per-layer head_dim table sits between layer_budget_scales and the per-head body. */
+        if (fread(s->layer_head_dim, 4, nl, fp) != nl) {
+            fprintf(stderr, "tria_load: truncated layer_head_dim table\n");
+            fclose(fp); tria_free(s); return NULL;
+        }
+        for (uint32_t l = 0; l < nl; l++) {
+            uint32_t hd_l = s->layer_head_dim[l];
+            if (hd_l == 0 || hd_l > 2048 || (hd_l & 1u) || (hd_l / 2) > TRIA_MAX_FC) {
+                fprintf(stderr, "tria_load: invalid layer_head_dim[%u]=%u\n", l, hd_l);
+                fclose(fp); tria_free(s); return NULL;
+            }
+            s->layer_freq_count[l] = hd_l / 2;
+        }
+    } else {
+        for (uint32_t l = 0; l < nl; l++) {
+            s->layer_head_dim[l]   = s->head_dim;
+            s->layer_freq_count[l] = fc;
+        }
+    }
+
+    /* Precompute scalar omega (layer-0 / uniform): theta^(-2i/head_dim) */
     s->omega = malloc(fc * sizeof(float));
-    if (!s->omega) { free(s->layer_budget_scales); free(s); fclose(fp); return NULL; }
+    if (!s->omega) { fclose(fp); tria_free(s); return NULL; }
     for (uint32_t i = 0; i < fc; i++) {
         s->omega[i] = powf(s->rope_theta, -2.0f * i / s->head_dim);
     }
 
-    /* Per-head stats */
+    /* Per-layer omega: each layer's own theta^(-2i/head_dim_l). */
+    for (uint32_t l = 0; l < nl; l++) {
+        uint32_t fc_l = s->layer_freq_count[l];
+        uint32_t hd_l = s->layer_head_dim[l];
+        s->layer_omega[l] = malloc(fc_l * sizeof(float));
+        if (!s->layer_omega[l]) { fclose(fp); tria_free(s); return NULL; }
+        for (uint32_t i = 0; i < fc_l; i++) {
+            s->layer_omega[l][i] = powf(s->rope_theta, -2.0f * i / hd_l);
+        }
+    }
+
+    /* Per-head stats (ragged: each head sized by its layer's freq_count) */
     uint32_t total = nl * nh;
     s->heads = calloc(total, sizeof(struct tria_head_stats));
-    if (!s->heads) { free(s->omega); free(s->layer_budget_scales); free(s); fclose(fp); return NULL; }
+    if (!s->heads) { fclose(fp); tria_free(s); return NULL; }
 
     for (uint32_t h = 0; h < total; h++) {
         struct tria_head_stats *hs = &s->heads[h];
-        hs->q_mean_real = malloc(fc * sizeof(float));
-        hs->q_mean_imag = malloc(fc * sizeof(float));
-        hs->q_abs_mean  = malloc(fc * sizeof(float));
-        hs->qma         = malloc(fc * sizeof(float));
+        uint32_t fc_l = s->layer_freq_count[h / nh];   /* layer = h / nh */
+        hs->q_mean_real = malloc(fc_l * sizeof(float));
+        hs->q_mean_imag = malloc(fc_l * sizeof(float));
+        hs->q_abs_mean  = malloc(fc_l * sizeof(float));
+        hs->qma         = malloc(fc_l * sizeof(float));
         if (!hs->q_mean_real || !hs->q_mean_imag || !hs->q_abs_mean || !hs->qma) {
             fprintf(stderr, "tria_load: alloc failed at head %u\n", h);
             fclose(fp); tria_free(s); return NULL;
         }
 
-        if (fread(hs->q_mean_real, 4, fc, fp) != fc ||
-            fread(hs->q_mean_imag, 4, fc, fp) != fc ||
-            fread(hs->q_abs_mean,  4, fc, fp) != fc) {
+        if (fread(hs->q_mean_real, 4, fc_l, fp) != fc_l ||
+            fread(hs->q_mean_imag, 4, fc_l, fp) != fc_l ||
+            fread(hs->q_abs_mean,  4, fc_l, fp) != fc_l) {
             fprintf(stderr, "tria_load: truncated head data at %u\n", h);
             fclose(fp); tria_free(s); return NULL;
         }
-        fseek(fp, fc * 4, SEEK_CUR);  /* skip mrl */
+        fseek(fp, fc_l * 4, SEEK_CUR);  /* skip mrl */
         if (ftell(fp) < 0) {
             fprintf(stderr, "tria_load: truncated mrl at head %u\n", h);
             fclose(fp); tria_free(s); return NULL;
         }
 
         /* Precompute |E[q_f]| */
-        for (uint32_t f = 0; f < fc; f++) {
+        for (uint32_t f = 0; f < fc_l; f++) {
             float r = hs->q_mean_real[f], i = hs->q_mean_imag[f];
             hs->qma[f] = sqrtf(r*r + i*i);
         }
@@ -174,6 +215,12 @@ void tria_free(struct tria_stats *s) {
     }
     free(s->layer_budget_scales);
     free(s->omega);
+    if (s->layer_omega) {
+        for (uint32_t l = 0; l < s->num_layers; l++) free(s->layer_omega[l]);
+        free(s->layer_omega);
+    }
+    free(s->layer_head_dim);
+    free(s->layer_freq_count);
     free(s);
 }
 
@@ -331,14 +378,18 @@ void tria_score_kv_head(
 ) {
     int nh  = stats->num_heads;
     int nkv = stats->num_kv_heads;
-    int fc  = stats->freq_count;
     int nd  = stats->nonrot_dim;
 
     /* Guard against division by zero (Codex review) */
-    if (nkv == 0 || nh % nkv != 0 || seq_len <= 0) {
+    if (nkv == 0 || nh % nkv != 0 || seq_len <= 0 ||
+        layer_idx < 0 || (uint32_t)layer_idx >= stats->num_layers) {
         for (int s = 0; s < seq_len; s++) out_scores[s] = 0.0f;
         return;
     }
+    /* Per-layer freq_count / omega (v4 hybrid). For v<=3 / non-hybrid these equal the
+     * scalar stats->freq_count / stats->omega, so behavior is bit-identical. */
+    int fc = (int)stats->layer_freq_count[layer_idx];
+    const float *omega = stats->layer_omega[layer_idx];
     int gqa = nh / nkv;
     if (gqa == 0) {
         for (int s = 0; s < seq_len; s++) out_scores[s] = 0.0f;
@@ -346,7 +397,7 @@ void tria_score_kv_head(
     }
 
     struct tria_cs_table *cs = tria_cs_precompute(
-        stats->omega, k_pre_real, k_pre_imag, key_pos, cur_pos, fc, seq_len);
+        omega, k_pre_real, k_pre_imag, key_pos, cur_pos, fc, seq_len);
     if (!cs) {
         for (int s = 0; s < seq_len; s++) out_scores[s] = 0.0f;
         return;
