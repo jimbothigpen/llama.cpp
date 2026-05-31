@@ -3,6 +3,7 @@
 #include "arg.h"
 #include "console.h"
 #include "fit.h"
+#include "pflash.h"
 // #include "log.h"
 
 #include "server-common.h"
@@ -89,6 +90,25 @@ struct cli_context {
             task.cli_prompt = chat_params.prompt; // copy
             task.cli_files  = input_files;        // copy
             task.cli        = true;
+
+            // PFlash: compress long prompts before posting; mirrors server gate (server-context.cpp:1587)
+            {
+                const auto & sp = defaults.speculative;
+                if (!sp.pflash_scorer_path.empty() && input_files.empty()) {
+                    const llama_vocab * vocab = llama_model_get_vocab(
+                        llama_get_model(ctx_server.get_llama_context()));
+                    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+                    if ((int)tokens.size() >= sp.pflash_min_tokens) {
+                        const int orig_len = (int)tokens.size();
+                        tokens = pflash_compress(tokens, pflash_config::from_params(sp));
+                        fprintf(stderr, "pflash: %d -> %d tokens (%.1f%% kept)\n",
+                            orig_len, (int)tokens.size(), 100.0f * tokens.size() / orig_len);
+                        task.tokens    = server_tokens(tokens, /*has_mtmd=*/false);
+                        task.cli_prompt.clear();
+                        task.cli = false;
+                    }
+                }
+            }
 
             // chat template settings
             task.params.chat_parser_params = common_chat_parser_params(chat_params);
