@@ -9,9 +9,13 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `175797f52` (2026-05-31 — PM-52 session: TriAttention Phase C feature doc (TODO 161 complete), IK KT/trellis weight-quant feature doc, PFlash → CLI prompt-compression wire (TODO 162 sub-1), IQ2_KT/IQ3_KT baseline-matrix PPL results + IQ2_KT 9B RED verdict (TODO 124), TriAttention phase-C step-1 calibration generator. Includes 2026-05-30 EAGLE3 B1+KV correctness cascade + TriAttention SWA capture for Gemma-4 + PM-48 MTP C1 improvements).
+HEAD: `8599beb26` (2026-05-31 — PM-53 session: BACKEND_PARITY IQ2_KT + IQ3_KT Vulkan ported; IQ3_KT ROCm crash flagged TODO 168. Includes PM-52 session docs: TriAttention Phase C feature doc (TODO 161 complete), IK KT/trellis weight-quant feature doc, PFlash → CLI prompt-compression wire (TODO 162 sub-1), IQ2_KT/IQ3_KT baseline-matrix PPL results + IQ2_KT 9B RED verdict (TODO 124), TriAttention phase-C step-1 calibration generator. Includes 2026-05-30 EAGLE3 B1+KV correctness cascade + TriAttention SWA capture for Gemma-4 + PM-48 MTP C1 improvements).
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
+
+### Docs — BACKEND_PARITY IQ2_KT/IQ3_KT Vulkan ported; IQ3_KT ROCm crash flagged (2026-05-31)
+
+`docs/BACKEND_PARITY.md` rows 93 (IQ2_KT) + 97 (IQ3_KT) updated: IQ2_KT now CPU+ROCm+Vulkan (do-not-use flag retained); IQ3_KT now CPU+Vulkan (ROCm crashes in warmup, kernel present, root cause TBD — TODO 168).
 
 ### Docs — TriAttention KV-cache eviction feature doc (2026-05-31)
 
