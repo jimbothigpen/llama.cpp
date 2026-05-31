@@ -94,7 +94,7 @@ Status updated per layer landing. Initial state derived from
 | BitNet (IQ1_BN, IQ2_BN, I2_S) | 6 | source has CUDA + implicit HIP | source has none | P1 — ternary decode is simple |
 | MLA / FlashMLA | 6 | source has CUDA | source has none | P2 — very high port cost |
 | Fused MoE | 6 | source has CUDA | source has none | P2 |
-| Trellis weight quants (IQ3_KT, IQ1_KT) | 5 (Trellis P3b, P3c) | **RELEASED** — IQ3_KT CPU+Vulkan (enum 154, ftype 54); ROCm SEGFAULT — missing `mul_mat_vec_iq3_kt` kernel (TODO 168); IQ1_KT queued | **RELEASED** — Vulkan dequant + mul_mat_vec shaders (main) | TODO 167 RESOLVED on Vulkan: IQ3_KT 8.4299 / IQ3_K 6.8348 (9B, 20ch); ROCm path blocked by SEGFAULT |
+| Trellis weight quants (IQ3_KT, IQ1_KT) | 5 (Trellis P3b, P3c) | **RELEASED** — IQ3_KT CPU+Vulkan (enum 154, ftype 54); ROCm broken — crashes during model warmup (TODO 168; mmvq kernel present + dispatched, root cause TBD); IQ1_KT queued | **RELEASED** — Vulkan dequant + mul_mat_vec shaders (main) | TODO 167 RESOLVED on Vulkan: IQ3_KT 8.4299 / IQ3_K 6.8348 (9B, 20ch); ROCm path crashes in warmup |
 | Q\*_K row-interleaved (\_R4/\_R8) | 6 | CUDA only in ik_llama | none | P2 — CPU variants exist; GPU optional |
 | RaBitQ TQ3 weights (RBQ3_\*) | 7 | source has CUDA; HIP branch not yet merged | source has none | P1 |
 | DFlash spec-decode (S1+S2+S3+converter) | 7a | **RELEASED** — S1 loader `b6a75e524` + S2 dispatch `ef80c728c` + S3 GPU ring buffer + server `spec_type` `9b7ab4e83` + mask_token_id u32 fix `1436d1890` + DFlashDraftModel safetensors→GGUF converter `ee7d4f896`; end-to-end smoke GREEN @ `2726a56c0` | backend-agnostic at S3 dispatch level; GPU ring buffer is CUDA/HIP | n/a (released) |
