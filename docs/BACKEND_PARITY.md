@@ -82,7 +82,7 @@ Status updated per layer landing. Initial state derived from
 | TCQ KV (TURBOQ2/3_TCQ) | 3 | source has CUDA only, no HIP | source has none | P1 — Viterbi-in-shader is hard; investigate viability |
 | TriAttention | 9 (revived) | **Phase A+B SHIPPED** — in-graph K/V capture harness `6cbc9e06c` + HIP guard + Gemma-4 ISWA fix `cbd071632` + legacy compaction evictor `6f93b4e5d`; GQA CPU smoke GREEN 3/3; Phase C GPU GQA kernel pending | (Phase A+B are CPU-side; GPU kernel work in Phase C) | P1 — scoring kernel + SWA-layer capture extension needed |
 | RotorQuant (RQ_PLANAR/ISO3/4_0) | 5 | source has full HIP coverage | source has none | P0 — Hadamard/Givens map well to compute shaders |
-| EAGLE3 | 5 | **RELEASED** — hidden-state extrapolation ported `c0f3c1486`; fc dtype-aware fix `4c38845c4` (BF16/F16→F32); struct rebase fixup `e109b17d8` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
+| EAGLE3 | 5 | **RELEASED** — hidden-state extrapolation ported `c0f3c1486`; fc dtype-aware fix `4c38845c4` (BF16/F16→F32); struct rebase fixup `e109b17d8`; compact-vocab (SpecForge 32K-draft-vocab + d2t) `b2766ef47` (2026-05-31, PR #18039) | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
 | PHANTOM-X | 5 | **RELEASED** — speculator ported `d6dc63224`; Phase 2 dispatch `388169995` | backend-agnostic; no novel GPU kernels | n/a (backend-agnostic) |
 | TurboMind allocator | 5 | gfx1030-specific in source | source has none | Investigate; may not be needed |
 | Wave32 RDNA2 kernels | 5 | ROCm-only by design (RDNA2 SIMD32) | not applicable | **ROCm-only** by design |

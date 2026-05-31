@@ -9,9 +9,42 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `f86a24a95` (2026-05-31 — PM-55 session: IQ3_KT ROCm dequant kernel (TODO 168 CLOSED); PFlash scorer generalized to non-Qwen archs (TODO 162 sub-2, §-FLAG non-Qwen UNVALIDATED); EAGLE 3.1 future-watch ledger (TODO 170b); InnerQ KV feature doc finalized (TODO 157); DFlash converter --target-model-dir tokenizer fix (TODO 122). Prior: PM-53 BACKEND_PARITY IQ2_KT+IQ3_KT Vulkan ported `8599beb26`).
+HEAD: `b2766ef47` (2026-05-31 — EAGLE3 compact-vocab draft support (SpecForge 32K-draft-vocab + d2t), port PR #18039 (TODO 103 compact-vocab cell); docs currency bundle: new pflash.md + oscar-kv.md. Prior: PM-55 session `f86a24a95`).
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
+
+### Added — EAGLE3 compact-vocab draft support (SpecForge) — port PR #18039 (TODO 103) (2026-05-31)
+
+`b2766ef47`. Ports PR #18039 (SpecForge 32K-draft-vocab EAGLE3 support) from upstream. EAGLE3 draft
+GGUFs with a compact vocabulary (e.g. SpecForge 32K-vocab drafters) can now be loaded alongside a
+full-vocabulary target (e.g. Qwen3.5-35B-A3B, 248 320-token vocab). The loader derives
+`n_draft_vocab` from the width of the `d2t.weight` tensor and builds the output head + draft-to-
+target vocabulary remap table at model-load time (`src/models/eagle3.cpp`). Graph-side remap
+handles token-space translation during speculative decode. Changes: 8 code files, 144 ins / 11 del
+(common/speculative.cpp, common/speculative.h, conversion/eagle3.py,
+examples/speculative-simple/speculative-simple.cpp, include/llama.h, src/llama-context.cpp,
+src/llama-model.cpp, src/models/eagle3.cpp).
+
+**Gate PASS (ROCm gfx1150, post-reboot, pipefail runner, no SIGSEGV on either run):**
+- **35B compact-vocab smoke:** Qwen3.5-35B-A3B-MTP-IQ4_XS target (248 320-token vocab) +
+  Qwen3.5-35B-A3B-Eagle3-SpecForge-BF16 drafter (32 000-token vocab + d2t): 130 tok, 33.33 %
+  accept at *n_draft*=3, coherent output, RC=0. `n_draft_vocab=32000` confirmed in loader log;
+  graph-side d2t remap active.
+- **9B full-vocab no-regression:** Qwen3.5-9B-IQ4_XS + eagle3-draft-9b (d2t=none): 33.33 %
+  accept at *n_draft*=3, matches prior baseline, RC=0.
+
+**Known limitation (pre-existing, not a regression):** `llama_model_eagle3_get_d2t()` requires
+`GGML_TYPE_I32` but SpecForge GGUFs export `d2t.weight` as `GGML_TYPE_I64` → host-side fast
+path returns empty (`d2t=none` in log); graph path handles remap correctly (output is coherent).
+This guard is from commit `87b5b3d8d` (already on main, ancestor of this commit). Optional
+future polish: widen getter to accept I64 or export d2t as I32 in `conversion/eagle3.py`.
+
+### Docs — currency bundle: new pflash.md + oscar-kv.md (2026-05-31)
+
+`fc17aaade`. Adds two new end-user feature docs: `docs/features/pflash.md` (PFlash prompt
+compression — CLI flags, how it works, benchmark placeholder) and `docs/features/oscar-kv.md`
+(OScaR KV-cache replacement — phase status, design summary). Also updates IK-quant status and
+DFlash `--target-model-dir` docs.
 
 ### Fixed — IQ3_KT ROCm: add dequantize kernel + GPU dispatch (TODO 168 CLOSED) (2026-05-31)
 

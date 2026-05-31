@@ -130,6 +130,43 @@ garbage). Always pass it via `-md`.
 **PPL is unchanged by construction** — perplexity evaluation exercises only the prefill pass; the
 speculative path does not fire during PPL measurement.
 
+### Compact-vocab draft (SpecForge)
+
+**Landed in `b2766ef47` (2026-05-31) — port of PR #18039.**
+
+SpecForge 32K-vocab EAGLE3 drafters carry a compact output vocabulary (`output.weight` shaped
+`[n_embd, 32000]`) plus a `d2t.weight[32000]` draft-to-target token map, rather than the full
+target vocabulary. The compact-vocab path is transparent at the CLI level — use the same flags
+as a full-vocab drafter:
+
+```bash
+llama-speculative-simple \
+    -m target-248320-vocab.gguf \
+    -md eagle3-specforge-32000-vocab.gguf \
+    --spec-type draft-eagle3 \
+    --spec-draft-n-max 1 \
+    -fa on -ngl 99 --no-mmap
+```
+
+**How it works:** `llama_model_load_internal` detects `d2t.weight` and derives `n_draft_vocab`
+from its tensor width. The loader (`src/models/eagle3.cpp`) builds the output head at draft-vocab
+width and registers the d2t remap table. Graph-side scatter remap translates compact-vocab logits
+to target-vocab positions during speculative decode; no changes are needed to the CLI or the
+speculative driver.
+
+**Smoke gate (ROCm gfx1150, 2026-05-31, pipefail runner, RC=0 on both runs):**
+
+| Config | Accept % | Notes |
+|---|---|---|
+| Qwen3.5-35B-A3B-MTP-IQ4_XS (248 320-vocab) + SpecForge-BF16 drafter (32 000-vocab + d2t), *n_draft*=3 | **33.333 %** | compact-vocab path; d2t graph-remap active; coherent output |
+| Qwen3.5-9B-IQ4_XS + eagle3-draft-9b (d2t=none), *n_draft*=3 | **33.333 %** | full-vocab; no-regression vs. prior baseline |
+
+**Known limitation (pre-existing, harmless):** The SpecForge GGUF exports `d2t.weight` as
+`GGML_TYPE_I64`, but `llama_model_eagle3_get_d2t()` (commit `87b5b3d8d`, already on main)
+requires `GGML_TYPE_I32` → the host-side fast path returns empty and the log prints `d2t=none`.
+The graph-side remap path is active and correct; output is coherent. Optional future fix: widen
+the getter to accept I64, or export d2t as I32 in `conversion/eagle3.py`.
+
 ---
 
 ## §3 Benefits & limitations
@@ -235,9 +272,10 @@ receive a higher-quality `g_embd` signal, and accept could in principle approach
 depths. This is the upstream fix path for the ceiling documented in §2.
 
 **Current status in this fork:** EAGLE 3.1 is not in tree. There are no 3.1 checkpoint weights
-available for the current validated target (Qwen3.5-9B). Tracking: TODO 174 covers the 32K-vocab +
-d2t loader prerequisite required before any compressed-vocab EAGLE3 drafter (v2-style or 3.1-style)
-can be loaded. Monitor upstream vLLM and EAGLE3 repositories for weight and spec releases.
+available for the current validated target (Qwen3.5-9B). The compact-vocab (32K-vocab + d2t)
+loader prerequisite (formerly tracked as TODO 174) is now resolved — `b2766ef47` ports PR #18039
+and enables loading SpecForge-style compact-vocab EAGLE3 drafters. The remaining blocker is the
+absence of 3.1 checkpoint weights. Monitor upstream vLLM and EAGLE3 repositories for releases.
 
 ### Ledger entry: EAGLE 3.1 future-watch (2026-05-31)
 
@@ -247,6 +285,6 @@ can be loaded. Monitor upstream vLLM and EAGLE3 repositories for weight and spec
 | **Canonical upstream** | SafeAILab EAGLE + vLLM v0.22.0 (released 2026-05-26) |
 | **Architecture change** | FC-norm (prenorm) + post-norm dual-path `g_embd` at d1+ steps — signals closer approximation of `FC(target_hidden)` rather than drafter prenorm output |
 | **Impact** | Dissolves 1/*n_draft* ceiling; d1+ accept could approach d0 rate (near 100 %) at all depths |
-| **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) AND TODO 174 (32K-vocab loader) is resolved |
-| **Cross-reference** | TODO 149 (EAGLE3 converge-on-rebase, PR #18039); see §2 for ceiling explanation |
+| **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) — compact-vocab loader (formerly TODO 174) is now RESOLVED (`b2766ef47`) |
+| **Cross-reference** | PR #18039 LANDED `b2766ef47` (compact-vocab, 2026-05-31); see §2 for ceiling explanation |
 | **Next step** | Monitor SafeAILab EAGLE and vLLM repositories for weight releases; import when available + validate accept on Qwen3.5-9B |
