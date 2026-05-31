@@ -62,6 +62,7 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 | Feature | Status | Models | Summary |
 |---|---|---|---|
 | [MTP speculative decode](mtp.md) | Stable | Qwen3.5/3.6 (internal NextN-tail), Gemma 4 26B-A4B (external assistant) | MTP head drafts tokens from inside the target GGUF or a separate assistant; 75.56% accept (Qwen3.5/3.6 9B), 47.3% (Gemma 4); ~1.16× on iGPU, 1.5–2.5× on dGPU; `--spec-type draft-mtp` |
+| [EAGLE3 speculative decode](eagle3.md) | Preview — functional, **architectural ceiling at 1/n_draft for n_draft≥2; use n_draft=1** | Any target + matching EAGLE3 drafter GGUF | Aux-layer hidden-state drafter; 100% accept at n_draft=1 (recommended), 33.333% at n_draft=3 (1/n_draft ceiling); server single-slot only; `--spec-type draft-eagle3`; EAGLE 3.1 future-watch in §5 |
 | [NLD diffusion self-spec](nld-diffusion-self-spec.md) | Stable | Dream / LLaDA / LLaDA-MoE / RND1 | Bidirectional draft + causal verify on shared KV; ~3.7× over block-mode; CLI flag `--diffusion-self-spec`; server auto-detects |
 | [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 | [PHANTOM-X self-speculative n-gram drafter](phantom-x.md) | Stable | Any causal-LM GGUF | Bloom-filtered n-gram tables; no separate draft model; `--spec-type phantom`; +34% on repetitive code (86.6% accept); flat on prose; ported from carlosfundora 1-bit-turbo |
