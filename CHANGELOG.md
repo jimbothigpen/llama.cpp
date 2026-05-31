@@ -11,7 +11,16 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 HEAD: `086c8508f` (2026-05-30 — EAGLE3 B1+KV correctness cascade (d2t remap, norm_before_residual gating, rope_factors) + drafter-batch KV-position anchor fix; TriAttention Phase C Part-2 SWA-layer K/V capture for Gemma-4 hybrid models; /opt production ship b812; backlog doc/comment corrections. Earlier (PM-48): MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel + Vulkan port; MTP/TriAttention divergence fixes; Vulkan parity closures; imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part-3 per-layer head_dim (lift Gemma-4 >30%); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
+
+### Docs — TriAttention KV-cache eviction feature doc (2026-05-31)
+
+`docs/features/triattention.md`. End-user feature doc for TriAttention trajectory-adaptive
+KV-cache pruning (Phase A+B+C all landed). Covers: 5 CLI flags + defaults; `.tria`
+calibration file generation via `llama-tria-gen`; CPU + HIP + Vulkan GQA-aware scoring
+backends; measured retrieval effectiveness (Qwen3-8B 100% @25% budget, Gemma-4 70%
+@25%); honest backend caveat (Gemma-4 hd>128 GPU scoring is a separate perf follow-on).
+`docs/features/README.md` updated with new KV Cache Eviction section.
 
 ### Fixed — EAGLE3 B1+KV: drafter-batch KV-position anchor fix (2026-05-30)
 

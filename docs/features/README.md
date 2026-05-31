@@ -20,6 +20,14 @@ Per-layer or per-class configuration that composes with the KV type flags above.
 |---|---|---|---|
 | [SWA per-layer KV types](swa-per-layer-kv.md) | Stable | Gemma 4 / Gemma 2/3, Llama 4, MiMo2 | Assign separate KV types to global and SWA sub-caches; avoids catastrophic PPL collapse under uniform aggressive quant |
 
+## KV Cache Eviction
+
+Token-level eviction — drops low-importance cached entries to fit a budget, complementary to quantization.
+
+| Feature | Status | Applicable models | Summary |
+|---|---|---|---|
+| [TriAttention KV eviction](triattention.md) | Experimental — requires `.tria` calibration file | All GQA: Qwen3.x, Llama-3.1, Gemma-4, hybrid SSM+attn | Score cached tokens by attention-trajectory importance; evict below a budget; 100% retrieval @25% budget on Qwen3-8B; GPU scoring (HIP+Vulkan) for hd≤128; `--triattention`, `--tri-budget` |
+
 ## Concept Primers
 
 Short standalone explanations of techniques used across multiple feature families. Feature docs link here instead of repeating the same background.
