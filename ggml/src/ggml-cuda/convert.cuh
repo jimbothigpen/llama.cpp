@@ -34,6 +34,10 @@ void ggml_dequantize_iq4_kt_to_fp32_cuda(const void * vx, float * y,
                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
 void ggml_dequantize_iq4_kt_to_fp16_cuda(const void * vx, half * y,
                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq3_kt_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq3_kt_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
 
 // TODO more general support for non-contiguous inputs
 
