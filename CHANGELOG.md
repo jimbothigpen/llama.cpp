@@ -9,7 +9,7 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `086c8508f` (2026-05-30 — EAGLE3 B1+KV correctness cascade (d2t remap, norm_before_residual gating, rope_factors) + drafter-batch KV-position anchor fix; TriAttention Phase C Part-2 SWA-layer K/V capture for Gemma-4 hybrid models; /opt production ship b812; backlog doc/comment corrections. Earlier (PM-48): MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel + Vulkan port; MTP/TriAttention divergence fixes; Vulkan parity closures; imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
+HEAD: `175797f52` (2026-05-31 — PM-52 session: TriAttention Phase C feature doc (TODO 161 complete), IK KT/trellis weight-quant feature doc, PFlash → CLI prompt-compression wire (TODO 162 sub-1), IQ2_KT/IQ3_KT baseline-matrix PPL results + IQ2_KT 9B RED verdict (TODO 124), TriAttention phase-C step-1 calibration generator. Includes 2026-05-30 EAGLE3 B1+KV correctness cascade + TriAttention SWA capture for Gemma-4 + PM-48 MTP C1 improvements).
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
 
@@ -21,6 +21,50 @@ calibration file generation via `llama-tria-gen`; CPU + HIP + Vulkan GQA-aware s
 backends; measured retrieval effectiveness (Qwen3-8B 100% @25% budget, Gemma-4 70%
 @25%); honest backend caveat (Gemma-4 hd>128 GPU scoring is a separate perf follow-on).
 `docs/features/README.md` updated with new KV Cache Eviction section.
+
+### Docs — IK KT/trellis weight-quant feature doc (2026-05-31)
+
+`docs/features/ik-kt-trellis.md` (`37e755dc6`). End-user feature doc for trellis-coded
+quantization family (IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT). Covers: design rationale (single
+codebook + trellis encoding); per-type performance + quality (IQ4_KT −0.5% vs IQ4_K,
+IQ3_KT +23.5% vs IQ3_K, IQ2_KT codebook defect flagged do-not-use, IQ1_KT pending);
+imatrix quantization requirement (ADR-016); cluster-acceleration tuning (k=60).
+**Status: IQ3_KT/IQ4_KT shipped; IQ2_KT RED (§-FLAG: blanket do-not-use, general codebook defect
+confirmed at all scales); IQ1_KT pending port from ik_llama.**
+
+### Added — PFlash → CLI prompt-compression wire (TODO 162 sub-1) (2026-05-31)
+
+`tools/cli/cli.cpp` (+20 LOC, `92c37266f`). Wires PFlash prompt compression into the
+`llama-cli` prompt path before task submission. Pre-tokenizes and compresses long prompts
+using configured scorer + threshold (`--pflash-scorer`, `--pflash-min-tokens`). Logs
+`pflash: N -> M tokens (X% kept)` to stderr (always visible at default LOG_LEVEL_ERROR).
+Sets `task.cli = false` to prevent double-tokenization. All `--pflash*` CLI flags already
+wired in `common/arg.cpp`. **Gate: 3 smokes PASS (passthrough, sub-threshold, 8919→407 token
+compression at 4.6% kept).** Mirrors server-side gate (`server-context.cpp:1587`); server
+double-compression safety check suppressed for CLI-compressed tokens.
+
+### Verdicts — IQ2_KT Qwen3.5-9B PPL = 33.96 (RED) (TODO 124 CLOSED) (2026-05-31)
+
+**IQ2_KT on Qwen3.5-9B yields PPL = 33.96 ±0.48 (20 chunks, Vulkan ai01 b812), confirming general
+codebook defect at all scales.** Scale-dependent hypothesis (small-model capacity collapse) rejected:
+- 0.8B: 99.58 PPL (broken-but-improvable by scale)
+- 9B: 33.96 PPL (catastrophic, 5.2× worse than IQ4_KT at 6.54)
+- Ratio 9B/0.8B = 0.34 (3× improvement at larger scale, but both anomalous)
+
+**Verdict: IQ2_KT blanket do-not-use (feature-doc §-FLAG updated). Recommendation: IQ2_KL (26.12 PPL
+on 9B) is the viable 2-bit alternative.** Root cause: single per-row float scale (no per-block
+adaptation like IQ4_KT), random-hash codebook (not learned VQ), greedy per-group VQ.
+
+### Measurements — IQ3_KT/IQ3_K baseline-matrix Qwen3.5-9B (TODO 167 CLOSED) (2026-05-31)
+
+Vulkan ai01 20-chunk baseline confirms both IQ3 types drifted identically (−6.8% binary-refresh drift,
+consistent with `/opt/llama-yggdrasil-vulkan` rebase from 2026-05-25 mainline sync):
+- **IQ3_KT: 8.4299 ±0.107 PPL** (was anchor 9.0493; ratio vs IQ3_K = +23.3%)
+- **IQ3_K: 6.8348 ±0.084 PPL** (was anchor 7.3243; same −6.8% drift)
+
+Quality ratio IQ3_KT/IQ3_K = +23.3% (stable; inherent to single-codebook design).
+**Action: update baseline-matrix anchors.** §-FLAG: IQ3_KT ROCm backend SEGFAULTs (missing
+`mul_mat_vec_iq3_kt` kernel; TODO 168 CREATED). Vulkan works; CPU fallback unavailable.
 
 ### Fixed — EAGLE3 B1+KV: drafter-batch KV-position anchor fix (2026-05-30)
 
