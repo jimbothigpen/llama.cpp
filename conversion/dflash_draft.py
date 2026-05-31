@@ -75,24 +75,55 @@ class DFlashDraftModel(TextModel):
         self.gguf_writer.add_add_space_prefix(False)
         self.gguf_writer.add_add_bos_token(True)
 
+    def _has_local_tokenizer(self) -> bool:
+        return any(
+            (self.dir_model / f).exists()
+            for f in ("tokenizer.json", "tokenizer_config.json", "tokenizer.model")
+        )
+
     def set_vocab(self) -> None:
+        # Swap dir_model temporarily when the draft has no bundled tokenizer and
+        # --target-model-dir points to the base model that holds the tokenizer.
+        target_dir = getattr(self, "target_model_dir", None)
+        needs_target = not self._has_local_tokenizer()
+
+        if needs_target and target_dir is not None:
+            logger.info(
+                "DFlashDraftModel: no tokenizer in draft dir; loading tokenizer from --target-model-dir %s",
+                target_dir,
+            )
+            original_dir = self.dir_model
+            self.dir_model = target_dir
+        elif needs_target:
+            raise ValueError(
+                "DFlashDraftModel: no tokenizer files found in the draft model directory. "
+                "Provide the base model path via --target-model-dir so the tokenizer can be "
+                "loaded from there (e.g. --target-model-dir /path/to/Qwen3.5-27B)."
+            )
+        else:
+            original_dir = None
+
         try:
-            self._set_vocab_sentencepiece()
-            return
-        except FileNotFoundError:
-            pass
-
-        if self._is_gemma4_dflash():
             try:
-                self._set_vocab_gemma4_hf_bpe()
+                self._set_vocab_sentencepiece()
                 return
-            except (FileNotFoundError, TypeError, ValueError, UnicodeDecodeError) as e:
-                logger.warning(
-                    "DFlashDraftModel: Gemma4 HF/BPE vocab path failed: %s; falling back to GPT-2 vocab",
-                    e,
-                )
+            except FileNotFoundError:
+                pass
 
-        self._set_vocab_gpt2()
+            if self._is_gemma4_dflash():
+                try:
+                    self._set_vocab_gemma4_hf_bpe()
+                    return
+                except (FileNotFoundError, TypeError, ValueError, UnicodeDecodeError) as e:
+                    logger.warning(
+                        "DFlashDraftModel: Gemma4 HF/BPE vocab path failed: %s; falling back to GPT-2 vocab",
+                        e,
+                    )
+
+            self._set_vocab_gpt2()
+        finally:
+            if original_dir is not None:
+                self.dir_model = original_dir
 
     def set_gguf_parameters(self) -> None:
         super().set_gguf_parameters()

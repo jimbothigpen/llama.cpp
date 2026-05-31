@@ -152,6 +152,11 @@ def parse_args() -> argparse.Namespace:
         "--fp8-as-q8", action="store_true",
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
+    parser.add_argument(
+        "--target-model-dir", type=Path, default=None,
+        help="Path to the target (base) model directory. Required for draft models (DFlash, EAGLE3) "
+             "that do not bundle their own tokenizer.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -270,6 +275,7 @@ def main() -> None:
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
+                                     target_model_dir=args.target_model_dir,
                                      )
 
         if args.vocab_only:
