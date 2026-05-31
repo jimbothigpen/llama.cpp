@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `0d13ac92b`** on
-`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-30 PM-48 wave): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `086c8508f`** on
+`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-30 PM-49 wave): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30 PM-48 wave): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -541,15 +541,16 @@ MTP regression gate confirmed clean (84.6% accept on Qwen3.5-35B-A3B-MTP after N
 ### EAGLE3 hidden-state extrapolation speculative decoder — Phase 4
 
 Ported EAGLE3 from carlosfundora `1-bit-turbo` (core port `c0f3c1486`; fc dtype-aware
-read with BF16/F16→F32 conversion `4c38845c4`; post-rebase struct fixup `e109b17d8`).
+read with BF16/F16→F32 conversion `4c38845c4`; post-rebase struct fixup `e109b17d8`; drafter-batch KV-position anchor fix `380c93384`).
 EAGLE3 uses the target model's hidden-state residuals to extrapolate draft tokens
-rather than running a separate full drafter model. Primary test target: Gemma 4 26B-A4B
-with the paired assistant checkpoint.
+rather than running a separate full drafter model. Primary test target: Qwen3.5-9B
+with the paired eagle3-draft-9b checkpoint.
 
 Backend-agnostic — no novel GPU kernels; operates entirely within the existing
-speculative-decode scheduling path. Smoke gate PASSED: EAGLE3 init OK, 6.3 t/s
-generation, EXIT:0. End-to-end accept-rate gate runs as part of the full spec-decode
-matrix (see [In-flight workstreams](#in-flight-workstreams)).
+speculative-decode scheduling path. **EAGLE3 now functional** (2026-05-30): accept-rate **0%→33.3%** on
+Qwen3.5-9B + eagle3-draft-9b, exceeding DFlash solo (25.1%). The B1 correctness fixes (d2t remap, 
+norm_before_residual gating, rope_factors) combined with the KV-position anchor fix (`380c93384`) 
+resolve the checkpoint-rollback blocker.
 
 ---
 
@@ -627,7 +628,7 @@ TriAttention from domvox `feature/triattention-scoring` was originally Phase 4 w
 
 **Validation (Phase B GQA CPU smoke):** 3/3 GQA models GREEN (Qwen3.5-9B, Llama-3.1-8B, Gemma-4-E2B). 4-cell build PASS (ROCm gfx1150 + gfx1102 + Vulkan gfx1150 + Vulkan gfx1103). PPL gate: baseline 15.2055 vs triattention 15.1913, Δ=0.09% — within ±10% (no-op compact is expected for Phase A).
 
-**Open Phase C work:** GPU GQA kernel extension to aggregate query heads for `nh != nkv` GQA models, SWA-layer capture for Gemma-4 (`kv_swa` not currently captured), and GPU scoring path (requires `--cache-type-k q8_0`).
+**Phase C Part 2 (2026-05-30):** SWA-layer K/V capture for Gemma-4 hybrid models now shipped (`086c8508f`). TriAttention was entirely inert on Gemma-4 (ISWA cache bridge returned null, no capture in SWA `build_attn()`). Fix recognizes `llama_kv_cache_iswa`, forces `swa_full` when active, captures `kv_swa` per layer. Validation: SWA capture ~89% populated; smart retrieval 30% vs random 0%; non-SWA paths byte-unchanged (no regression).
 
 ---
 

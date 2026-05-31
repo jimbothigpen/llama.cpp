@@ -9,9 +9,17 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `0d13ac92b` (2026-05-30 — MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel + Vulkan port; MTP/TriAttention divergence fixes; Vulkan parity closures; doc updates. Earlier this session: imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
+HEAD: `086c8508f` (2026-05-30 — EAGLE3 B1+KV correctness cascade (d2t remap, norm_before_residual gating, rope_factors) + drafter-batch KV-position anchor fix; TriAttention Phase C Part-2 SWA-layer K/V capture for Gemma-4 hybrid models; /opt production ship b812; backlog doc/comment corrections. Earlier (PM-48): MTP C1 catch-up elimination + iGPU-default n_max=1; TriAttention Phase C GPU GQA scoring kernel + Vulkan port; MTP/TriAttention divergence fixes; Vulkan parity closures; imatrix MTP/NextN draft-head collection; suppress JSON schema grammar during thinking block; iGPU startup warning for MTP; speculative-decode speed-bench harness).
 
-In-flight: Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part 2 (SWA-layer `kv_swa` capture for Gemma-4) + CPU-runtime deep-needle divergence root-cause; C1 server-path validation; full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); TriAttention Phase C Part-3 per-layer head_dim (lift Gemma-4 >30%); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
+
+### Fixed — EAGLE3 B1+KV: drafter-batch KV-position anchor fix (2026-05-30)
+
+`380c93384`. Combined the three B1 correctness fixes (d2t remap, norm_before_residual gating, rope_factors) with the KV-position fix from DFlash: anchor the draft batch to `llama_memory_seq_pos_max(ctx_dft)+1` instead of cross_len, which grows every iteration as target hiddens are committed. The two coincide only on the first iteration; every draft decode after the first failed the `Y = X + 1` consecutive-position check, blocking checkpoint rollback. **Status: EAGLE3 now functional (0%→33.3% accept on Qwen3.5-9B + eagle3-draft-9b), exceeding DFlash solo (25.1%).** Validation: Qwen3.5-9B + eagle3-draft-9b dual-spec gate PASS (accept 0%→33.3%), single-draft EAGLE3 (not yet measured in matrix).
+
+### Added — TriAttention Phase C Part-2: SWA-layer K/V capture for Gemma-4 hybrid models (2026-05-30)
+
+`086c8508f`. TriAttention was entirely inert on Gemma-4 (hybrid `llama_kv_cache_iswa` bridge returned null, no capture set_rows in SWA `build_attn()`, SWA layers uncaptured). Fix adds `llama_kv_cache_iswa` branch in KV-cache type dispatch, recognizes iswa in bridge, forces `swa_full` when active, captures `kv_swa` per layer. Surgical fix (7 files, no kernels). **Validation: SWA capture ~89% populated; smart retrieval 30% vs random 0%; non-SWA path byte-unchanged (no regression).** TriAttention now functional on Gemma-4. **Followup (not shipped):** per-layer head_dim in scoring runtime to also score full-attn layers (lift >30%).
 
 ### Added — MTP C1: eliminate the Qwen catch-up decode + iGPU-default `n_max=1` (2026-05-30)
 
