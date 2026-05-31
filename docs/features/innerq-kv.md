@@ -1,6 +1,12 @@
 # InnerQ KV Cache (`turboq2_innerq` / `turboq3_innerq`)
 
 > **Status: Experimental** — CUDA/HIP only (no Vulkan); optional online calibration.
+>
+> **§-FLAG (KDD-5): Vulkan encode gap.** The InnerQ equalization layer (calibration accumulation +
+> per-channel scale-apply) has no Vulkan shader. On Vulkan, InnerQ types are accepted and
+> dequant-reads (flash-attention decode side) use the CPU fallback path, but the SET_ROWS encode
+> kernel skips calibration and scaling silently. Effective quality on Vulkan equals plain
+> `turboq2` / `turboq3`. Track KDD-5 for status.
 
 ---
 
@@ -42,7 +48,7 @@ The per-channel calibration engine (`d_innerq_*` device state, `turbo_innerq_ini
 
 **Naming.** TheTom's fork calls these types `TURBO2_INNERQ` and `TURBO3_INNERQ`. This fork
 renames them to `turboq2_innerq` / `turboq3_innerq` (enum symbols `GGML_TYPE_TURBOQ2_INNERQ` = 68
-and `GGML_TYPE_TURBOQ3_INNERQ` = 69, `ggml/include/ggml.h:440-441`), consistent with the
+and `GGML_TYPE_TURBOQ3_INNERQ` = 69, `ggml/include/ggml.h:439-440`), consistent with the
 `turboq`-prefix family convention. KV cache type identifiers are runtime-only — they are never
 serialized into `.gguf`. Model files from TheTom's build load and run unchanged; substitute
 `turboq2_innerq` / `turboq3_innerq` wherever TheTom's docs say `TURBO2_INNERQ` / `TURBO3_INNERQ`.
@@ -213,13 +219,13 @@ No Vulkan section — InnerQ has no Vulkan encode support.
 InnerQ uses the **same block structs** as `turboq2` / `turboq3`. There is no InnerQ-specific
 block layout; the equalization is applied as a pre-processing step before the block is encoded.
 
-**`block_turboq2_0`** — 34 bytes (`ggml-common.h:301-305`):
+**`block_turboq2_0`** — 34 bytes (`ggml-common.h:289-293`):
 ```
 [norm: fp16, 2B] [qs[32]: 2-bit PolarQuant indices, 4 per byte]
 ```
 `static_assert(sizeof(block_turboq2_0) == sizeof(ggml_half) + QK_TURBOQ2/4)`
 
-**`block_turboq3_0`** — 50 bytes (`ggml-common.h:351-355`):
+**`block_turboq3_0`** — 50 bytes (`ggml-common.h:338-343`):
 ```
 [norm: fp16, 2B] [qs[32]: lower 2 bits of 3-bit index, 4 per byte]
                  [signs[16]: upper 1 bit (QJL sign), 8 per byte]
@@ -271,8 +277,9 @@ if (d_innerq_calibrating && sid < 128)
 if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
 ```
 
-This appears at `set-rows.cu:388-400` (turboq2 path) and `set-rows.cu:1174-1182` /
-`set-rows.cu:1476-1483` (turboq3 and TCQ paths that InnerQ also gates through). The equalization
+This appears at `set-rows.cu:391-400` (turboq2 path, lane var `j`) and `set-rows.cu:1175-1181` /
+`set-rows.cu:1477-1483` (turboq3 paths; the snippet above shows the turboq3 form, which adds
+the `sid < 128` guard against oversized group sizes). The equalization
 scales the channel value **before** the WHT rotation, so the rotation operates on already-balanced
 data. Math: `⟨Q/s, s·K⟩ = ⟨Q, K⟩` — dot products with Q are preserved; only quantization
 error distribution changes.
