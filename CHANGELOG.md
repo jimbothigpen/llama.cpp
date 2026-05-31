@@ -9,9 +9,52 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `8599beb26` (2026-05-31 — PM-53 session: BACKEND_PARITY IQ2_KT + IQ3_KT Vulkan ported; IQ3_KT ROCm crash flagged TODO 168. Includes PM-52 session docs: TriAttention Phase C feature doc (TODO 161 complete), IK KT/trellis weight-quant feature doc, PFlash → CLI prompt-compression wire (TODO 162 sub-1), IQ2_KT/IQ3_KT baseline-matrix PPL results + IQ2_KT 9B RED verdict (TODO 124), TriAttention phase-C step-1 calibration generator. Includes 2026-05-30 EAGLE3 B1+KV correctness cascade + TriAttention SWA capture for Gemma-4 + PM-48 MTP C1 improvements).
+HEAD: `f86a24a95` (2026-05-31 — PM-55 session: IQ3_KT ROCm dequant kernel (TODO 168 CLOSED); PFlash scorer generalized to non-Qwen archs (TODO 162 sub-2, §-FLAG non-Qwen UNVALIDATED); EAGLE 3.1 future-watch ledger (TODO 170b); InnerQ KV feature doc finalized (TODO 157); DFlash converter --target-model-dir tokenizer fix (TODO 122). Prior: PM-53 BACKEND_PARITY IQ2_KT+IQ3_KT Vulkan ported `8599beb26`).
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
+
+### Fixed — IQ3_KT ROCm: add dequantize kernel + GPU dispatch (TODO 168 CLOSED) (2026-05-31)
+
+`c809225f6`. IQ3_KT was silently falling back to CPU on ROCm because the CUDA dequantize kernel
+(`dequantize_block_iq3_kt`) was absent and `ggml-cuda.cu:supports_op` never returned true for
+IQ3_KT. Fix mirrors IQ4_KT: +73 LOC CUDA dequant (block + matvec), `supports_op` registration,
+and two GEMM-dispatch sites. **Gate PASS (gfx1150, ai00):** GPU path executes at 99% utilization /
+7.66s-per-pass vs CPU-hang; IQ3_KT:IQ4_KT PPL ratio 1.30 ≈ anchor 1.29 (IQ3_KT=9.05/IQ4_KT=6.95).
+§-FLAG note: ai01-gfx1102 warmup crash is a separate known gfx1102 Tensile confound, not IQ3_KT.
+Closes TODO 168.
+
+### Added — PFlash scorer generalized to non-Qwen models (TODO 162 sub-2) (2026-05-31)
+
+`500046b0b`. PFlash prompt-compression scorer (`tools/pflash/pflash-scorer.cpp`) was Qwen3.x-only:
+hard-coded attn/ffn tensor names broke non-Qwen lookup. Fix: arch table driven by
+`llama_model_arch` covering qwen3/qwen35/qwen2/llama/mistral3/mistral4/gemma3/gemma4; NULL-deref
+guards on optional fields (G4/G5 models); loud unknown-arch `LLAMA_LOG_ERROR` rejection replaces
+silent crash. **Qwen3.x regression: byte-identical.** §-FLAG: Gemma3/Llama live-scorer compile
+paths are new but UNVALIDATED (no non-Qwen scorer GGUF on hand at time of ship) — gate on
+non-Qwen scorer GGUF when available (filed as follow-up TODO: PFlash non-Qwen live-scorer
+validation). Closes TODO 162 sub-2.
+
+### Docs — EAGLE 3.1 future-watch ledger entry in eagle3.md §5 (TODO 170b) (2026-05-31)
+
+`9ae70fdc5`. Adds §5 "EAGLE 3.1 — future watch" to `docs/features/eagle3.md`: summarizes the
+upstream EAGLE 3.1 paper / implementation status (not yet in mainline or fork); accept-ceiling
+architectural note (1/n_draft); monitoring criteria for when to revisit the port decision. Closes
+TODO 170b.
+
+### Docs — InnerQ KV feature doc finalized (TODO 157) (2026-05-31)
+
+`6ce2319c3`. Finalizes `docs/features/innerq-kv.md`: backend matrix (CUDA working, HIP working,
+Vulkan §-FLAG KDD-5), corrects line-number references that had drifted after the imatrix port.
+Closes TODO 157.
+
+### Fixed — DFlash converter: --target-model-dir + tokenizer bundling (TODO 122) (2026-05-31)
+
+`f86a24a95`. `conversion/dflash_draft.py` lacked the `--target-model-dir` flag needed to bundle
+the base-model tokenizer alongside the converted DFlash draft GGUF (required by z-lab DFlash
+models that ship without a standalone tokenizer). Fix adds the flag and wires `DFlashDraftModel`
+to copy tokenizer files into the output directory. The converter itself already existed
+(`ba61a9d39` TODO 122 phase 1 + `a2c9c8c49` follow-on); this closes the remaining tokenizer gap.
+Closes TODO 122 (final).
 
 ### Docs — BACKEND_PARITY IQ2_KT/IQ3_KT Vulkan ported; IQ3_KT ROCm crash flagged (2026-05-31)
 
