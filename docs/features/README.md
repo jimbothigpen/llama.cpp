@@ -11,6 +11,7 @@ Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache
 | [TurboQuant KV base](turboquant-kv-base.md) | Stable | `turboq2`, `turboq3`, `turboq4` | ~7.5× / ~5.1× / ~3.8× |
 | [TCQ KV cache](tcq-kv.md) | Stable | `turboq2_tcq`, `turboq3_tcq` | ~7.1× / ~4.9× |
 | [InnerQ KV cache](innerq-kv.md) | Experimental (CUDA/HIP only) | `turboq2_innerq`, `turboq3_innerq` | ~7.5× / ~5.1× (same memory as base; quality improvement) |
+| [OScaR INT2 K-cache](oscar-kv.md) | Experimental (CUDA/HIP only, Phase 1) | `kv_oscar_int2` | ~8× K-only; FHT+INT2; residual window (`--cache-oscar-residual-window`); gate PASS 9B (+9.1% PPL); **DO NOT USE sub-1B** (architectural issue) |
 
 ## KV Cache Architecture
 
@@ -76,6 +77,15 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 | [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 | [PHANTOM-X self-speculative n-gram drafter](phantom-x.md) | Stable | Any causal-LM GGUF | Bloom-filtered n-gram tables; no separate draft model; `--spec-type phantom`; +34% on repetitive code (86.6% accept); flat on prose; ported from carlosfundora 1-bit-turbo |
 | [DFlash drafter spec-decode](dflash.md) | Preview — correct, **no speedup yet** | Any target + z-lab DFlash drafter | Cross-attention-ring drafter; 25.1% solo accept (gfx1150, Qwen3.6); S2 CPU path is net slowdown (~0.4×); `--spec-type dflash`; S3 GPU ring in progress |
+
+## Prompt Compression
+
+Reduces the token budget presented to the target model's prefill via scorer-guided
+importance ranking. Complementary to KV cache quantization and eviction.
+
+| Feature | Status | Summary |
+|---|---|---|
+| [PFlash prompt compression](pflash.md) | Experimental — Qwen3.x scorer validated; **§-FLAG (PFL-1): non-Qwen scorer (Gemma3/Llama/Qwen2/Mistral) UNVALIDATED** | Scorer assigns importance weights to each prompt token; top fraction retained up to `--pflash-keep-ratio`; activates only above `--pflash-min-tokens`; CUDA/HIP GPU scorer; Vulkan falls back to CPU; `--pflash-scorer PATH` |
 
 ## Adding a new doc
 

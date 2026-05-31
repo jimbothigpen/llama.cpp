@@ -32,7 +32,8 @@
 ```bash
 # Convert the z-lab DFlash drafter (Qwen3.6 family shown)
 python3 conversion/dflash_converter.py <dflash-drafter-dir> \
-    --outfile dflash-draft.gguf
+    --outfile dflash-draft.gguf \
+    --target-model-dir <base-model-dir>
 
 # Run speculative decode
 llama-speculative-simple \
@@ -79,12 +80,15 @@ vocabulary projection; it produces a single drafted token per step.
 | **`mask_token_id` type fix** | `1436d1890` | `int32_t → uint32_t` to match `llama-hparams.h` (required to load any z-lab drafter) | ✅ Shipped |
 | **Converter** | `ee7d4f896` | safetensors → GGUF conversion for the z-lab DFlash drafter family | ✅ Shipped |
 | **KV-position correctness fix** | `003ecc2d1` | Anchors drafter batch to drafter KV pos (was: cross-attn ring length — see §4) | ✅ Shipped 2026-05-30 |
+| **Tokenizer bundling** | `f86a24a95` | `--target-model-dir <base-model-dir>` flag copies base-model tokenizer files alongside the output GGUF (required for z-lab models that omit a standalone tokenizer) | ✅ Shipped 2026-05-31 (TODO 122 CLOSED) |
 | **S3 — GPU ring buffer + bulk argmax + server `spec_type` wiring** | — | Eliminates per-iteration CPU cross-attention; required for a net speedup | 🔄 In progress |
 
 **Known open items:**
 
-- Gemma-4 DFlash converter path exists but is not yet smoke-tested (z-lab
-  Gemma-4 drafter directory was missing tokenizer files at last check).
+- Gemma-4 DFlash converter path exists but is not yet smoke-tested. Use
+  `--target-model-dir <gemma-4-model-dir>` to bundle the tokenizer (resolves
+  the missing-tokenizer-files issue, TODO 122 CLOSED); Gemma-4 end-to-end
+  functional smoke is still pending.
 - Server multi-batch prompt accumulation into the cross-attention ring is not
   yet implemented; `llama-server` with a long cached prompt may produce a
   ring-length mismatch. CLI (single-batch prompt) is unaffected and is what
@@ -193,7 +197,9 @@ impl and is byte-for-byte untouched.
   interchangeable with a causal LM draft model. It must be paired with a
   matching target architecture and ring dimension.
 - **Gemma-4 converter path untested.** Qwen3.6 family is smoke-tested GREEN;
-  Gemma-4 is present in the converter but not yet smoke-tested.
+  Gemma-4 is present in the converter but not yet smoke-tested. Use
+  `--target-model-dir <gemma-4-model-dir>` to supply the tokenizer when
+  converting (TODO 122 CLOSED).
 - **Server multi-batch prompt limitation.** CLI is the validated path. Server
   support for long cached prompts requires per-batch ring accumulation (deferred
   to a follow-up).

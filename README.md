@@ -410,7 +410,7 @@ Ported IQ2_KT (Trellis P3a) from ik_llama via the new `ggml-iqk-kt-family.hpp` t
 - PPL on Qwen3.5-0.8B is 107.87 vs IQ2_KL=26.12 and IQ4_KT=11.43 (anomaly OPEN — under investigation; scope-TBD: scale-dependent vs general). Status: ship-with-§-FLAG per `[[iq2-kt-known-issues]]`.
 - Cluster acceleration overshoots the ≤+5% PPL gate (+8.3% vs brute-force baseline); k=80–100 retune is planned for late-stage polish.
 - Vulkan path not yet ported.
-- IQ3_KT / IQ1_KT (Trellis P3b / P3c) queued behind P3a; will use the same `iqkt_cooked_book_init` site for cluster acceleration.
+- IQ3_KT (Trellis P3b) **shipped** — CPU/ROCm/Vulkan, cluster-accel k=60 (`623835cc9`); ROCm GPU confirmed `c809225f6` (TODO 168 CLOSED, gfx1150 99% util). IQ1_KT (Trellis P3c) queued.
 
 ---
 
@@ -687,7 +687,7 @@ Active feature branches / queued workers; not yet merged to `main`.
 
 | Workstream | Branch | Status |
 |---|---|---|
-| Trellis IQ3_KT (Phase P3b) | `main` | **Complete** — CPU/ROCm/Vulkan shipped 2026-05-29 (`623835cc9`); PPL +23.5% vs IQ3_K inherent to single-codebook design; cluster-accel k=60; imatrix required |
+| Trellis IQ3_KT (Phase P3b) | `main` | **Complete** — CPU/ROCm/Vulkan shipped 2026-05-29 (`623835cc9`); ROCm GPU confirmed `c809225f6` (TODO 168 CLOSED, gfx1150 99% util); PPL +23.5% vs IQ3_K inherent to single-codebook design; cluster-accel k=60; imatrix required |
 | Trellis IQ1_KT (Phase P3c) | — | Queued behind P3b; IQKTParams<8,13,false> per `[[trellis-p3-prep-landed]]` |
 | MTP Gemma4 §-FLAG-B fix | `feat/mtp-gemma4-guided-port-2026-05-29` | Fix validated (`96b487c1c`) — move "mtp." tensor rename AFTER load_all_data to fix accept 0%→33.9–61.8%; land pending on convergence bridge |
 | IQ2_KT cluster-accel PPL retune (k=80–100) | — | Late-stage-polish queue; current ship at k=60 has §-FLAG PPL +8.3% above ≤+5% clean threshold |
@@ -834,7 +834,7 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch + S3 GPU ring buffer shipped)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending imatrix retrofit per PM-15)
 - **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending); per-layer SWA KV cache type `--cache-type-{k,v}-swa` (shipped `d8ec65064`)
-- **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** — IK quants (5b-1a/1b/1c/5b-2 all shipped CPU+CUDA/HIP+Vulkan; IQ2_KT Trellis P3a shipped with cluster-accel; P3b/P3c queued), BitNet (pending), MLA/FlashMLA (declined), fused MoE (pending), bf16 KV (pending); ongoing MTP improvements
+- **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** — IK quants (5b-1a/1b/1c/5b-2 all shipped CPU+CUDA/HIP+Vulkan; IQ2_KT Trellis P3a shipped with cluster-accel; P3b IQ3_KT shipped (`623835cc9`, cluster-accel k=60, ROCm GPU confirmed `c809225f6`); P3c IQ1_KT queued), BitNet (pending), MLA/FlashMLA (declined), fused MoE (pending), bf16 KV (pending); ongoing MTP improvements
 - **[Zyphra/transformers](https://github.com/Zyphra/transformers)** (zaya1 branch) — ZAYA1-8B model architecture (Phase 0, in-tree port)
 
 ### Inspiration / planned lifts
