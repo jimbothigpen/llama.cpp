@@ -464,10 +464,18 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
     }
 
+    // OScaR INT2 has its own inline full-dim WHT in the encode/decode kernels (set-rows.cu /
+    // fattn-vec.cuh). Applying the graph-level attn_rot Hadamard on top of OScaR's own WHT
+    // would compose H_D × H_D = I (normalized Hadamard is its own inverse), negating the
+    // rotation and leaving K stored unrotated → poor INT2 quantization quality.
+    // So exclude GGML_TYPE_KV_OSCAR_INT2 from attn_rot to let OScaR's own WHT be the sole rotation.
+    // §-FLAG: K-shift (RoPE updates) for OScaR INT2 assumes attn_rot=false; live-inference
+    // with context shifts should verify K-shift correctness with this change.
     attn_rot_k =
         !attn_rot_disable &&
         n_embd_head_k_all > 0 &&
         ggml_is_quantized(type_k) &&
+        type_k != GGML_TYPE_KV_OSCAR_INT2 &&
         hparams.n_embd_head_k() % 64 == 0;
 
     attn_rot_v =

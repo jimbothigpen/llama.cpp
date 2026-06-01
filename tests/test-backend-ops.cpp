@@ -6441,60 +6441,6 @@ struct test_leaky_relu : public test_case {
     }
 };
 
-// GGML_OP_FWHT — plain Fast Walsh-Hadamard Transform (no sign matrices)
-struct test_fwht : public test_case {
-    const int64_t n;      // row width (must be in {64, 128, 256, 512})
-    const int64_t n_rows; // number of rows
-
-    std::string vars() override {
-        return VARS_TO_STR2(n, n_rows);
-    }
-
-    double max_nmse_err() override {
-        return 1e-5;
-    }
-
-    test_fwht(int64_t n = 128, int64_t n_rows = 4)
-        : n(n), n_rows(n_rows) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_rows);
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-        ggml_tensor * out = ggml_fwht(ctx, a);
-        ggml_set_name(out, "out");
-        return out;
-    }
-};
-
-// GGML_OP_FWHT round-trip: two applications of normalized FWHT = identity
-struct test_fwht_roundtrip : public test_case {
-    const int64_t n;
-    const int64_t n_rows;
-
-    std::string vars() override {
-        return VARS_TO_STR2(n, n_rows);
-    }
-
-    double max_nmse_err() override {
-        return 1e-5;
-    }
-
-    test_fwht_roundtrip(int64_t n = 128, int64_t n_rows = 4)
-        : n(n), n_rows(n_rows) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_rows);
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-        // Normalized FWHT is its own inverse: FWHT(FWHT(x)) = x
-        ggml_tensor * fwd = ggml_fwht(ctx, a);
-        ggml_tensor * inv = ggml_fwht(ctx, fwd);
-        ggml_set_name(inv, "out");
-        return inv;
-    }
-};
-
 // GGML_OP_TURBO_WHT
 struct test_turbo_wht : public test_case {
     const int64_t head_dim;
@@ -9308,20 +9254,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (bool circular : {false, true}) {
             test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, tfrm, circular));
             test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, tfrm, circular));
-        }
-    }
-
-    // FWHT tests: plain Fast Walsh-Hadamard Transform
-    for (int64_t n : {64, 128, 256, 512}) {
-        for (int64_t nr : {1, 4, 8}) {
-            test_cases.emplace_back(new test_fwht(n, nr));
-        }
-    }
-
-    // FWHT round-trip: normalized FWHT applied twice = identity
-    for (int64_t n : {64, 128, 256, 512}) {
-        for (int64_t nr : {1, 4, 8}) {
-            test_cases.emplace_back(new test_fwht_roundtrip(n, nr));
         }
     }
 

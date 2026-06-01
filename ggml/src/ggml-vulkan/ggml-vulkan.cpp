@@ -14270,10 +14270,6 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_silu_back(ctx, compute_ctx, src0, src1, node);
 
         break;
-    case GGML_OP_FWHT:
-        ggml_vk_fwht_op(ctx, compute_ctx, src0, node);
-
-        break;
     case GGML_OP_TURBO_WHT:
         ggml_vk_turbo_wht(ctx, compute_ctx, src0, node);
 
@@ -16950,12 +16946,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     default:
                         return false;
                 }
-            }
-        case GGML_OP_FWHT:
-            {
-                const int64_t n = op->src[0]->ne[0];
-                return op->src[0]->type == GGML_TYPE_F32 &&
-                       (n == 64 || n == 128 || n == 256 || n == 512);
             }
         case GGML_OP_TURBO_WHT:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] % 128 == 0;

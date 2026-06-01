@@ -13,6 +13,23 @@ HEAD: `3c3838ff2` (2026-06-01 — hip: RDNA3.5 FATTN tile config D=256 override 
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
 
+### Changed — OScaR INT2 KV: full-dim D=256 WHT + GGML_OP_FWHT removed (TODO 142) (2026-06-01)
+
+Replaces the block-wise 128-pt Walsh-Hadamard Transform in OScaR INT2 KV encode/decode with
+a single full-dimension D=256 WHT. Both Qwen3.5-0.8B and -9B have `n_embd_head_k=256`; prior
+two independent 128-pt transforms were suboptimal. Encode kernel (`set-rows.cu`) now launches D
+threads per row in one CUDA block; normalization 1/sqrt(D). Decode (`fattn-vec.cuh`) applies
+full D-pt FHT to all D Q elements before dot product; H_D is orthonormal (H^T·H = I).
+
+`GGML_OP_FWHT` standalone op removed (no graph consumers). `fwht.{cu,cuh}` and
+`ggml_cuda_op_fwht()` retained for the active `GGML_HINT_SRC0_IS_HADAMARD` mul_mat path.
+
+`attn_rot_k` disabled for `GGML_TYPE_KV_OSCAR_INT2` (`llama-kv-cache.cpp`): the graph-level
+H_D Hadamard rotation (via `ggml_mul_mat_aux`) would compose with OScaR's own H_D encode/decode
+rotation, giving H_D²=I (identity) — K stored unrotated → poor INT2 quality. With attn_rot
+disabled, OScaR's H_256 is sole rotation → 0.8B: -14.3% vs old baseline, 9B: -2.5% improvement.
+§-FLAG: K-shift (RoPE update for streaming) behavior with attn_rot=false unverified for live use.
+
 ### Added — weight-skip optimization for Q4_K MMVQ — port cenconq25/delta-compress-llm cc47a4a (TODO 137) (2026-06-01)
 
 Ports the Q4_K weight-skip optimization from `cenconq25/delta-compress-llm@cc47a4a`

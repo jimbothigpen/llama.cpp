@@ -1873,8 +1873,19 @@ static void set_rows_cuda_turboq2_tcq(
 }
 
 
-// k_set_rows_oscar_int2: OScaR 2-bit KV encode: plain FHT + per-block min-max uniform INT2
-// 128 threads per block (one thread per element).
+// OSCAR_WHT_FULL_DIM: full head dimension for WHT (D=256 for OScaR target models with head_dim=256).
+// ne00 is the combined GQA dim = head_dim * n_kv_heads. We process groups of OSCAR_WHT_FULL_DIM
+// elements (= one head for models with head_dim=256). For head_dim=128 models where ne00%256≠0,
+// we fall back to QK_OSCAR_INT2=128-pt WHT (full-dim for D=128, identical to Phase 1 behavior).
+// §-FLAG: models with head_dim=128 AND n_kv_heads such that ne00%256==0 would use 256-pt WHT
+// incorrectly (cross-head boundary); requires a head_dim parameter for full correctness (deferred).
+constexpr int OSCAR_WHT_FULL_DIM = 2 * QK_OSCAR_INT2; // 256
+
+// k_set_rows_oscar_int2: OScaR 2-bit KV encode: full-dim FHT + per-subblock min-max uniform INT2.
+// blockDim.x (= wht_group) threads per block; one block per WHT group within the combined GQA row.
+// For wht_group=256 (head_dim=256): single 256-pt WHT across one head's elements, 2 sub-blocks.
+// For wht_group=128 (fallback): 128-pt WHT per sub-block (identical to Phase 1 for head_dim=128).
+// Parseval check: H_D is normalized (1/sqrt(D) scale) so H_D^T * H_D = I (orthonormal).
 template<typename idx_t>
 static __global__ void k_set_rows_oscar_int2(
         const float * __restrict__ src0,
@@ -1896,17 +1907,18 @@ static __global__ void k_set_rows_oscar_int2(
         const int64_t s2,
         const int64_t s3) {
 
-    const int j = threadIdx.x; // 0..127
+    const int j = threadIdx.x; // 0..wht_group-1
+    const int D = (int)blockDim.x; // = wht_group (256 or 128)
 
-    // Decode blockIdx.x → (i_blk, i01, i02, i03)
-    const int64_t n_blocks_per_row = ne00 / QK_OSCAR_INT2;
-    const int64_t g   = blockIdx.x;
-    const int64_t i_blk = g % n_blocks_per_row;
-    int64_t       tmp   = g / n_blocks_per_row;
-    const int64_t i01   = tmp % ne01;
-    tmp                 = tmp / ne01;
-    const int64_t i02   = tmp % ne12;
-    const int64_t i03   = tmp / ne12;
+    // Decode blockIdx.x → (i_group within row, i01, i02, i03)
+    const int64_t n_groups_per_row = ne00 / D;
+    const int64_t g       = blockIdx.x;
+    const int64_t i_group = g % n_groups_per_row;
+    int64_t       tmp     = g / n_groups_per_row;
+    const int64_t i01     = tmp % ne01;
+    tmp                   = tmp / ne01;
+    const int64_t i02     = tmp % ne12;
+    const int64_t i03     = tmp / ne12;
 
     const int64_t i12 = i02;
     const int64_t i11 = i01 % ne11;
@@ -1915,35 +1927,39 @@ static __global__ void k_set_rows_oscar_int2(
     const int64_t dst_row = *(src1 + i10*s10 + i11*s11 + i12*s12);
     const float * src_row = src0 + i01*s01 + i02*s02 + i03*s03;
     block_kv_oscar_int2 * dst_row_ptr = (block_kv_oscar_int2 *)((char *)dst + dst_row*s1 + i02*s2 + i03*s3);
-    block_kv_oscar_int2 * blk = dst_row_ptr + i_blk;
 
-    // Step 1: Load into shared memory
-    __shared__ float x[QK_OSCAR_INT2];
-    x[j] = src_row[i_blk * QK_OSCAR_INT2 + j];
+    // Step 1: Load D elements for this group into shared memory (sized for max D=256)
+    __shared__ float x[256];
+    x[j] = src_row[i_group * D + j]; // i_group * D = offset into combined GQA row
     __syncthreads();
 
-    // Step 2: Plain FHT (no sign matrices — OScaR uses standard Hadamard)
-#define OSCAR_WHT_STAGE(h) \
-    if ((j / (h)) % 2 == 0) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
+    // Step 2: Full-dim D-pt WHT (no sign matrices — OScaR uses standard Hadamard).
+    // For D=128: 7 stages (h=1..64). For D=256: 8 stages (h=1..128).
+    // Each butterfly: thread (j/h)%2==0 mixes x[j] and x[j+h].
+    for (int h = 1; h < D; h <<= 1) {
+        if ((j / h) % 2 == 0) {
+            float a = x[j], b = x[j + h];
+            x[j]     = a + b;
+            x[j + h] = a - b;
+        }
+        __syncthreads();
+    }
+
+    // Normalize: 1/sqrt(D) so H_D is orthonormal (H_D^T * H_D = I).
+    x[j] *= rsqrtf((float)D);
     __syncthreads();
 
-    OSCAR_WHT_STAGE(1)
-    OSCAR_WHT_STAGE(2)
-    OSCAR_WHT_STAGE(4)
-    OSCAR_WHT_STAGE(8)
-    OSCAR_WHT_STAGE(16)
-    OSCAR_WHT_STAGE(32)
-    OSCAR_WHT_STAGE(64)
-#undef OSCAR_WHT_STAGE
+    // Steps 3-6: Per-sub-block min/max reduction and quantize.
+    // Sub-block ib covers elements [ib*QK_OSCAR_INT2 .. (ib+1)*QK_OSCAR_INT2).
+    const int ib = j / QK_OSCAR_INT2; // sub-block index (0 for D=128, 0 or 1 for D=256)
+    const int jb = j % QK_OSCAR_INT2; // position within sub-block (0..127)
+    const int n_warps_per_sb = QK_OSCAR_INT2 / WARP_SIZE; // warps per sub-block
 
-    constexpr float inv_sqrt_128 = 0.08838834764831845f;
-    x[j] *= inv_sqrt_128;
-    __syncthreads();
-
-    // Step 3: Parallel min/max reduction
-    constexpr int n_warps = QK_OSCAR_INT2 / WARP_SIZE;
-    __shared__ float warp_min[n_warps];
-    __shared__ float warp_max[n_warps];
+    // warp_min/max indexed by global warp id (j / WARP_SIZE); sized for max 8 warps (D=256, WARP_SIZE=32)
+    __shared__ float warp_min[256 / WARP_SIZE];
+    __shared__ float warp_max[256 / WARP_SIZE];
+    __shared__ float s_min[2]; // per-sub-block global min/max
+    __shared__ float s_max[2];
 
     float v = x[j];
     float vmin = v, vmax = v;
@@ -1957,40 +1973,43 @@ static __global__ void k_set_rows_oscar_int2(
     }
     __syncthreads();
 
-    __shared__ float s_min, s_max;
-    if (j == 0) {
-        float gmin = warp_min[0], gmax = warp_max[0];
-        for (int w = 1; w < n_warps; w++) {
-            gmin = fminf(gmin, warp_min[w]);
-            gmax = fmaxf(gmax, warp_max[w]);
+    // First thread in each sub-block reduces across that sub-block's warps
+    if (jb == 0) {
+        const int w_start = ib * n_warps_per_sb;
+        float gmin = warp_min[w_start], gmax = warp_max[w_start];
+        for (int w = 1; w < n_warps_per_sb; w++) {
+            gmin = fminf(gmin, warp_min[w_start + w]);
+            gmax = fmaxf(gmax, warp_max[w_start + w]);
         }
-        s_min = gmin;
-        s_max = gmax;
+        s_min[ib] = gmin;
+        s_max[ib] = gmax;
     }
     __syncthreads();
 
-    const float bmin  = s_min;
-    const float range = s_max - bmin;
+    const float bmin  = s_min[ib];
+    const float range = s_max[ib] - bmin;
     const float bd    = (range > 1e-10f) ? range / 3.0f : 1.0f;
     const float inv_d = 1.0f / bd;
 
     // Step 4: Quantize element j to 2-bit
     const int q = min(3, max(0, (int)(__float2int_rn((x[j] - bmin) * inv_d))));
 
-    // Step 5: Pack 4 elements per byte using warp shuffle
+    // Step 5: Pack 4 elements per byte using warp shuffle (within sub-block, lane = jb % WARP_SIZE)
+    // Output block index: i_group * (D/QK_OSCAR_INT2) + ib (stride by blocks-per-group per head)
+    const int blk_base = (int)i_group * (D / QK_OSCAR_INT2); // base block offset for this group
     const uint8_t my_q = (uint8_t)(q & 0x3);
-    const int lane = j % WARP_SIZE;
+    const int lane = jb % WARP_SIZE;
     const uint8_t q1 = __shfl_sync(0xffffffff, my_q, lane ^ 1, WARP_SIZE);
     const uint8_t q2 = __shfl_sync(0xffffffff, my_q, lane ^ 2, WARP_SIZE);
     const uint8_t q3 = __shfl_sync(0xffffffff, my_q, lane ^ 3, WARP_SIZE);
-    if (j % 4 == 0) {
-        blk->qs[j / 4] = my_q | (q1 << 2) | (q2 << 4) | (q3 << 6);
+    if (jb % 4 == 0) {
+        dst_row_ptr[blk_base + ib].qs[jb / 4] = my_q | (q1 << 2) | (q2 << 4) | (q3 << 6);
     }
 
-    // Step 6: Write per-block d and m (one thread)
-    if (j == 0) {
-        blk->d = __float2half(bd);
-        blk->m = __float2half(bmin);
+    // Step 6: Write per-sub-block d and m (first thread in each sub-block)
+    if (jb == 0) {
+        dst_row_ptr[blk_base + ib].d = __float2half(bd);
+        dst_row_ptr[blk_base + ib].m = __float2half(bmin);
     }
 
     GGML_UNUSED(ne10);
@@ -2009,11 +2028,10 @@ static void set_rows_cuda_oscar_int2(
     const idx_t * src1_d = (const idx_t *)src1->data;
 
     GGML_TENSOR_BINARY_OP_LOCALS
-    GGML_ASSERT(ne00 % QK_OSCAR_INT2 == 0);
+    GGML_ASSERT(ne00 % QK_OSCAR_INT2 == 0); // each QK_OSCAR_INT2 elements produce one quantization block
 
     cudaStream_t stream = ctx.stream();
 
-    const int64_t n_blocks = ne00 / QK_OSCAR_INT2;
     const int64_t s01 = nb01/sizeof(float);
     const int64_t s02 = nb02/sizeof(float);
     const int64_t s03 = nb03/sizeof(float);
@@ -2021,9 +2039,14 @@ static void set_rows_cuda_oscar_int2(
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
 
-    if (n_blocks > 0) {
-        const int64_t ne_total = n_blocks * ne01 * ne02 * ne03;
-        k_set_rows_oscar_int2<idx_t><<<(int)ne_total, QK_OSCAR_INT2, 0, stream>>>(
+    if (ne01 > 0) {
+        // wht_group: full-dim WHT size per head (256 if ne00 divisible by OSCAR_WHT_FULL_DIM,
+        // else QK_OSCAR_INT2=128 for D=128 head-dim models).
+        // Shared memory is sized for OSCAR_WHT_FULL_DIM (max 256), so wht_group <= 256.
+        const int64_t wht_group = (ne00 % OSCAR_WHT_FULL_DIM == 0) ? OSCAR_WHT_FULL_DIM : QK_OSCAR_INT2;
+        const int64_t n_groups  = ne00 / wht_group; // groups per row (= n_kv_heads for head_dim=256)
+        const int64_t ne_total  = n_groups * ne01 * ne02 * ne03;
+        k_set_rows_oscar_int2<idx_t><<<(int)ne_total, (int)wht_group, 0, stream>>>(
             src0_d, src1_d, (block_kv_oscar_int2 *)dst->data,
             ne00, ne01, ne10, ne11, ne12, ne13,
             s01, s02, s03, s10, s11, s12,

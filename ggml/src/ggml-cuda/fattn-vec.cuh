@@ -10,67 +10,69 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
     return 128;
 }
 
-// OScaR INT2 K dot product: apply per-block FWHT (QK_OSCAR_INT2-point) then dequant with min-max INT2.
+// OScaR INT2 K dot product: apply full-dim D-pt FWHT to Q, then dequant K and compute dot product.
 // Requires nthreads_KQ==1 (enforced by K_is_turbo=true) — each thread has full D-element Q.
 // Q_v is half2[] when V_DOT2_F32_F16_AVAILABLE, float2[] otherwise (same convention as TCQ).
-// Per-block FHT matches the SET_ROWS encode kernel which applies QK_OSCAR_INT2-point WHT per block.
-// Works for D = n * QK_OSCAR_INT2 (e.g. D=128 → 1 block, D=256 → 2 blocks).
+// Full-dim D-pt WHT matches SET_ROWS encode which applies a single D-pt WHT across all D elements.
+// For D=128: 1 sub-block, 128-pt WHT (same as Phase 1). For D=256: single 256-pt WHT, 2 sub-blocks.
+// Parseval: H_D is normalized (1/sqrt(D)), so H_D^T * H_D = I (orthonormal), inner product preserved.
 template<int D, int nthreads_KQ>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_oscar_int2(
         const char * __restrict__ K_data,
         const void * __restrict__ Q_v) {
     static_assert(nthreads_KQ == 1, "OScaR INT2 K requires K_is_turbo (nthreads_KQ==1)");
+    static_assert(D % QK_OSCAR_INT2 == 0, "D must be multiple of QK_OSCAR_INT2");
 
-    constexpr int BS = QK_OSCAR_INT2; // 128: block size for both encode and decode
     const block_kv_oscar_int2 * blks = (const block_kv_oscar_int2 *)K_data;
-    float sum = 0.0f;
 
+    // Step 1: Load all D Q elements into registers
+    float x[D];
 #pragma unroll
-    for (int ib = 0; ib < D/BS; ib++) {
-        // Load BS elements of Q for this block
-        float x[BS];
-        const int base = ib * (BS/2); // index into half2 / float2 array
-#pragma unroll
-        for (int i = 0; i < BS/2; i++) {
+    for (int i = 0; i < D/2; i++) {
 #ifdef V_DOT2_F32_F16_AVAILABLE
-            const half2 qv = ((const half2 *)Q_v)[base + i];
-            x[2*i]   = __half2float(qv.x);
-            x[2*i+1] = __half2float(qv.y);
+        const half2 qv = ((const half2 *)Q_v)[i];
+        x[2*i]   = __half2float(qv.x);
+        x[2*i+1] = __half2float(qv.y);
 #else
-            const float2 qv = ((const float2 *)Q_v)[base + i];
-            x[2*i]   = qv.x;
-            x[2*i+1] = qv.y;
+        const float2 qv = ((const float2 *)Q_v)[i];
+        x[2*i]   = qv.x;
+        x[2*i+1] = qv.y;
 #endif
-        }
+    }
 
-        // BS-point FHT (Walsh-Hadamard Transform, unrolled butterfly)
+    // Step 2: Full-dim D-pt Walsh-Hadamard Transform (log2(D) stages).
+    // For D=128: 7 stages. For D=256: 8 stages.
 #pragma unroll
-        for (int h = 1; h < BS; h <<= 1) {
+    for (int h = 1; h < D; h <<= 1) {
 #pragma unroll
-            for (int k = 0; k < BS; k += 2*h) {
+        for (int k = 0; k < D; k += 2*h) {
 #pragma unroll
-                for (int jj = k; jj < k+h; jj++) {
-                    float a = x[jj], b = x[jj+h];
-                    x[jj]   = a + b;
-                    x[jj+h] = a - b;
-                }
+            for (int jj = k; jj < k+h; jj++) {
+                float a = x[jj], b = x[jj+h];
+                x[jj]   = a + b;
+                x[jj+h] = a - b;
             }
         }
-        // 1/sqrt(128) — matches SET_ROWS inv_sqrt_128
-        constexpr float inv_sqrt_bs = 0.08838834764831845f;
+    }
+    // Normalize: 1/sqrt(D) so H_D is orthonormal
+    const float inv_sqrt_D = 1.0f / sqrtf((float)D);
 #pragma unroll
-        for (int i = 0; i < BS; i++) x[i] *= inv_sqrt_bs;
+    for (int i = 0; i < D; i++) x[i] *= inv_sqrt_D;
 
-        // Dequant K block and accumulate dot product
+    // Step 3: For each QK_OSCAR_INT2-sized sub-block, dequant K and accumulate dot product
+    float sum = 0.0f;
+#pragma unroll
+    for (int ib = 0; ib < D/QK_OSCAR_INT2; ib++) {
         const float bd = __half2float(blks[ib].d);
         const float bm = __half2float(blks[ib].m);
 #pragma unroll
-        for (int i = 0; i < BS/4; i++) {
+        for (int i = 0; i < QK_OSCAR_INT2/4; i++) {
             const uint8_t qs = blks[ib].qs[i];
-            sum += x[4*i+0] * (bm + bd * (float)((qs >> 0) & 0x3));
-            sum += x[4*i+1] * (bm + bd * (float)((qs >> 2) & 0x3));
-            sum += x[4*i+2] * (bm + bd * (float)((qs >> 4) & 0x3));
-            sum += x[4*i+3] * (bm + bd * (float)((qs >> 6) & 0x3));
+            const int base = ib * QK_OSCAR_INT2 + 4*i;
+            sum += x[base+0] * (bm + bd * (float)((qs >> 0) & 0x3));
+            sum += x[base+1] * (bm + bd * (float)((qs >> 2) & 0x3));
+            sum += x[base+2] * (bm + bd * (float)((qs >> 4) & 0x3));
+            sum += x[base+3] * (bm + bd * (float)((qs >> 6) & 0x3));
         }
     }
     return sum;
