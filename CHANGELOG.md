@@ -9,9 +9,9 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `3c3838ff2` (2026-06-01 — hip: RDNA3.5 FATTN tile config D=256 override — speculative (justinappler/3511e7d §-FLAG-PENDING-BENCH). Prior: `5a1543afe` docs currency — EAGLE3 compact-vocab).
+HEAD: `7337523e6` (2026-06-01 — oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed as dead code (TODO 142)). Prior: `c403dc7a6` port(weight-skip): env-gated Q4_K MMVQ block-skip (TODO 137). /opt: b848 shipped 2026-06-01.
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up).
 
 ### Changed — OScaR INT2 KV: full-dim D=256 WHT + GGML_OP_FWHT removed (TODO 142) (2026-06-01)
 
