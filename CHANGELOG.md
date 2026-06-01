@@ -9,7 +9,7 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `5a1543afe` (2026-05-31 — docs currency — EAGLE3 compact-vocab (PR #18039) + eagle3.md compact-vocab section. Prior: `b2766ef47` EAGLE3 compact-vocab draft support).
+HEAD: `3c3838ff2` (2026-06-01 — hip: RDNA3.5 FATTN tile config D=256 override — speculative (justinappler/3511e7d §-FLAG-PENDING-BENCH). Prior: `5a1543afe` docs currency — EAGLE3 compact-vocab).
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
 
