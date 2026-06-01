@@ -583,10 +583,12 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     // TODO: make static using `ggml_build_forward_select()`
     //       see llm_graph_context::build_inp_embd() for reference
+    // Hoisted to function scope (mainline eef59a764 block-scoped tok_embd_w inside the
+    // if (ubatch.token)). The fork's NLD/MTP chain below reuses this embedding weight
+    // tensor; the selection is side-effect-free and branch-independent.
+    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
     ggml_tensor * tok_embd;
     if (ubatch.token) {
-        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
-
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     } else {
         tok_embd = inp->embd;

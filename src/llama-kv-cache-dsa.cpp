@@ -32,7 +32,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_mla = std::make_unique<llama_kv_cache>(
             model, model.hparams, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, filter, reuse);
+            n_swa, swa_type, /* oscar_res_window */ 0, filter, reuse);
 
     // we use llama_kv_cache for caching indexer keys
     // by hand-tweaking some hparams we fool it to create
@@ -49,7 +49,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, filter, reuse);
+            n_swa, swa_type, /* oscar_res_window */ 0, filter, reuse);
 }
 
 void llama_kv_cache_dsa::clear(bool data) {
@@ -105,8 +105,10 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_dsa::memory_breakdow
 llama_memory_context_ptr llama_kv_cache_dsa::init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) {
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type) {
     GGML_UNUSED(embd_all);
+    GGML_UNUSED(mtp_op_type);
 
     do {
         balloc.split_reset();
