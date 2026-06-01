@@ -766,20 +766,14 @@ directory for build instructions.
 For usage of the new types, see [What's available now](#whats-available-now)
 above. For change history, see [CHANGELOG.md](CHANGELOG.md).
 
-## Companion projects
+## Sidecar engine
 
-The following projects are companion tools for this fork, updated in lockstep
-with every rebuild. They are designed to work with **any** llama.cpp
-fork and contain no fork-specific type names or conditionals.
-
-- **sidecar-abliteration, sidecar-control-vector, sidecar-logit-bias,
-  sidecar-weight-delta** — out-of-tree `.so` plugins for the sidecar
-  engine.
-- **llama-quantize-cost** — quantization cost estimator. Installed as part
-  of the main cmake build via `tools/quantize-cost` symlink.
-- **prismaquant-llama** — Python-based prequantization pipeline with
-  incremental probe, AWQ calibration, and GPTQ support. Invokes the
-  installed `llama-quantize` binary; not included in the cmake install.
+This fork includes a runtime **sidecar engine** that loads out-of-tree `.so`
+plugins. Reference plugin implementations (abliteration, control-vector,
+logit-bias, weight-delta) are maintained as separate, self-contained projects;
+they are **not part of this repository or its build**. The engine is designed to
+work with any llama.cpp fork and contains no fork-specific type names or
+conditionals.
 
 ## Project shape
 
