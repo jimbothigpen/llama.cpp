@@ -55,6 +55,16 @@ int main(int argc, char ** argv) {
     // handles the MTP tail block; no override_arch needed.
     const bool want_mtp = std::find(params.speculative.types.begin(), params.speculative.types.end(),
                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+    // self-spec types (ngram-*, phantom, dflash without external draft) do not need a draft context
+    const bool needs_draft_ctx = std::any_of(params.speculative.types.begin(), params.speculative.types.end(),
+        [](common_speculative_type t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP    ||
+                   t == COMMON_SPECULATIVE_TYPE_DFLASH;
+        });
+
     if (want_mtp && params.speculative.draft.mparams.path.empty()) {
         char trunk_arch[64] = {0};
         llama_model_meta_val_str(model_tgt, "general.architecture", trunk_arch, sizeof(trunk_arch));
@@ -87,7 +97,7 @@ int main(int argc, char ** argv) {
                       COMMON_SPECULATIVE_TYPE_DRAFT_MTP) == params.speculative.types.end()) {
             params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
         }
-    } else {
+    } else if (needs_draft_ctx) {
         const auto & params_spec = params.speculative.draft;
 
         auto params_dft = params;
@@ -140,7 +150,7 @@ int main(int argc, char ** argv) {
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
-    const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    const bool use_ckpt_dft = ctx_dft && (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -187,8 +197,10 @@ int main(int argc, char ** argv) {
     common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
 
     // eval the prompt
-    llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    if (ctx_dft) {
+        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    }
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -255,7 +267,7 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            {
+            if (ctx_dft) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
@@ -288,7 +300,9 @@ int main(int argc, char ** argv) {
             // collide with draft-generated KV entries. Required for M-RoPE models (Qwen3.5 family)
             // where llama_batch_allocr::init() enforces last_kv_pos < min_batch_pos (strictly <).
             // Safe/no-op for standard-RoPE models.
-            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+            if (ctx_dft) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+            }
 
             // update the draft model with the target's hidden states (required for MTP).
             // Mirrors the server's main loop (tools/server/server-context.cpp). Without this
@@ -333,7 +347,7 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, ckpt.pos_max + 1, -1);
             }
 
-            {
+            if (ctx_dft) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
@@ -347,7 +361,9 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        common_speculative_accept(spec, seq_id, ids.size() - 1);
+        if (n_draft > 0) {
+            common_speculative_accept(spec, seq_id, ids.size() - 1);
+        }
 
         // full acceptance: consume the draft and commit accepted tokens
         n_past    += ids.size() - 1;
@@ -387,8 +403,10 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_memory_seq_rm(llama_get_memory(ctx_tgt),       seq_id, n_past, -1);
-            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, n_past, -1);
+            if (ctx_dft) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            }
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
