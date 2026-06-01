@@ -13,6 +13,21 @@ HEAD: `3c3838ff2` (2026-06-01 — hip: RDNA3.5 FATTN tile config D=256 override 
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); full 40-cell spec-decode validation matrix (TODO 103); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2).
 
+### Added — weight-skip optimization for Q4_K MMVQ — port cenconq25/delta-compress-llm cc47a4a (TODO 137) (2026-06-01)
+
+Ports the Q4_K weight-skip optimization from `cenconq25/delta-compress-llm@cc47a4a`
+(`ggml/src/ggml-cuda/mmvq.cu`). In the `mul_mat_vec_q` inner loop, a 4-byte scale read
+(weight super-block `d` × Q8_1 activation scale) decides whether to skip the ~400-byte
+dot product; blocks below `LLAMA_WEIGHT_SKIP_THRESHOLD` are skipped entirely. Upstream
+reports ~10–12 % decode speedup on Llama 3.1 70B with zero PPL degradation; 12–47 % of
+blocks are skippable per layer. Default-off (env var unset = no skip, bit-identical to
+prior behaviour). Scope: `ggml/src/ggml-cuda/mmvq.cu` only, 57 LOC added.
+
+**Gate PASS (ROCm gfx1150, Qwen_Qwen3-8B-Q4_K_M, wikitext-2 32 chunks, -c 512 -ngl 99):**
+- **Leg A (default-off, no LLAMA_WEIGHT_SKIP_THRESHOLD):** PPL = 8.8865 RC=0
+- **Leg B (LLAMA_WEIGHT_SKIP_THRESHOLD=1e-4):** PPL = 8.8865 RC=0 — bit-identical to Leg A
+- Template-signature divergence check: CLEAN (no IQ4_KT/IQ2_KT/delta markers in our mmvq.cu)
+
 ### Added — EAGLE3 compact-vocab draft support (SpecForge) — port PR #18039 (TODO 103) (2026-05-31)
 
 `b2766ef47`. Ports PR #18039 (SpecForge 32K-draft-vocab EAGLE3 support) from upstream. EAGLE3 draft
