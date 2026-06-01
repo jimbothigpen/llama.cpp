@@ -63,14 +63,14 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, size_base);
 
     kv_base = std::make_unique<llama_kv_cache>(
-            model, type_k, type_v,
+            model, hparams, type_k, type_v,
             v_trans, offload, unified, size_base, n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, oscar_res_window, filter_base, reuse);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
-            model, type_k_swa, type_v_swa,
+            model, hparams, type_k_swa, type_v_swa,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, 0, filter_swa, reuse);
 }

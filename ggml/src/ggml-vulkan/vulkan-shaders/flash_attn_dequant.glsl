@@ -54,10 +54,10 @@ layout (binding = 2) readonly buffer V_PACKED_RQ_PLANAR4_0 { block_planar4_0 dat
 layout (binding = 1) readonly buffer K_PACKED_RQ_ISO4_0    { block_iso4_0    data[]; } k_packed_rq_iso4_0;
 layout (binding = 2) readonly buffer V_PACKED_RQ_ISO4_0    { block_iso4_0    data[]; } v_packed_rq_iso4_0;
 
-// BF16 is read as uvec2 blocks (4 brain-float16 values packed as 2 uint32s).
-// No struct needed: each uvec2 holds [bf16[0]|bf16[1]] in .x and [bf16[2]|bf16[3]] in .y.
-layout (binding = 1) readonly buffer K_PACKED_BF16 { uvec2 data[]; } k_packed_bf16;
-layout (binding = 2) readonly buffer V_PACKED_BF16 { uvec2 data[]; } v_packed_bf16;
+// BF16 read as u16vec4 blocks (mainline layout): 4 brain-float16 values per block,
+// decoded via bf16_to_fp32(uvec4(...)) in types.glsl. No struct needed.
+layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
+layout (binding = 2) readonly buffer V_PACKED_BF16 { u16vec4 data[]; } v_packed_bf16;
 
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
@@ -285,8 +285,9 @@ const float RQ3_MAG_CENTROIDS[4] = float[4](0.125f, 0.375f, 0.625f, 0.875f);
                                 FLOAT_TYPE((qb1 >> 4u) & 0xFu) - FLOAT_TYPE(7.5f));               \
 }
 
-// bf16_to_fp32 is defined in types.glsl; takes BF16 value in lower 16 bits of uint32.
-#define FA_DEQUANT4_BF16(BUF) {     uvec2 blk = BUF.data[a_offset + ib];     return FLOAT_TYPEV4(bf16_to_fp32(blk.x & 0xFFFFu), bf16_to_fp32(blk.x >> 16),                         bf16_to_fp32(blk.y & 0xFFFFu), bf16_to_fp32(blk.y >> 16)); }
+// bf16_to_fp32(uvec4) is defined in types.glsl (mainline). BF16 block is u16vec4.
+#define FA_DEQUANT4_BF16(BUF) \
+    return FLOAT_TYPEV4(bf16_to_fp32(uvec4(BUF.data[(a_offset + ib) / 4])));
 
 FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     if (binding_idx == BINDING_IDX_K) {

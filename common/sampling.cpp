@@ -700,6 +700,14 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
     return best_id;
 }
 
+bool common_sampler_reasoning_budget_force(struct common_sampler * gsmpl) {
+    if (!gsmpl) {
+        return false;
+    }
+
+    return common_reasoning_budget_force(gsmpl->rbudget);
+}
+
 // helpers
 
 llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort) {

@@ -3678,10 +3678,6 @@ llama_context * llama_init_from_model(
             LLAMA_LOG_ERROR("%s: SPLIT_MODE_TENSOR requires flash_attn to be enabled\n", __func__);
             return nullptr;
         }
-        if (ggml_is_quantized(params.type_k) || ggml_is_quantized(params.type_v)) {
-            LLAMA_LOG_INFO("%s: SPLIT_MODE_TENSOR with quantized KV cache (K=%s, V=%s)\n",
-                __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
-        }
     }
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {

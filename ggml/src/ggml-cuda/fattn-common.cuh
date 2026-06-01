@@ -2286,8 +2286,8 @@ void launch_fattn(
         memcpy(&oscar_res_window_val, (const int32_t *) KQV->op_params + 4, sizeof(int32_t));
     }
 
-    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
-    ggml_cuda_kernel_launch(fattn_kernel, launch_params,
+        // disabled PDL enrollment for now due to a compiler bug.
+        fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
         (const char *) Q->data,
         K_data,
         V_data,
