@@ -16968,7 +16968,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
-                    case GGML_TYPE_BF16:
                     case GGML_TYPE_RQ_ISO3_0:
                     case GGML_TYPE_RQ_ISO4_0:
                     case GGML_TYPE_RQ_PLANAR3_0:
