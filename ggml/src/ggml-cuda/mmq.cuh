@@ -140,7 +140,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
 }
 
 static int get_mmq_y_host(const int cc) {
-    return GGML_CUDA_CC_IS_AMD(cc) ? (GGML_CUDA_CC_IS_RDNA1(cc) ? 64 : 128) :
+    return GGML_CUDA_CC_IS_AMD(cc) ? ((GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc)) ? 64 : 128) :
         ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) ? 128 : 64);
 }
 
@@ -155,7 +155,7 @@ if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
 
 static constexpr __device__ int get_mmq_y_device() {
 #if defined(GGML_USE_HIP)
-#if defined(RDNA1)
+#if defined(RDNA1) || defined(RDNA3_5)
     return 64;
 #else
     return 128;
@@ -296,7 +296,7 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 
 #if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
-    return amd_mfma_available(cc) ? 8 : 256/warp_size;
+    return GGML_CUDA_CC_IS_RDNA3_5(cc) ? 4 : amd_mfma_available(cc) ? 8 : 256/warp_size;
 }
 #else
 static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
@@ -305,7 +305,9 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 #endif // (GGML_USE_HIP)
 
 static constexpr __device__ int mmq_get_nwarps_device() {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA3_5)
+    return 4;
+#elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 8;
 #else
     return 256/ggml_cuda_get_physical_warp_size();
@@ -4060,7 +4062,8 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     const int warp_size = ggml_cuda_info().devices[id].warp_size;
     const int nwarps    = mmq_get_nwarps_host(cc, warp_size);
 
-    const int mmq_x_max = get_mmq_x_max_host(cc);
+    int mmq_x_max = get_mmq_x_max_host(cc);
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && args.expert_bounds != nullptr) { mmq_x_max = 48; }
     const int mmq_y = get_mmq_y_host(cc);
 
     int mmq_x_best  = 0;
