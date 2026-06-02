@@ -21,5 +21,10 @@ export STAGING_DIR="${STAGING_DIR:-$HOME/local-models/stage}"
 
 # --- imatrix calibration corpus (ADR-016; semantic, disjoint from any PPL eval set) ---
 # Unset = skip imatrix. imatrix-required types (IQ-K/KT/low-IQ) will error out if IMATRIX_CORPUS
-# is unset and you request them. Point this at your own semantic corpus.
-# export IMATRIX_CORPUS=/path/to/your/corpus.txt
+# is unset and you request them. The community-standard corpus is bartowski's calibration_datav3.txt
+# (gist bartowski1182/eb213dccb3...). Point this at your own semantic corpus.
+# export IMATRIX_CORPUS=/path/to/calibration_datav3.txt
+
+# --- imatrix chunk cap ---
+# EMPTY (default) = use the FULL corpus (the standard). Set a positive integer only to truncate.
+# export IMATRIX_CHUNKS=

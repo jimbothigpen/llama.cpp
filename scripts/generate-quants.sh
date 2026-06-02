@@ -54,7 +54,10 @@ _GQ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   IMATRIX_CORPUS must be a semantic calibration corpus DISJOINT from any PPL eval set.
 #   Leave empty to skip imatrix entirely — but then imatrix-REQUIRED types error out.
 : "${IMATRIX_CORPUS:=}"
-: "${IMATRIX_CHUNKS:=200}"
+# IMATRIX_CHUNKS: cap calibration chunks. EMPTY (default) = use the FULL corpus — the community
+# standard is to run llama-imatrix over the entire calibration set (e.g. bartowski calibration_datav3).
+# Set a positive integer only if you deliberately want to truncate (faster, lower-quality imatrix).
+: "${IMATRIX_CHUNKS:=}"
 
 # ---- MTP (multi-token-prediction / NextN draft head) ----
 #   INCLUDE_MTP=1 keeps the MTP head in the GGUF, activates it during imatrix, and tags
@@ -342,18 +345,18 @@ gq_main() {
       if gq_ask_reuse "$IMAT_OUT" "imatrix"; then
         echo "--- Step 3: imatrix present → reuse ($(basename "$IMAT_OUT"))"
       else
-        echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=$IMATRIX_CHUNKS ${imat_mtp[*]:-}) (regenerating)"
+        echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=${IMATRIX_CHUNKS:-full-corpus} ${imat_mtp[*]:-}) (regenerating)"
         [ -n "$IMATRIX_BIN" ] || { echo "ERROR: IMATRIX_BIN not found in \$PATH" >&2; return 3; }
         "$IMATRIX_BIN" -m "$BF16_STG" -f "$IMATRIX_CORPUS" -o "$IMAT_STG" \
-          -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 --chunks "$IMATRIX_CHUNKS" \
+          -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 ${IMATRIX_CHUNKS:+--chunks $IMATRIX_CHUNKS} \
           || { echo "ERROR: imatrix failed" >&2; return 8; }
         gq_publish "$IMAT_STG" "$IMAT_OUT"
       fi
     else
       [ -n "$IMATRIX_BIN" ] || { echo "ERROR: IMATRIX_BIN not found in \$PATH" >&2; return 3; }
-      echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=$IMATRIX_CHUNKS ${imat_mtp[*]:-})"
+      echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=${IMATRIX_CHUNKS:-full-corpus} ${imat_mtp[*]:-})"
       "$IMATRIX_BIN" -m "$BF16_STG" -f "$IMATRIX_CORPUS" -o "$IMAT_STG" \
-        -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 --chunks "$IMATRIX_CHUNKS" \
+        -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 ${IMATRIX_CHUNKS:+--chunks $IMATRIX_CHUNKS} \
         || { echo "ERROR: imatrix failed" >&2; return 8; }
       gq_publish "$IMAT_STG" "$IMAT_OUT"
     fi
