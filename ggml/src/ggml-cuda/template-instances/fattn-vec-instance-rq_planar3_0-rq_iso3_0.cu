@@ -1,7 +1,0 @@
-// RotorQuant K=planar3 × V=iso3 FA template instances (X-RQ-s1b, K-RQ-13, same-BPW cross-variant HIGH pair)
-
-#include "../fattn-vec.cuh"
-
-DECL_FATTN_VEC_CASE( 64, GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO3_0);
-DECL_FATTN_VEC_CASE(128, GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO3_0);
-DECL_FATTN_VEC_CASE(256, GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO3_0);

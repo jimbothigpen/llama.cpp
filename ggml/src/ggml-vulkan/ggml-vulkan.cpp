@@ -3323,18 +3323,13 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     // TURBOQ2_0/TURBOQ3_0/TURBOQ4_0 K/V use struct bindings (block_turboq{2,3,4}_0) wired
     // into the flash_attn_dequant.glsl aliased-SSBO-view abstraction, which is
     // only included by the FA_SCALAR shader. cm1/cm2 turbo support will land
-    // with the WHT/MLA work in a later phase. TURBOQ{2,3}_TCQ and all four
-    // RotorQuant types (RQ_PLANAR3_0, RQ_PLANAR4_0, RQ_ISO3_0, RQ_ISO4_0)
-    // likewise use struct bindings in the same scalar-only FA dequant path.
+    // with the WHT/MLA work in a later phase. TURBOQ{2,3}_TCQ likewise uses
+    // struct bindings in the same scalar-only FA dequant path.
     if (k_type == GGML_TYPE_TURBOQ2_0 || v_type == GGML_TYPE_TURBOQ2_0 ||
         k_type == GGML_TYPE_TURBOQ3_0 || v_type == GGML_TYPE_TURBOQ3_0 ||
         k_type == GGML_TYPE_TURBOQ4_0 || v_type == GGML_TYPE_TURBOQ4_0 ||
         k_type == GGML_TYPE_TURBOQ2_TCQ || v_type == GGML_TYPE_TURBOQ2_TCQ ||
         k_type == GGML_TYPE_TURBOQ3_TCQ || v_type == GGML_TYPE_TURBOQ3_TCQ ||
-        k_type == GGML_TYPE_RQ_PLANAR3_0 || v_type == GGML_TYPE_RQ_PLANAR3_0 ||
-        k_type == GGML_TYPE_RQ_PLANAR4_0 || v_type == GGML_TYPE_RQ_PLANAR4_0 ||
-        k_type == GGML_TYPE_RQ_ISO3_0 || v_type == GGML_TYPE_RQ_ISO3_0 ||
-        k_type == GGML_TYPE_RQ_ISO4_0 || v_type == GGML_TYPE_RQ_ISO4_0 ||
         k_type == GGML_TYPE_KV_OSCAR_INT2 || v_type == GGML_TYPE_KV_OSCAR_INT2) {
         path = FA_SCALAR;
     }
@@ -16968,10 +16963,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
-                    case GGML_TYPE_RQ_ISO3_0:
-                    case GGML_TYPE_RQ_ISO4_0:
-                    case GGML_TYPE_RQ_PLANAR3_0:
-                    case GGML_TYPE_RQ_PLANAR4_0:
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
@@ -17025,10 +17016,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
-                    case GGML_TYPE_RQ_ISO3_0:
-                    case GGML_TYPE_RQ_ISO4_0:
-                    case GGML_TYPE_RQ_PLANAR3_0:
-                    case GGML_TYPE_RQ_PLANAR4_0:
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:

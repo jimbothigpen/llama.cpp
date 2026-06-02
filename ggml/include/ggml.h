@@ -440,10 +440,7 @@ extern "C" {
         GGML_TYPE_TURBOQ3_INNERQ = 69, // 3-bit + InnerQ K-cache equalization; block_turboq3_0 (50 bytes, QK=128)
         // slot 70 retired/reserved — was GGML_TYPE_TURBOQ4_INNERQ (4-bit InnerQ alias of TURBOQ4_0; InnerQ equalization regresses quality at 4-bit, PPL 9.08 vs 7.47, ft2 ccfe39d675)
         GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype (arXiv:2605.19660)
-        GGML_TYPE_RQ_PLANAR3_0 = 72, // RotorQuant 3-bit KV: Givens-rotation, 8 centroids, sign-mag — source: carlosfundora PLANAR3_0 (44)
-        GGML_TYPE_RQ_PLANAR4_0 = 73, // RotorQuant 4-bit KV: Givens-rotation, 16 centroids — source: carlosfundora PLANAR4_0 (45)
-        GGML_TYPE_RQ_ISO3_0    = 74, // RotorQuant 3-bit KV: Hadamard rotation, 8 centroids, sign-mag — source: carlosfundora ISO3_0 (46)
-        GGML_TYPE_RQ_ISO4_0    = 75, // RotorQuant 4-bit KV: Hadamard rotation, 16 centroids — source: carlosfundora ISO4_0 (47)
+        // slots 72-75 reserved (RQ_PLANAR3_0/RQ_PLANAR4_0/RQ_ISO3_0/RQ_ISO4_0 removed — zero-rotation scalar dup, strictly dominated; TODO 159)
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32

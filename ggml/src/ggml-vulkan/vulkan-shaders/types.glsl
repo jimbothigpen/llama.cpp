@@ -323,54 +323,6 @@ struct block_turboq2_tcq
 #define A_TYPE block_turboq2_tcq
 #endif
 
-// RotorQuant 3-bit KV cache types (yggdrasil Phase 4a-1).
-// planar3_0: Givens-rotation, sign-magnitude split — same physical layout as turboq3_0.
-// iso3_0:    Hadamard rotation, sign-magnitude split — identical layout to planar3_0.
-// Block: 2-byte norm + 32-byte 2-bit magnitude indices + 16-byte 1-bit signs = 50 bytes/128 values.
-#define QUANT_K_RQ_PLANAR3_0 128
-#define QUANT_R_RQ_PLANAR3_0 1
-
-struct block_planar3_0
-{
-    float16_t norm;
-    uint8_t qs[QUANT_K_RQ_PLANAR3_0 / 4];
-    uint8_t signs[QUANT_K_RQ_PLANAR3_0 / 8];
-};
-
-#define QUANT_K_RQ_ISO3_0 128
-#define QUANT_R_RQ_ISO3_0 1
-
-struct block_iso3_0
-{
-    float16_t norm;
-    uint8_t qs[QUANT_K_RQ_ISO3_0 / 4];
-    uint8_t signs[QUANT_K_RQ_ISO3_0 / 8];
-};
-
-// RotorQuant 4-bit KV cache types (yggdrasil Phase 4a-1).
-// planar4_0: Givens-rotation, 16-level uniform centroids, nibble-packed — same physical layout as turboq4_0.
-// iso4_0:    Hadamard rotation, 16-level uniform centroids, nibble-packed — identical layout to planar4_0.
-// Block: 2-byte norm + 2-byte rnorm + 64-byte nibble-packed 4-bit indices = 68 bytes/128 values.
-#define QUANT_K_RQ_PLANAR4_0 128
-#define QUANT_R_RQ_PLANAR4_0 1
-
-struct block_planar4_0
-{
-    float16_t norm;
-    float16_t rnorm;
-    uint8_t qs[QUANT_K_RQ_PLANAR4_0 / 2];
-};
-
-#define QUANT_K_RQ_ISO4_0 128
-#define QUANT_R_RQ_ISO4_0 1
-
-struct block_iso4_0
-{
-    float16_t norm;
-    float16_t rnorm;
-    uint8_t qs[QUANT_K_RQ_ISO4_0 / 2];
-};
-
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 

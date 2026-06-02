@@ -451,96 +451,6 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ2_INNERQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBOQ2_INNERQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBOQ2_INNERQ)
-
-    // Phase X-InnerQ-s3: RQ K × INNERQ V
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0,    GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0,    GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0,    GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0,    GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ3_INNERQ)
-
-    // RotorQuant V types: K=F16 baseline
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_PLANAR4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_RQ_ISO4_0)
-    // RotorQuant V types: K=Q8_0 asymmetric pairs (X-RQ-s0a); D=512 instances exist
-    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0, GGML_TYPE_RQ_PLANAR4_0)
-    // RotorQuant V types: K=TurboQ4 asymmetric pairs (X-RQ-s0a/s0b); D<=256 instances only
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0, GGML_TYPE_RQ_PLANAR4_0)
-    // RotorQuant V types: K=TurboQ3 asymmetric pairs (X-RQ-s0b); D<=256 instances only
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0, GGML_TYPE_RQ_PLANAR4_0)
-    // RotorQuant V types: K=TurboQ2 asymmetric pairs (X-RQ-s0b); D<=256 instances only
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_0, GGML_TYPE_RQ_PLANAR4_0)
-
-    // RotorQuant K=iso3 HIGH pairs (X-RQ-s1a)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ2_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ2_0)
-    // X-RQ-s1b: K=planar3 HIGH pairs (K-RQ-12 through K-RQ-16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ3_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ2_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ2_0)
-    // X-RQ-s3: K=iso3 LOWER pairs (K-RQ-6 through K-RQ-11)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ3_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_RQ_PLANAR4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO3_0, GGML_TYPE_Q8_0)
-    // X-RQ-s3: K=planar3 LOWER pairs (K-RQ-17 restored, K-RQ-18 through K-RQ-22)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_RQ_PLANAR4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR3_0, GGML_TYPE_Q8_0)
-    // X-RQ-s2: K=iso4 HIGH pairs (K-RQ-23 through K-RQ-31)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_RQ_PLANAR4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_TURBOQ3_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_TURBOQ2_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_TURBOQ2_0)
-    // X-RQ-s3: K=iso4 LOWER pairs (K-RQ-32 through K-RQ-33)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_ISO4_0, GGML_TYPE_Q8_0)
-    // X-RQ-s2: K=planar4 HIGH pairs (K-RQ-34 through K-RQ-42)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_RQ_PLANAR4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_RQ_ISO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_RQ_ISO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_RQ_PLANAR3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ3_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ2_TCQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_TURBOQ2_0)
-    // X-RQ-s3: K=planar4 LOWER pairs (K-RQ-43 through K-RQ-44)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_RQ_PLANAR4_0, GGML_TYPE_Q8_0)
-
     // Q4_1 K × TURBOQ_0 V (X-2b-s2)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ4_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ3_0)
@@ -679,8 +589,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
                 || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
-                || t == GGML_TYPE_RQ_PLANAR3_0 || t == GGML_TYPE_RQ_PLANAR4_0
-                || t == GGML_TYPE_RQ_ISO3_0    || t == GGML_TYPE_RQ_ISO4_0
                 || t == GGML_TYPE_KV_OSCAR_INT2
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
                 || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1;
@@ -722,15 +630,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
-        case GGML_TYPE_RQ_ISO3_0:
-        case GGML_TYPE_RQ_PLANAR3_0:
-        case GGML_TYPE_RQ_ISO4_0:
-        case GGML_TYPE_RQ_PLANAR4_0:
-            // VEC-only K types; handled via is_turbo_type bypass below.
-            if (K->ne[0] % 64 != 0) {
-                return BEST_FATTN_KERNEL_NONE;
-            }
-            break;
         default:
             return BEST_FATTN_KERNEL_NONE;
     }
@@ -747,10 +646,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
             || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
             || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
-            || t == GGML_TYPE_RQ_ISO3_0    // VEC-only; bypass FATTN_KQ_STRIDE alignment check
-            || t == GGML_TYPE_RQ_PLANAR3_0
-            || t == GGML_TYPE_RQ_ISO4_0
-            || t == GGML_TYPE_RQ_PLANAR4_0
             || t == GGML_TYPE_KV_OSCAR_INT2;  // OScaR INT2: VEC-only (Phase 1)
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
@@ -767,11 +662,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    // RQ (RotorQuant) V types are VEC-only; extend D cap to 512 for Gemma-4 full-attention layers.
-    const bool v_is_rq_type =
-        V->type == GGML_TYPE_RQ_PLANAR3_0 || V->type == GGML_TYPE_RQ_PLANAR4_0
-     || V->type == GGML_TYPE_RQ_ISO3_0    || V->type == GGML_TYPE_RQ_ISO4_0;
-    const int max_d_for_vec = v_is_rq_type ? 512 : 256;
+    const int max_d_for_vec = 256;
     const bool can_use_vector_kernel = Q->ne[0] <= max_d_for_vec && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
 #ifdef GGML_USE_HIP
@@ -782,13 +673,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC;
     }
 #endif // GGML_USE_HIP
-
-    // RQ V types only have VEC kernel instances; TILE/MMA paths lack RQ dequant.
-    // Return NONE when VEC is unavailable so the scheduler falls cleanly to CPU FA.
-    if (v_is_rq_type && !can_use_vector_kernel) {
-        return BEST_FATTN_KERNEL_NONE;
-    }
-
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {

@@ -207,7 +207,6 @@ add_library(ggml-base
             ggml-quants.c
             ggml-quants.h
             ggml-turbo-quant.c
-            ggml-roto-quant.c
             ggml-iqk-quants.c
             ggml-iqk-kt.cpp
             gguf.cpp)

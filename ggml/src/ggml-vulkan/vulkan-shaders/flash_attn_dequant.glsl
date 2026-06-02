@@ -43,17 +43,6 @@ layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq da
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } k_packed_turboq3_tcq;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } v_packed_turboq3_tcq;
 
-// RotorQuant 3-bit/4-bit KV cache types (yggdrasil Phase 4a-1).
-// struct bindings because 50/68-byte blocks don't fit a uniform 16/32-bit interleave.
-layout (binding = 1) readonly buffer K_PACKED_RQ_PLANAR3_0 { block_planar3_0 data[]; } k_packed_rq_planar3_0;
-layout (binding = 2) readonly buffer V_PACKED_RQ_PLANAR3_0 { block_planar3_0 data[]; } v_packed_rq_planar3_0;
-layout (binding = 1) readonly buffer K_PACKED_RQ_ISO3_0    { block_iso3_0    data[]; } k_packed_rq_iso3_0;
-layout (binding = 2) readonly buffer V_PACKED_RQ_ISO3_0    { block_iso3_0    data[]; } v_packed_rq_iso3_0;
-layout (binding = 1) readonly buffer K_PACKED_RQ_PLANAR4_0 { block_planar4_0 data[]; } k_packed_rq_planar4_0;
-layout (binding = 2) readonly buffer V_PACKED_RQ_PLANAR4_0 { block_planar4_0 data[]; } v_packed_rq_planar4_0;
-layout (binding = 1) readonly buffer K_PACKED_RQ_ISO4_0    { block_iso4_0    data[]; } k_packed_rq_iso4_0;
-layout (binding = 2) readonly buffer V_PACKED_RQ_ISO4_0    { block_iso4_0    data[]; } v_packed_rq_iso4_0;
-
 // BF16 read as u16vec4 blocks (mainline layout): 4 brain-float16 values per block,
 // decoded via bf16_to_fp32(uvec4(...)) in types.glsl. No struct needed.
 layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
@@ -218,73 +207,6 @@ const float T4C[16] = float[16](
                         T4C[(qb1)      & 0xFu], T4C[(qb1 >> 4) & 0xFu]);                          \
 }
 
-// RotorQuant 3-bit magnitude centroids (Lloyd-Max for uniform distribution on [0,1]).
-// Positive magnitudes only — sign applied separately via the signs[] byte.
-// Shared by planar3_0 and iso3_0 (identical centroids, identical block layout).
-const float RQ3_MAG_CENTROIDS[4] = float[4](0.125f, 0.375f, 0.625f, 0.875f);
-
-// iqs is always a multiple of 4; all four elements fall in one qs[] byte and one signs[] byte.
-// sign bit=1 → negative (matches C dequantize_row_planar3_0 convention).
-#define FA_DEQUANT4_RQ_PLANAR3_0(BUF) {                                                           \
-    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 4u]);                                  \
-    const uint l0 = (qb0 >> ((iqs        % 4u) * 2u)) & 0x3u;                                     \
-    const uint l1 = (qb0 >> (((iqs + 1u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint l2 = (qb0 >> (((iqs + 2u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint l3 = (qb0 >> (((iqs + 3u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint sb  = uint(BUF.data[a_offset + ib].signs[iqs / 8u]);                               \
-    const FLOAT_TYPE s0 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> (iqs       % 8u)) & 0x1u); \
-    const FLOAT_TYPE s1 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+1u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE s2 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+2u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE s3 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+3u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE nm = FLOAT_TYPE(BUF.data[a_offset + ib].norm);                               \
-    return nm * FLOAT_TYPEV4(s0 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l0]),                              \
-                             s1 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l1]),                              \
-                             s2 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l2]),                              \
-                             s3 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l3]));                             \
-}
-
-// iso3_0 has identical block layout and centroids to planar3_0; rotation context differs only at encode.
-#define FA_DEQUANT4_RQ_ISO3_0(BUF) {                                                              \
-    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 4u]);                                  \
-    const uint l0 = (qb0 >> ((iqs        % 4u) * 2u)) & 0x3u;                                     \
-    const uint l1 = (qb0 >> (((iqs + 1u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint l2 = (qb0 >> (((iqs + 2u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint l3 = (qb0 >> (((iqs + 3u) % 4u) * 2u)) & 0x3u;                                    \
-    const uint sb  = uint(BUF.data[a_offset + ib].signs[iqs / 8u]);                               \
-    const FLOAT_TYPE s0 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> (iqs       % 8u)) & 0x1u); \
-    const FLOAT_TYPE s1 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+1u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE s2 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+2u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE s3 = FLOAT_TYPE(1.0f) - FLOAT_TYPE(2.0f) * FLOAT_TYPE((sb >> ((iqs+3u) % 8u)) & 0x1u); \
-    const FLOAT_TYPE nm = FLOAT_TYPE(BUF.data[a_offset + ib].norm);                               \
-    return nm * FLOAT_TYPEV4(s0 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l0]),                              \
-                             s1 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l1]),                              \
-                             s2 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l2]),                              \
-                             s3 * FLOAT_TYPE(RQ3_MAG_CENTROIDS[l3]));                             \
-}
-
-// planar4_0: 16-level uniform centroids, nibble-packed. Decode: (q - 7.5) * norm / 7.5.
-// iqs even → low nibble of qs[iqs/2], iqs+1 → high nibble; same physical layout as turboq4_0.
-#define FA_DEQUANT4_RQ_PLANAR4_0(BUF) {                                                           \
-    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 2u    ]);                              \
-    const uint qb1 = uint(BUF.data[a_offset + ib].qs[iqs / 2u + 1u]);                             \
-    const FLOAT_TYPE scale = FLOAT_TYPE(BUF.data[a_offset + ib].norm) / FLOAT_TYPE(7.5f);         \
-    return scale * FLOAT_TYPEV4(FLOAT_TYPE(qb0 & 0xFu)        - FLOAT_TYPE(7.5f),                 \
-                                FLOAT_TYPE((qb0 >> 4u) & 0xFu) - FLOAT_TYPE(7.5f),                \
-                                FLOAT_TYPE(qb1 & 0xFu)        - FLOAT_TYPE(7.5f),                 \
-                                FLOAT_TYPE((qb1 >> 4u) & 0xFu) - FLOAT_TYPE(7.5f));               \
-}
-
-// iso4_0 has identical block layout and decode logic to planar4_0.
-#define FA_DEQUANT4_RQ_ISO4_0(BUF) {                                                              \
-    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 2u    ]);                              \
-    const uint qb1 = uint(BUF.data[a_offset + ib].qs[iqs / 2u + 1u]);                             \
-    const FLOAT_TYPE scale = FLOAT_TYPE(BUF.data[a_offset + ib].norm) / FLOAT_TYPE(7.5f);         \
-    return scale * FLOAT_TYPEV4(FLOAT_TYPE(qb0 & 0xFu)        - FLOAT_TYPE(7.5f),                 \
-                                FLOAT_TYPE((qb0 >> 4u) & 0xFu) - FLOAT_TYPE(7.5f),                \
-                                FLOAT_TYPE(qb1 & 0xFu)        - FLOAT_TYPE(7.5f),                 \
-                                FLOAT_TYPE((qb1 >> 4u) & 0xFu) - FLOAT_TYPE(7.5f));               \
-}
-
 // bf16_to_fp32(uvec4) is defined in types.glsl (mainline). BF16 block is u16vec4.
 #define FA_DEQUANT4_BF16(BUF) \
     return FLOAT_TYPEV4(bf16_to_fp32(uvec4(BUF.data[(a_offset + ib) / 4])));
@@ -303,10 +225,6 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (k_packed_turboq3_tcq)
-            case FA_TYPE_RQ_PLANAR3_0: FA_DEQUANT4_RQ_PLANAR3_0 (k_packed_rq_planar3_0)
-            case FA_TYPE_RQ_ISO3_0:    FA_DEQUANT4_RQ_ISO3_0    (k_packed_rq_iso3_0)
-            case FA_TYPE_RQ_PLANAR4_0: FA_DEQUANT4_RQ_PLANAR4_0 (k_packed_rq_planar4_0)
-            case FA_TYPE_RQ_ISO4_0:    FA_DEQUANT4_RQ_ISO4_0    (k_packed_rq_iso4_0)
             case FA_TYPE_BF16:         FA_DEQUANT4_BF16          (k_packed_bf16)
         }
     } else {
@@ -322,10 +240,6 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (v_packed_turboq3_tcq)
-            case FA_TYPE_RQ_PLANAR3_0: FA_DEQUANT4_RQ_PLANAR3_0 (v_packed_rq_planar3_0)
-            case FA_TYPE_RQ_ISO3_0:    FA_DEQUANT4_RQ_ISO3_0    (v_packed_rq_iso3_0)
-            case FA_TYPE_RQ_PLANAR4_0: FA_DEQUANT4_RQ_PLANAR4_0 (v_packed_rq_planar4_0)
-            case FA_TYPE_RQ_ISO4_0:    FA_DEQUANT4_RQ_ISO4_0    (v_packed_rq_iso4_0)
             case FA_TYPE_BF16:         FA_DEQUANT4_BF16          (v_packed_bf16)
         }
     }
