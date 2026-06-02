@@ -2022,6 +2022,19 @@ int llama_perplexity(int argc, char ** argv) {
         return 1;
     }
 
+    // PFlash-PPL: flag accepted but not applied.  PFlash compresses a prompt
+    // before submission; applying it to perplexity's fixed sliding-window
+    // corpus would change what tokens are measured, making the PPL score
+    // incomparable.  Measure PFlash effectiveness via TPS (llama-bench
+    // --pflash-scorer) and task quality (needle/QA), not chunked PPL.
+    // CHANGELOG: PFlash not wired into perplexity (flag accepted, no-op).
+    if (!params.speculative.pflash_scorer_path.empty()) {
+        LOG_WRN("%s: --pflash-scorer is accepted but ignored in perplexity mode.\n"
+                "  PFlash effectiveness is measured via TPS (llama-bench --pflash-scorer)\n"
+                "  and task quality (needle/QA), not chunked PPL.\n", __func__);
+        params.speculative.pflash_scorer_path.clear();
+    }
+
     const int32_t n_ctx = params.n_ctx;
 
     if (n_ctx <= 0) {

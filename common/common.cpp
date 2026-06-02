@@ -1489,6 +1489,45 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
 common_init_result::~common_init_result() = default;
 
+// Private handle type; keeps tria_stats + tria_runtime together so callers
+// don't need to include src/triattention-runtime.h.
+namespace {
+struct tria_bench_handle {
+    struct tria_stats   * tria;
+    struct tria_runtime * rt;
+};
+} // namespace
+
+void * common_triattention_init_rt(const std::string & stats_path, int budget_pct,
+                                   int window, int interval, int sink) {
+    if (stats_path.empty() || budget_pct <= 0) return nullptr;
+    struct tria_stats * tria = tria_load(stats_path.c_str());
+    if (!tria) {
+        fprintf(stderr, "tria: failed to load stats from '%s'\n", stats_path.c_str());
+        return nullptr;
+    }
+    struct tria_runtime * rt = tria_runtime_init(tria, budget_pct, window, interval, sink);
+    if (!rt) {
+        fprintf(stderr, "tria: warning: tria_runtime_init failed for '%s' — scoring disabled\n",
+                stats_path.c_str());
+        tria_free(tria);
+        return nullptr;
+    }
+    g_tria_rt = rt;
+    fprintf(stderr, "tria: runtime initialized (budget=%d%%, window=%d, interval=%d, sink=%d)\n",
+            budget_pct, window, interval, sink);
+    return new tria_bench_handle{tria, rt};
+}
+
+void common_triattention_free_rt(void * handle) {
+    if (!handle) return;
+    auto * h = static_cast<tria_bench_handle *>(handle);
+    if (g_tria_rt == h->rt) g_tria_rt = nullptr;
+    tria_runtime_free(h->rt);
+    tria_free(h->tria);
+    delete h;
+}
+
 std::string common_get_model_endpoint() {
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
     // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.

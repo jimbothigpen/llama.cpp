@@ -26,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "pflash.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -351,6 +352,16 @@ struct cmd_params {
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
+    // TriAttention
+    std::vector<std::string>         triattention_stats_path;
+    std::vector<int>                 triattention_budget_pct;
+    std::vector<int>                 triattention_window;
+    std::vector<int>                 triattention_interval;
+    std::vector<int>                 triattention_sink;
+    // PFlash
+    std::vector<std::string>         pflash_scorer_path;
+    std::vector<float>               pflash_keep_ratio;
+    std::vector<float>               pflash_alpha;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -395,6 +406,14 @@ static const cmd_params cmd_params_defaults = {
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
+    /* triattention_stats_path */ { "" },
+    /* triattention_budget_pct */ { 0 },
+    /* triattention_window     */ { 512 },
+    /* triattention_interval   */ { 128 },
+    /* triattention_sink       */ { 0 },
+    /* pflash_scorer_path      */ { "" },
+    /* pflash_keep_ratio       */ { 0.05f },
+    /* pflash_alpha            */ { 0.12f },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -1030,6 +1049,36 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 for (const auto & v : p) {
                     params.fit_params_min_ctx.push_back(std::stoul(v));
                 }
+            } else if (arg == "--triattention") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.triattention_stats_path.insert(params.triattention_stats_path.end(), p.begin(), p.end());
+            } else if (arg == "--tri-budget") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & v : p) { params.triattention_budget_pct.push_back(std::stoi(v)); }
+            } else if (arg == "--tri-window") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & v : p) { params.triattention_window.push_back(std::stoi(v)); }
+            } else if (arg == "--tri-interval") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & v : p) { params.triattention_interval.push_back(std::stoi(v)); }
+            } else if (arg == "--tri-sink") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & v : p) { params.triattention_sink.push_back(std::stoi(v)); }
+            } else if (arg == "--pflash-scorer") {
+                if (++i >= argc) { invalid_param = true; break; }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.pflash_scorer_path.insert(params.pflash_scorer_path.end(), p.begin(), p.end());
+            } else if (arg == "--pflash-keep-ratio") {
+                if (++i >= argc) { invalid_param = true; break; }
+                params.pflash_keep_ratio.push_back(std::stof(argv[i]));
+            } else if (arg == "--pflash-alpha") {
+                if (++i >= argc) { invalid_param = true; break; }
+                params.pflash_alpha.push_back(std::stof(argv[i]));
             } else {
                 invalid_param = true;
                 break;
@@ -1158,6 +1207,30 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.fit_params_min_ctx.empty()) {
         params.fit_params_min_ctx = cmd_params_defaults.fit_params_min_ctx;
     }
+    if (params.triattention_stats_path.empty()) {
+        params.triattention_stats_path = cmd_params_defaults.triattention_stats_path;
+    }
+    if (params.triattention_budget_pct.empty()) {
+        params.triattention_budget_pct = cmd_params_defaults.triattention_budget_pct;
+    }
+    if (params.triattention_window.empty()) {
+        params.triattention_window = cmd_params_defaults.triattention_window;
+    }
+    if (params.triattention_interval.empty()) {
+        params.triattention_interval = cmd_params_defaults.triattention_interval;
+    }
+    if (params.triattention_sink.empty()) {
+        params.triattention_sink = cmd_params_defaults.triattention_sink;
+    }
+    if (params.pflash_scorer_path.empty()) {
+        params.pflash_scorer_path = cmd_params_defaults.pflash_scorer_path;
+    }
+    if (params.pflash_keep_ratio.empty()) {
+        params.pflash_keep_ratio = cmd_params_defaults.pflash_keep_ratio;
+    }
+    if (params.pflash_alpha.empty()) {
+        params.pflash_alpha = cmd_params_defaults.pflash_alpha;
+    }
 
     return params;
 }
@@ -1191,6 +1264,16 @@ struct cmd_params_instance {
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+    // TriAttention
+    std::string        triattention_stats_path;
+    int                triattention_budget_pct;
+    int                triattention_window;
+    int                triattention_interval;
+    int                triattention_sink;
+    // PFlash
+    std::string        pflash_scorer_path;
+    float              pflash_keep_ratio;
+    float              pflash_alpha;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1281,6 +1364,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & m : params.model)
     for (const auto & fpt : params.fit_params_target)
     for (const auto & fpc : params.fit_params_min_ctx)
+    for (const auto & tria_path  : params.triattention_stats_path)
+    for (const auto & tria_bpct  : params.triattention_budget_pct)
+    for (const auto & tria_win   : params.triattention_window)
+    for (const auto & tria_intv  : params.triattention_interval)
+    for (const auto & tria_sink  : params.triattention_sink)
+    for (const auto & pfl_scorer : params.pflash_scorer_path)
+    for (const auto & pfl_ratio  : params.pflash_keep_ratio)
+    for (const auto & pfl_alpha  : params.pflash_alpha)
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
@@ -1337,6 +1428,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .triattention_stats_path = */ tria_path,
+                /* .triattention_budget_pct = */ tria_bpct,
+                /* .triattention_window     = */ tria_win,
+                /* .triattention_interval   = */ tria_intv,
+                /* .triattention_sink       = */ tria_sink,
+                /* .pflash_scorer_path      = */ pfl_scorer,
+                /* .pflash_keep_ratio       = */ pfl_ratio,
+                /* .pflash_alpha            = */ pfl_alpha,
             };
             instances.push_back(instance);
         }
@@ -1374,6 +1473,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .triattention_stats_path = */ tria_path,
+                /* .triattention_budget_pct = */ tria_bpct,
+                /* .triattention_window     = */ tria_win,
+                /* .triattention_interval   = */ tria_intv,
+                /* .triattention_sink       = */ tria_sink,
+                /* .pflash_scorer_path      = */ pfl_scorer,
+                /* .pflash_keep_ratio       = */ pfl_ratio,
+                /* .pflash_alpha            = */ pfl_alpha,
             };
             instances.push_back(instance);
         }
@@ -1411,6 +1518,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .triattention_stats_path = */ tria_path,
+                /* .triattention_budget_pct = */ tria_bpct,
+                /* .triattention_window     = */ tria_win,
+                /* .triattention_interval   = */ tria_intv,
+                /* .triattention_sink       = */ tria_sink,
+                /* .pflash_scorer_path      = */ pfl_scorer,
+                /* .pflash_keep_ratio       = */ pfl_ratio,
+                /* .pflash_alpha            = */ pfl_alpha,
             };
             instances.push_back(instance);
         }
@@ -2133,6 +2248,26 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
+// Variant of test_prompt that submits a caller-supplied token list (used after PFlash compression).
+static bool test_prompt_tokens(llama_context * ctx, const std::vector<int32_t> & tokens_in,
+                               int n_batch, int n_threads) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+    const int n_prompt = (int)tokens_in.size();
+    int n_processed = 0;
+    while (n_processed < n_prompt) {
+        int n_tokens = std::min(n_prompt - n_processed, n_batch);
+        int res = llama_decode(ctx, llama_batch_get_one(
+                const_cast<llama_token *>(tokens_in.data() + n_processed), n_tokens));
+        if (res != 0) {
+            fprintf(stderr, "%s: failed to decode prompt batch, res = %d\n", __func__, res);
+            return false;
+        }
+        n_processed += n_tokens;
+    }
+    llama_synchronize(ctx);
+    return true;
+}
+
 static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
@@ -2304,8 +2439,16 @@ int llama_bench(int argc, char ** argv) {
             prev_inst = &inst;
         }
 
+        // TriAttention: init BEFORE context creation so g_tria_rt is set when
+        // the computation graph is first built inside llama_init_from_model.
+        void * tria_handle = common_triattention_init_rt(
+            inst.triattention_stats_path, inst.triattention_budget_pct,
+            inst.triattention_window, inst.triattention_interval,
+            inst.triattention_sink);
+
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
+            common_triattention_free_rt(tria_handle);
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
             return 1;
@@ -2341,6 +2484,28 @@ int llama_bench(int argc, char ** argv) {
 
         llama_attach_threadpool(ctx, threadpool, NULL);
 
+        // PFlash: compress a dummy prompt of t.n_prompt tokens once.
+        // All reps (including warmup) use the compressed sequence; t.n_prompt
+        // is updated to the compressed length so tok/s is reported correctly.
+        std::vector<int32_t> pflash_tokens;
+        if (!inst.pflash_scorer_path.empty() && t.n_prompt > 0) {
+            const llama_vocab * vocab = llama_model_get_vocab(lmodel);
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+            std::vector<int32_t> orig_tokens(t.n_prompt);
+            orig_tokens[0] = llama_vocab_bos(vocab);
+            for (int i = 1; i < t.n_prompt; i++) {
+                orig_tokens[i] = std::rand() % n_vocab;
+            }
+            pflash_config cfg;
+            cfg.scorer_path = inst.pflash_scorer_path;
+            cfg.keep_ratio  = inst.pflash_keep_ratio;
+            cfg.alpha       = inst.pflash_alpha;
+            pflash_tokens = pflash_compress(orig_tokens, cfg);
+            fprintf(stderr, "pflash: %d -> %d tokens\n",
+                    (int)orig_tokens.size(), (int)pflash_tokens.size());
+            t.n_prompt = (int)pflash_tokens.size();
+        }
+
         // warmup run
         if (!params.no_warmup) {
             if (t.n_prompt > 0) {
@@ -2348,7 +2513,9 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = pflash_tokens.empty()
+                    ? test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads)
+                    : test_prompt_tokens(ctx, pflash_tokens, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2417,7 +2584,9 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = pflash_tokens.empty()
+                    ? test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads)
+                    : test_prompt_tokens(ctx, pflash_tokens, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
@@ -2456,6 +2625,7 @@ int llama_bench(int argc, char ** argv) {
         llama_perf_context_print(ctx);
 
         llama_free(ctx);
+        common_triattention_free_rt(tria_handle);
 
         ggml_threadpool_free_fn(threadpool);
     }

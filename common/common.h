@@ -918,6 +918,14 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 
+// TriAttention init/free helpers for tools that bypass common_init_from_params.
+// Returns a non-null opaque handle on success (also sets g_tria_rt); pass to
+// common_triattention_free_rt on teardown.  Returns nullptr if stats_path is
+// empty or budget_pct == 0 (feature disabled).
+void * common_triattention_init_rt(const std::string & stats_path, int budget_pct,
+                                   int window, int interval, int sink);
+void   common_triattention_free_rt(void * handle);
+
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params);
