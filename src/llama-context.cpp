@@ -1548,7 +1548,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ggml_tensor * t = eagle3_state.extract_tensors[i];
             if (t) {
                 float * dst = eagle3_state.target_features.data() + i * n_embd * n_tok;
-                ggml_backend_tensor_get(t, dst, 0, n_embd * n_tok * sizeof(float));
+                const size_t tensor_bytes = ggml_nbytes(t);
+                const size_t wanted_bytes = (size_t)n_embd * n_tok * sizeof(float);
+                const size_t copy_bytes   = std::min(tensor_bytes, wanted_bytes);
+                ggml_backend_tensor_get(t, dst, 0, copy_bytes);
             }
         }
     }
