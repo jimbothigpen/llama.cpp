@@ -116,7 +116,7 @@ layer. For a 9B model (32 layers, 8 K-heads, head_dim=128): R=512 adds ~134 MB.
 
 ## Relationship to other KV types
 
-OScaR occupies slot 71 and is independent of the TurboQuant (`TURBOQ*`, slots 60–69) and RotorQuant (`RQ_*`, slots 72–75) families. It can coexist with any V-cache type:
+OScaR occupies slot 71 and is independent of the TurboQuant (`TURBOQ*`, slots 60–69) family (the former RotorQuant family at slots 72–75 was removed; those slots are now reserved). It can coexist with any V-cache type:
 
 ```bash
 # OScaR K + TurboQuant V

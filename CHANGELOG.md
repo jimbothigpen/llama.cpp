@@ -9,9 +9,22 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `7337523e6` (2026-06-01 — oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed as dead code (TODO 142)). Prior: `c403dc7a6` port(weight-skip): env-gated Q4_K MMVQ block-skip (TODO 137). /opt: b848 shipped 2026-06-01.
+HEAD: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b848 shipped 2026-06-01.
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up). RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+
+### Removed — RotorQuant iso/planar KV family (slots 72–75) (TODO 159) (2026-06-02)
+
+`55bb0d418`. Removes all four RotorQuant KV types (`RQ_PLANAR3_0`, `RQ_PLANAR4_0`,
+`RQ_ISO3_0`, `RQ_ISO4_0`) ported from carlosfundora `1-bit-turbo`. PPL gap is
+inherent to the design and not recoverable (ISO3_0: +23.5% vs comparable TurboQ
+types); all four are strictly dominated by TurboQ types at identical or lower bpw,
+making them zero-rotation scalar duplicates with no advantage. Removals: ggml.h enum
+entries (slots 72–75 marked reserved, not renumbered), ggml.c type info table,
+ggml-common.h block struct definitions, ggml-quants.h declarations, entire
+`ggml-roto-quant.c` (~380 LOC), ggml-cpu.c dispatch entries, ggml-cuda fattn dispatch
+(~405 lines). Slots 72–75 are now **reserved**; do not reuse for unrelated types.
+Closes TODO 159.
 
 ### Changed — OScaR INT2 KV: full-dim D=256 WHT + GGML_OP_FWHT removed (TODO 142) (2026-06-01)
 
