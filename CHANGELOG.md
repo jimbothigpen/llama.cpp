@@ -13,6 +13,16 @@ HEAD: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up). RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
 
+### Changed — `scripts/` standardized + internal tooling purged (2026-06-02)
+
+Added `scripts/generate-quants.sh` (the standard download→convert→imatrix→quantize GGUF
+pipeline; configured via env / `scripts/matrix-env.sh.example`) so all GGUFs are produced by one
+reproducible, apples-to-apples path. Removed 12 internal-only workflow scripts that should never
+have shipped (host-/model-specific build + prequant + measurement helpers carrying local infra):
+`baseline-matrix*.py`, `build-rocm-ai01-gfx110{2,3}.sh`, `ppl-harness.py(+README)`,
+`prequant-qwen35-9b-*.sh`, `push-milestone.sh`, `with-bench-mutex.sh`. `scripts/` now contains
+only mainline-llama.cpp scripts, ported-fork scripts, and fork-functional tooling.
+
 ### Removed — RotorQuant iso/planar KV family (slots 72–75) (TODO 159) (2026-06-02)
 
 `55bb0d418`. Removes all four RotorQuant KV types (`RQ_PLANAR3_0`, `RQ_PLANAR4_0`,
@@ -1117,11 +1127,6 @@ Released at commit `4d4351a90`.
 See [docs/TYPE_ASSIGNMENTS.md](docs/TYPE_ASSIGNMENTS.md). This fork
 extensions live at slots 60–95; ik_llama compat zone reserved at 96–199;
 mainline growth reserve 42–59.
-
-### Added — `scripts/ppl-harness.py` (dual-backend PPL regression harness)
-
-Pinned wikitext slice, per-(model, type, backend) baselines, cross-backend
-delta tolerance bands per [docs/BACKEND_PARITY.md](docs/BACKEND_PARITY.md).
 
 ### Added — Backend parity policy
 

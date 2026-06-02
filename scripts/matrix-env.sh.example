@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# matrix-env.sh.example — TEMPLATE for site-local config for the quant/matrix tooling.
+#
+# Copy this to matrix-env.sh and fill in your values. matrix-env.sh is gitignored
+# (it contains local paths). The scripts source it automatically when it sits next to them.
+#
+# Usage: cp matrix-env.sh.example matrix-env.sh  and then edit matrix-env.sh.
+
+# --- Build binary directory (a build's bin/ directory) ---
+# All binaries default off BIN_DIR. Override a specific binary with its env var.
+# e.g. to test a different quantizer: export QUANTIZE_BIN=/path/to/other/llama-quantize
+export BIN_DIR=/path/to/llama-cpp-build/bin
+
+# --- Durable model + artifact store (network/bulk storage is fine here) ---
+export OUTPUT_DIR="${OUTPUT_DIR:-$PWD/matrix-output}"
+
+# --- Fast local-NVMe scratch for staging GGUFs during measurement ---
+# When this differs from OUTPUT_DIR, the matrix scripts copy each GGUF here, measure, delete.
+# For measurement on the same host as your model store, just leave STAGING_DIR == OUTPUT_DIR.
+export STAGING_DIR="${STAGING_DIR:-$HOME/local-models/stage}"
+
+# --- imatrix calibration corpus (ADR-016; semantic, disjoint from any PPL eval set) ---
+# Unset = skip imatrix. imatrix-required types (IQ-K/KT/low-IQ) will error out if IMATRIX_CORPUS
+# is unset and you request them. Point this at your own semantic corpus.
+# export IMATRIX_CORPUS=/path/to/your/corpus.txt
