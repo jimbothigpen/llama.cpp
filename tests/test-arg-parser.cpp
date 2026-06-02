@@ -121,16 +121,30 @@ int main(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.verbosity > 1);
 
+    argv = {"binary_name", "--no-host"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.no_host == true);
+
     argv = {"binary_name", "-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "abc.gguf");
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
+    argv = {"binary_name", "-ctk", "turboq3", "-ctv", "f16"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cache_type_k == GGML_TYPE_TURBOQ3_0);
+    assert(params.cache_type_v == GGML_TYPE_F16);
+
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
+
+    argv = {"binary_name", "-ctkd", "turboq3", "-ctvd", "q4_0"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(params.speculative.draft.cache_type_k == GGML_TYPE_TURBOQ3_0);
+    assert(params.speculative.draft.cache_type_v == GGML_TYPE_Q4_0);
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
