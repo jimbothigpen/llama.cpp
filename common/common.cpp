@@ -1208,6 +1208,20 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
+    if (params.use_mmap && params.n_gpu_layers > 0) {
+        bool has_igpu = false;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            if (ggml_backend_dev_type(ggml_backend_dev_get(i)) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                has_igpu = true;
+                break;
+            }
+        }
+        if (has_igpu) {
+            LOG_WRN("%s: mmap is enabled with -ngl %d on an integrated GPU — compute may silently fall back to CPU on this device; pass --no-mmap to use GPU acceleration\n",
+                __func__, params.n_gpu_layers);
+        }
+    }
+
     if (params.fit_params) {
         LOG_INF("%s: fitting params to device memory ...\n", __func__);
         LOG_INF("%s: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n", __func__);
