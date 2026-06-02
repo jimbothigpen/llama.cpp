@@ -210,6 +210,34 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
 }
 
+// OScaR INT2 scalar quantize — WHT was already applied by the graph (K-shift path).
+// Input x is in the WHT-rotated domain; encode with uniform min-max INT2, no WHT.
+static __device__ void quantize_f32_oscar_int2_block(const float * __restrict__ x, block_kv_oscar_int2 * __restrict__ y) {
+    float mn = x[0], mx = x[0];
+    for (int j = 1; j < QK_OSCAR_INT2; j++) {
+        mn = fminf(mn, x[j]);
+        mx = fmaxf(mx, x[j]);
+    }
+    const float range = mx - mn;
+    const float d = (range > 1e-10f) ? range * (1.0f / 3.0f) : 1.0f;
+    const float id = 1.0f / d;
+    y->d = __float2half(d);
+    y->m = __float2half(mn);
+    for (int j = 0; j < QK_OSCAR_INT2 / 4; j++) {
+        uint8_t byte = 0;
+        for (int b = 0; b < 4; b++) {
+            int q = __float2int_rn((x[j*4 + b] - mn) * id);
+            q = q < 0 ? 0 : (q > 3 ? 3 : q);
+            byte |= (uint8_t)(q << (2 * b));
+        }
+        y->qs[j] = byte;
+    }
+}
+
+static __device__ void cpy_blck_f32_oscar_int2(const char * cxi, char * cdsti) {
+    quantize_f32_oscar_int2_block((const float *)cxi, (block_kv_oscar_int2 *)cdsti);
+}
+
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_scalar(const char * cxi, char * cdsti) {
     *(dst_t *) cdsti = ggml_cuda_cast<dst_t>(*(const src_t *) cxi);

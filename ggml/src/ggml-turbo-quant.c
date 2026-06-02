@@ -541,7 +541,8 @@ size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRIC
 /* ---------- KV_OSCAR_INT2: OScaR 2-bit KV (FHT + min-max uniform INT2) — CPU stub ---------- */
 
 void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k) {
-    /* CPU stub — CUDA kernel handles FHT + min-max encode. CPU path does zero-code min-max only. */
+    // Scalar min-max INT2 quantize (WHT already applied externally; no WHT here).
+    // Used as CPU fallback for ggml_cpy during K-shift re-encode (TODO 182).
     assert(k % QK_OSCAR_INT2 == 0);
     const int nb = k / QK_OSCAR_INT2;
     for (int i = 0; i < nb; i++) {
@@ -553,9 +554,15 @@ void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_osca
         }
         const float range = mx - mn;
         const float d = (range > 1e-10f) ? range / 3.0f : 1.0f;
+        const float id = 1.0f / d;
         y[i].d = GGML_FP32_TO_FP16(d);
         y[i].m = GGML_FP32_TO_FP16(mn);
         memset(y[i].qs, 0, QK_OSCAR_INT2 / 4);
+        for (int j = 0; j < QK_OSCAR_INT2; j++) {
+            int q = (int)((blk[j] - mn) * id + 0.5f);
+            q = q < 0 ? 0 : (q > 3 ? 3 : q);
+            y[i].qs[j / 4] |= (uint8_t)(q << (2 * (j % 4)));
+        }
     }
 }
 

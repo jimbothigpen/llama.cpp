@@ -514,6 +514,39 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
+    // OScaR INT2 K-shift fix (TODO 182 §-FLAG-ATTN_ROT_KSHIFT):
+    // attn_rot_k=false for OScaR INT2 (avoids double H^2=I rotation on fresh tokens).
+    // But the K-shift / RoPE-update path needs to un-rotate before RoPE and re-rotate
+    // after, because K is stored in the WHT-rotated domain.  Pre-compute the Hadamard
+    // matrix for the OScaR WHT dimension so build_graph_shift can build a valid rot tensor.
+    {
+        int64_t oscar_wht_max = 0;
+        for (const auto & lyr : layers) {
+            if (lyr.k && lyr.k->type == GGML_TYPE_KV_OSCAR_INT2) {
+                oscar_wht_max = std::max(oscar_wht_max, (int64_t) hparams.n_embd_head_k(lyr.il));
+            }
+        }
+        for (int64_t n = 64; n <= oscar_wht_max; n *= 2) {
+            if (attn_rot_hadamard.count(n)) {
+                continue; // already computed by attn_rot block above
+            }
+            attn_rot_hadamard[n] = std::vector<float>(n*n);
+
+            ggml_init_params params = {
+                /* .mem_size   = */ 1*ggml_tensor_overhead(),
+                /* .mem_buffer = */ nullptr,
+                /* .no_alloc   = */ true,
+            };
+
+            ggml_context_ptr tmp_ctx { ggml_init(params) };
+
+            ggml_tensor * tmp = ggml_new_tensor_2d(tmp_ctx.get(), GGML_TYPE_F32, n, n);
+            tmp->data = attn_rot_hadamard[n].data();
+
+            ggml_gen_hadamard(tmp);
+        }
+    }
+
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 }
@@ -2259,6 +2292,9 @@ public:
     // note: assumes k_rot^2 == I
     ggml_tensor * k_rot = nullptr;
 
+    // OScaR INT2 K-shift WHT rotation (separate from k_rot since attn_rot_k=false for OScaR)
+    ggml_tensor * k_oscar_rot = nullptr;
+
     const llama_kv_cache * kv_self;
 };
 
@@ -2272,6 +2308,10 @@ void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
     if (k_rot) {
         kv_self->set_input_k_rot(k_rot);
     }
+
+    if (k_oscar_rot) {
+        kv_self->set_input_k_rot(k_oscar_rot);
+    }
 }
 
 ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_context * lctx) const {
@@ -2284,6 +2324,20 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
     ggml_set_input(inp->k_shift);
 
     inp->k_rot = build_input_k_rot(ctx);
+
+    // OScaR INT2 K-shift fix (TODO 182 §-FLAG-ATTN_ROT_KSHIFT):
+    // K is stored in WHT-rotated domain.  Build a Hadamard rot tensor so that
+    // build_rope_shift can: dequant → inv-WHT → RoPE → fwd-WHT → requant.
+    // Use the first OScaR INT2 layer's head_dim (all OScaR layers must have the same WHT dim).
+    for (const auto & layer : layers) {
+        if (layer.k && layer.k->type == GGML_TYPE_KV_OSCAR_INT2 && !inp->k_oscar_rot) {
+            const int64_t oscar_n = (int64_t) hparams.n_embd_head_k(layer.il);
+            inp->k_oscar_rot = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, oscar_n, oscar_n);
+            ggml_set_input(inp->k_oscar_rot);
+            ggml_set_name(inp->k_oscar_rot, "oscar_inp_k_rot");
+            break;
+        }
+    }
 
     const auto & cparams = lctx->get_cparams();
 
@@ -2311,7 +2365,12 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
                 ggml_row_size(layer.k->type, n_embd_k_gqa),
                 ggml_row_size(layer.k->type, n_embd_nope));
 
-        ggml_tensor * cur = build_rope_shift(cparams, ctx, k, inp->k_shift, inp->k_rot, rope_factors, freq_base_l, freq_scale_l, il);
+        // For OScaR INT2 use the oscar WHT rot; for all others use the standard attn rot.
+        ggml_tensor * layer_rot = (layer.k->type == GGML_TYPE_KV_OSCAR_INT2)
+                                  ? inp->k_oscar_rot
+                                  : inp->k_rot;
+
+        ggml_tensor * cur = build_rope_shift(cparams, ctx, k, inp->k_shift, layer_rot, rope_factors, freq_base_l, freq_scale_l, il);
 
         ggml_build_forward_expand(gf, cur);
     }
