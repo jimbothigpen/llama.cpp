@@ -177,10 +177,22 @@ static inline int iqkt_hash_bin(const float * v) {
 // ---------------------------------------------------------------------------
 // Build soft-binning cluster index
 //
-// For GROUP_SIZE=4 (625 bins): runs Phase 1 (primary binning + centroid) +
-// Phase 2 (k-nearest-bin soft assignment) — ~20M ops, runs once at init.
-// For GROUP_SIZE!=4 (1 bin): passthrough — all entries in bin 0.
-// k_neighbours: number of nearest bins each entry is registered into (e.g. 6).
+// For all non-trivial GROUP_SIZE:
+//   Phase 1: primary binning + centroid computation.
+//   Phase 2: register each entry in (a) its PRIMARY hash bin, then (b) the
+//     k_neighbours centroid-nearest non-primary bins.
+//
+//   The primary-bin step (a) is critical for GS=8 (3-bin per dim, 6561 bins):
+//     the 3-bin quantizer is coarse (~84-unit bins in [-126,+126]).  Entries
+//     near the lower boundary of their bin (e.g. value=17 in bin-2, centroid
+//     ≈ 39.5) are centroid-closer to bin-1 (centroid ≈ 0), so pure centroid
+//     Phase 2 would register them in bin-1 — making them invisible to queries
+//     that hash correctly to bin-2.  Registering in the primary hash bin first
+//     guarantees every query finds entries that belong in its bin.
+//     The centroid-based k registrations still bridge boundary cases (entries
+//     in one bin that should also be reachable from an adjacent-bin query).
+//
+// Other GROUP_SIZE (1 bin): passthrough, all entries in bin 0.
 // ---------------------------------------------------------------------------
 
 template<int GROUP_SIZE, int NUM_BITS, bool IS_ABS>
@@ -216,18 +228,24 @@ static void iqkt_build_cluster_index(IQKTCookedBook<GROUP_SIZE, NUM_BITS> & cb, 
         }
     }
 
-    // Phase 2: for each entry, find k_neighbours nearest non-empty bin centroids
-    // and register the entry into each of those bins (soft/overlapping assignment).
-    // This fixes boundary misses — a query hashing to bin X can find entries
-    // whose primary bin is adjacent to X.
+    // Phase 2: register each entry in (a) its primary hash bin, then (b) the
+    // k_neighbours centroid-nearest non-primary bins.
+    // (a) ensures queries always find entries that hash to the same bin.
+    // (b) bridges adjacent-bin queries to boundary entries (the original soft-assignment).
     std::vector<float> best_d(k_neighbours);
     std::vector<int>   best_b(k_neighbours);
     for (int i = 0; i < kNumVal; ++i) {
         const float * v = V + (size_t)i * GROUP_SIZE;
+
+        // (a) Always register in the primary hash bin.
+        const int primary_b = iqkt_hash_bin<GROUP_SIZE, IS_ABS>(v);
+        cb.bin_to_entries[primary_b].push_back(i);
+
+        // (b) Find k_neighbours centroid-nearest non-primary bins.
         std::fill(best_d.begin(), best_d.end(), INFINITY);
         std::fill(best_b.begin(), best_b.end(), -1);
         for (int b = 0; b < num_bins; ++b) {
-            if (bin_count[b] == 0) continue;
+            if (bin_count[b] == 0 || b == primary_b) continue;
             const float * c = centroid.data() + (size_t)b * GROUP_SIZE;
             float dist = 0;
             for (int k = 0; k < GROUP_SIZE; ++k) {

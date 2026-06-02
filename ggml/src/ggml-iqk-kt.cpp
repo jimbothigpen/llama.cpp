@@ -430,8 +430,11 @@ static IQ2KT_Codebook g_iq2kt_codebook;
 static std::once_flag g_iq2kt_init_once;
 
 static void iq2kt_codebook_do_init() {
+    // k=256: covers all base-3 "diagonal" bins for GS=8 — bin [2,...] is rank ~256
+    // for entries near the lower bin-2 boundary (value ≈ 16), so k ≥ 256 ensures
+    // both forward and reverse boundary crossings are registered.
     iqkt_cooked_book_init<kIQ2KT_GroupSize, kIQ2KT_NumBits, false>(
-        g_iq2kt_codebook.cb, kIQ2KT_Offset, 60);
+        g_iq2kt_codebook.cb, kIQ2KT_Offset, 256);
     g_iq2kt_codebook.initialized = true;
 }
 
@@ -573,7 +576,7 @@ constexpr int kIQ3KT_Ng         = kIQ3KT_BlockSize / kIQ3KT_GroupSize; // 4
 constexpr int kIQ3KT_Nblock     = QK_K / kIQ3KT_BlockSize;             // 8
 constexpr int kIQ3KT_NumGroups  = QK_K / kIQ3KT_GroupSize;             // 32
 constexpr int kIQ3KT_Offset     = 4096;
-constexpr int kIQ3KT_NeighboursPB = 60;   // cluster-accel k=60 (mirrors IQ2_KT fix, 57ccf64cd)
+constexpr int kIQ3KT_NeighboursPB = 60;
 
 struct IQ3KT_Codebook {
     IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> a;
