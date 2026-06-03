@@ -210,7 +210,10 @@ gq_model_has_mtp() {  # <src_dir>
 import json,sys
 try: c=json.load(open(sys.argv[1]))
 except Exception: sys.exit(1)
-n=c.get("num_nextn_predict_layers") or c.get("num_nextn_layers") or 0
+# Recognize all MTP-layer-count config keys: num_nextn_predict_layers / num_nextn_layers (NextN/MoE,
+# e.g. 35B-A3B) AND mtp_num_hidden_layers (Qwen3.5/3.6 text variants, e.g. 9B) — the key the converter's
+# _Qwen35MtpMixin actually reads. Missing the last one wrongly reports "no MTP" for those models.
+n=c.get("num_nextn_predict_layers") or c.get("num_nextn_layers") or c.get("mtp_num_hidden_layers") or 0
 sys.exit(0 if (isinstance(n,int) and n>0) else 1)
 PY
 }
