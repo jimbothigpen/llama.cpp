@@ -7242,6 +7242,17 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ5_K:
         case GGML_TYPE_IQ6_K:
+        // KS/KT/KL row-meta family: id-vec pipelines are registered (~:4788-4794) and the non-id getter
+        // (ggml_vk_get_dequantize_mul_mat_vec) lists these; omitting them here made this getter return
+        // nullptr -> GGML_ASSERT(dmmv != nullptr) abort in ggml_vk_mul_mat_vec_id_q_f16 for IK-quant MoE
+        // experts (e.g. qwen35moe IQ3_KS, surfaced by the can_seq_rm load probe). TODO 194.
+        case GGML_TYPE_IQ3_KS:
+        case GGML_TYPE_IQ4_KS:
+        case GGML_TYPE_IQ4_KSS:
+        case GGML_TYPE_IQ2_KT:
+        case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_IQ3_KT:
+        case GGML_TYPE_IQ2_KL:
             break;
         default:
             return nullptr;
