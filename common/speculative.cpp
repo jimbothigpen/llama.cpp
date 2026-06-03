@@ -359,8 +359,12 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
                 // add drafted token for each sequence
                 const llama_token id = cur_p->data[0].id;
 
-                // only collect very high-confidence draft tokens
+                // only collect very high-confidence draft tokens; always keep the first
                 if (cur_p->data[0].p < params.p_min) {
+                    if (i == 0) {
+                        common_sampler_accept(smpl, id, true);
+                        dparams.at(seq_id).result->push_back(id);
+                    }
                     drafting[seq_id] = false;
                     n_drafting--;
 
@@ -968,8 +972,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 // add drafted token for each sequence
                 const llama_token id = cur_p->data[0].id;
 
-                // only collect very high-confidence draft tokens
+                // only collect very high-confidence draft tokens; always keep the first
                 if (cur_p->data[0].p < params.p_min) {
+                    if (i == 0) {
+                        common_sampler_accept(smpl, id, true);
+                        dparams.at(seq_id).result->push_back(id);
+                    }
                     drafting[seq_id] = false;
                     n_drafting--;
 
