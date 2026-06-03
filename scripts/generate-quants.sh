@@ -9,8 +9,14 @@
 #     When sourced, NOTHING runs (the pipeline only executes when invoked directly).
 #
 # USAGE:
-#   ./generate-quants.sh --repo <org/model> [--types T1,T2,...] [--include-mtp]
-#                        [--bin-dir <path>] [--mtp-quant <type>] [--force]
+#   ./generate-quants.sh --repo <org/model> [--types T1,T2,...] [--bin-dir <path>] [--force]
+#   MTP mode (pick at most one; default = plain, no MTP head):
+#     --include-mtp                full model WITH the MTP head in the main GGUF  (tag: -MTP)
+#     --assistant                  ONLY the MTP head, as a standalone draft GGUF  (tag: -assistant; converter --mtp)
+#     (plain / --no-mtp)           full model WITHOUT the MTP head                (no tag)
+#     --mtp-quant <type> [--mtp-pattern block|head]   (full+MTP only) pin MTP-block tensors to <type>
+#   Imatrix: ONE shared, MTP-INCLUSIVE <model>-imatrix.gguf per model (auto, --imat-mtp when the model
+#     has an MTP head — covers trunk+head, serves all three modes). Override with --imatrix-file <path>.
 #   INCLUDE_MTP=1 OUTPUT_DIR=/mnt/bulk/models ./generate-quants.sh --repo Qwen/Qwen3.6-35B-A3B
 #   BIN_DIR=/path/to/build/bin ./generate-quants.sh --repo ...
 #
@@ -64,6 +70,13 @@ _GQ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   every artifact '-MTP'. Default 0 (MTP-free; universal). With INCLUDE_MTP=1 on a model
 #   that has NO MTP head, the run ERRORS OUT (no silent fallback).
 : "${INCLUDE_MTP:=0}"
+#   ASSISTANT=1 (--assistant): export ONLY the MTP head as a standalone speculative-draft GGUF
+#   (gemma-4 style external assistant; converter --mtp). Tags artifacts '-assistant'. Requires an MTP
+#   head (errors otherwise). Mutually exclusive with INCLUDE_MTP. Default 0.
+: "${ASSISTANT:=0}"
+#   IMATRIX_FILE: explicit path to a prebuilt imatrix to use for ALL quants (skips generation). Use to
+#   share ONE imatrix across the no-MTP / full+MTP / assistant runs. Default unset = auto (see Step 3).
+: "${IMATRIX_FILE:=}"
 #   MTP_QUANT: when set + INCLUDE_MTP=1, overrides the quantization of MTP block tensors.
 #   DEFAULT = unset = no override (MTP layers quantized at base type per imatrix — honest; IK MTP
 #   bugs stay visible). Sweep usage: run with --mtp-quant q8_0 / f16 / q5_0 etc. to characterize
@@ -105,7 +118,11 @@ SKIP_QUANT_TYPES=(BF16 F16 COPY TQ1_0 TQ2_0)
 # ================================ helpers ================================
 # (these are what the run-*-matrix.sh scripts reuse when they `source` this file)
 gq_in_list() { local x="$1"; shift; local e; for e in "$@"; do [ "$e" = "$x" ] && return 0; done; return 1; }
-gq_mtp_tag() { [ "${INCLUDE_MTP:-0}" = "1" ] && printf -- "-MTP" || printf ""; }
+gq_mtp_tag() {
+  if   [ "${ASSISTANT:-0}" = "1" ];   then printf -- "-assistant"
+  elif [ "${INCLUDE_MTP:-0}" = "1" ]; then printf -- "-MTP"
+  else printf ""; fi
+}
 
 # ---- Hardware-honest run label: <hw>-<backend> (used to tag matrix CSV rows) ----
 # hw = physical accelerator (gfx####/T4/P100/…); on ROCm with HSA_OVERRIDE_GFX_VERSION active, a
@@ -145,16 +162,30 @@ gq_detect_label() { local be; be=$(gq_detect_backend "${1:-}"); echo "$(gq_detec
 gq_model_dir()   { printf '%s/%s/%s' "$1" "$2" "$3"; }                  # <root> <org> <model>
 gq_src_dir()     { printf '%s/%s' "$1" "${SRC_SUBDIR:-src}"; }          # <model_dir>
 gq_bf16_name()   { printf '%s%s-BF16.gguf' "$1" "$(gq_mtp_tag)"; }      # <model>
-gq_imatrix_name(){ printf '%s%s-imatrix.gguf' "$1" "$(gq_mtp_tag)"; }   # <model>
+gq_imatrix_name(){ printf '%s-imatrix.gguf' "$1"; }   # <model> — ONE shared, MTP-inclusive imatrix (no tag)
 # <model> <type> — with MTP quant marker when MTP_QUANT is set, INCLUDE_MTP=1, and differs from base
 gq_quant_name() {
   local model="$1" type="$2"
   local mtag; mtag="$(gq_mtp_tag)"
-  if [ -n "$mtag" ] && [ -n "${MTP_QUANT:-}" ] && [ "${MTP_QUANT}" != "$type" ]; then
+  # MTP-quant marker applies only to full+MTP (INCLUDE_MTP=1) — NOT assistant (all-MTP) or plain.
+  if [ "${INCLUDE_MTP:-0}" = "1" ] && [ "${ASSISTANT:-0}" != "1" ] && [ -n "${MTP_QUANT:-}" ] && [ "${MTP_QUANT}" != "$type" ]; then
     printf '%s%s-%s-%s.gguf' "$model" "$mtag" "$MTP_QUANT" "$type"
   else
     printf '%s%s-%s.gguf' "$model" "$mtag" "$type"
   fi
+}
+# gq_ensure_mtp_bf16 <src_dir>: ensure the full+MTP BF16 exists (for the MTP-INCLUSIVE shared imatrix,
+# regardless of the current quant scenario), echo its staged path on stdout. Cached + reused across passes.
+gq_ensure_mtp_bf16() {  # <src_dir>
+  local name out stg
+  name="${REPO_MODEL}-MTP-BF16.gguf"
+  out="$OUT_MD/$name"; stg="$STG_MD/$name"
+  if [ -f "$stg" ]; then echo "$stg"; return 0; fi
+  if [ -f "$out" ]; then gq_same_path "$stg" "$out" || cp -f "$out" "$stg"; echo "$stg"; return 0; fi
+  echo "--- imatrix: building full+MTP BF16 for the shared imatrix → $name" >&2
+  python3 "$CONVERT_BIN" "$1" --outfile "$stg" --outtype bf16 >&2 || return 1   # default conversion = MTP head included
+  gq_publish "$stg" "$out"
+  echo "$stg"
 }
 # parse "org/model" -> sets REPO_ORG / REPO_MODEL (returns nonzero on bad input)
 gq_parse_repo() {
@@ -262,6 +293,8 @@ gq_main() {
       --types)      TYPES_CSV="$2"; shift 2;;
       --include-mtp) INCLUDE_MTP=1; shift;;
       --no-mtp)     INCLUDE_MTP=0; shift;;
+      --assistant)  ASSISTANT=1; shift;;
+      --imatrix-file) IMATRIX_FILE="$2"; shift 2;;
       --bin-dir)    BIN_DIR_ARG="$2"; shift 2;;
       --mtp-quant)  MTP_QUANT="$2"; shift 2;;
       --mtp-pattern) MTP_TENSOR_PATTERN="$2"; shift 2;;
@@ -271,6 +304,9 @@ gq_main() {
     esac
   done
   [ -n "$REPO" ] || { echo "ERROR: --repo <org/model> is required" >&2; return 2; }
+  if [ "${ASSISTANT:-0}" = 1 ] && [ "${INCLUDE_MTP:-0}" = 1 ]; then
+    echo "ERROR: --assistant (MTP-only draft) and --include-mtp (full model+MTP) are mutually exclusive." >&2; return 2
+  fi
   [ "$FORCE_ARG" = 1 ] && FORCE=1
 
   # --bin-dir: override BIN_DIR and re-derive generation binaries
@@ -343,9 +379,11 @@ gq_main() {
   fi
 
   # ---- MTP presence gate (error out clearly, per requirement) ----
-  if [ "$INCLUDE_MTP" = 1 ] && ! gq_model_has_mtp "$SRC"; then
-    echo "ERROR: INCLUDE_MTP=1 but '$REPO' has no MTP/NextN head (config.json num_nextn_predict_layers absent/0)." >&2
-    echo "       Re-run with INCLUDE_MTP=0 for this model." >&2
+  # Full+MTP (INCLUDE_MTP), assistant (MTP-only), AND the MTP-inclusive shared imatrix all need an MTP head.
+  if { [ "$INCLUDE_MTP" = 1 ] || [ "${ASSISTANT:-0}" = 1 ]; } && ! gq_model_has_mtp "$SRC"; then
+    local _why="INCLUDE_MTP=1"; [ "${ASSISTANT:-0}" = 1 ] && _why="--assistant"
+    echo "ERROR: $_why but '$REPO' has no MTP/NextN head (config.json num_nextn_predict_layers absent/0)." >&2
+    echo "       Use --no-mtp for this model (no MTP head to export)." >&2
     return 6
   fi
 
@@ -353,7 +391,11 @@ gq_main() {
   local BF16_OUT BF16_STG
   BF16_OUT="$OUT_MD/$(gq_bf16_name "$REPO_MODEL")"
   BF16_STG="$STG_MD/$(gq_bf16_name "$REPO_MODEL")"
-  local convert_mtp=(); [ "$INCLUDE_MTP" = 1 ] || convert_mtp=(--no-mtp)
+  # Converter MTP flag: assistant → --mtp (export ONLY the MTP head); full+MTP → none (head in main model); plain → --no-mtp.
+  local convert_mtp=()
+  if   [ "${ASSISTANT:-0}" = 1 ];   then convert_mtp=(--mtp)
+  elif [ "${INCLUDE_MTP:-0}" = 1 ]; then convert_mtp=()
+  else convert_mtp=(--no-mtp); fi
   if [ -f "$BF16_OUT" ]; then
     if gq_ask_reuse "$BF16_OUT" "BF16 GGUF"; then
       echo "--- Step 2: BF16 present → reuse ($(basename "$BF16_OUT"))"
@@ -371,27 +413,32 @@ gq_main() {
     gq_publish "$BF16_STG" "$BF16_OUT"
   fi
 
-  # ---- Step 3: imatrix (staged) ----
+  # ---- Step 3: imatrix (staged) — ONE shared, MTP-INCLUSIVE imatrix per model ----
   local IMAT_OUT="" IMAT_STG="" IMAT_USE=""
-  if [ -n "$IMATRIX_CORPUS" ]; then
+  if [ -n "$IMATRIX_FILE" ]; then
+    # Explicit prebuilt imatrix → use as-is for ALL quants (skip generation). Shares one imatrix across runs.
+    [ -f "$IMATRIX_FILE" ] || { echo "ERROR: IMATRIX_FILE not found: $IMATRIX_FILE" >&2; return 8; }
+    IMAT_USE="$IMATRIX_FILE"
+    echo "--- Step 3: imatrix → using IMATRIX_FILE ($IMATRIX_FILE)"
+  elif [ -n "$IMATRIX_CORPUS" ]; then
     IMAT_OUT="$OUT_MD/$(gq_imatrix_name "$REPO_MODEL")"
     IMAT_STG="$STG_MD/$(gq_imatrix_name "$REPO_MODEL")"
-    local imat_mtp=(); [ "$INCLUDE_MTP" = 1 ] && imat_mtp=(--imat-mtp)
-    if [ -f "$IMAT_OUT" ]; then
-      if gq_ask_reuse "$IMAT_OUT" "imatrix"; then
-        echo "--- Step 3: imatrix present → reuse ($(basename "$IMAT_OUT"))"
-      else
-        echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=${IMATRIX_CHUNKS:-full-corpus} ${imat_mtp[*]:-}) (regenerating)"
-        [ -n "$IMATRIX_BIN" ] || { echo "ERROR: IMATRIX_BIN not found in \$PATH" >&2; return 3; }
-        "$IMATRIX_BIN" -m "$BF16_STG" -f "$IMATRIX_CORPUS" -o "$IMAT_STG" \
-          -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 ${IMATRIX_CHUNKS:+--chunks $IMATRIX_CHUNKS} \
-          || { echo "ERROR: imatrix failed" >&2; return 8; }
-        gq_publish "$IMAT_STG" "$IMAT_OUT"
-      fi
+    if [ -f "$IMAT_OUT" ] && gq_ask_reuse "$IMAT_OUT" "imatrix"; then
+      echo "--- Step 3: imatrix present → reuse ($(basename "$IMAT_OUT"))"
     else
       [ -n "$IMATRIX_BIN" ] || { echo "ERROR: IMATRIX_BIN not found in \$PATH" >&2; return 3; }
-      echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=${IMATRIX_CHUNKS:-full-corpus} ${imat_mtp[*]:-})"
-      "$IMATRIX_BIN" -m "$BF16_STG" -f "$IMATRIX_CORPUS" -o "$IMAT_STG" \
+      # MTP-INCLUSIVE: if the model has an MTP head, compute from the full+MTP BF16 (built if needed) with
+      # --imat-mtp, so the ONE imatrix covers trunk + MTP head + embd/output and serves the no-MTP, full+MTP,
+      # AND assistant quant runs identically. No MTP head → compute from this run's BF16.
+      local imat_src imat_mtp=()
+      if gq_model_has_mtp "$SRC"; then
+        imat_src="$(gq_ensure_mtp_bf16 "$SRC")" || { echo "ERROR: full+MTP BF16 build for imatrix failed" >&2; return 7; }
+        imat_mtp=(--imat-mtp)
+      else
+        imat_src="$BF16_STG"
+      fi
+      echo "--- Step 3: imatrix → $(basename "$IMAT_STG") (chunks=${IMATRIX_CHUNKS:-full-corpus} ${imat_mtp[*]:-} src=$(basename "$imat_src"))"
+      "$IMATRIX_BIN" -m "$imat_src" -f "$IMATRIX_CORPUS" -o "$IMAT_STG" \
         -ngl "$NGL" -fit off -fa on --no-mmap "${imat_mtp[@]}" -b 512 ${IMATRIX_CHUNKS:+--chunks $IMATRIX_CHUNKS} \
         || { echo "ERROR: imatrix failed" >&2; return 8; }
       gq_publish "$IMAT_STG" "$IMAT_OUT"
