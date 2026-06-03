@@ -6,10 +6,14 @@
 #
 # Usage: cp matrix-env.sh.example matrix-env.sh  and then edit matrix-env.sh.
 
-# --- Build binary directory (a build's bin/ directory) ---
-# All binaries default off BIN_DIR. Override a specific binary with its env var.
-# e.g. to test a different quantizer: export QUANTIZE_BIN=/path/to/other/llama-quantize
-export BIN_DIR=/path/to/llama-cpp-build/bin
+# --- Build binary directory ---
+# All binaries default off BIN_DIR. Override a specific binary with its env var
+# (e.g. export QUANTIZE_BIN=/path/to/other/llama-quantize).
+# Self-deriving option (recommended when this file is deployed INTO a build's bin/): BIN_DIR becomes
+# the dir this file lives in, so one config works across multiple bin/ dirs. Falls back otherwise.
+_MED="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$_MED/llama-quantize" ]; then export BIN_DIR="$_MED"; else export BIN_DIR="${BIN_DIR:-/path/to/llama-cpp-build/bin}"; fi
+unset _MED
 
 # --- Durable model + artifact store (network/bulk storage is fine here) ---
 export OUTPUT_DIR="${OUTPUT_DIR:-$PWD/matrix-output}"
