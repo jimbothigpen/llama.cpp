@@ -46,12 +46,9 @@ esac; done
 : "${BENCH_BIN:=$(command -v llama-bench 2>/dev/null || true)}"
 [ -n "$BENCH_BIN" ] && [ -x "$BENCH_BIN" ] || { echo "ERROR: llama-bench not found (set BIN_DIR or BENCH_BIN)" >&2; exit 3; }
 
-# Default label = smart basename of BIN_DIR ('bin' → parent dir name)
-if [ -z "$LABEL" ] && [ -n "${BIN_DIR:-}" ]; then
-  _lbase="$(basename "$BIN_DIR")"
-  if [ "$_lbase" = "bin" ]; then _lbase="$(basename "$(dirname "$BIN_DIR")")"; fi
-  LABEL="$_lbase"
-fi
+# Default label = auto-detected <hw>-<backend> (gfx1150-rocm, gfx1103-hsa1102-rocm, T4-cuda, …):
+# hardware-honest + collision-free across hosts. Override with --label. (gq_detect_label from generate-quants.sh)
+[ -z "$LABEL" ] && LABEL="$(gq_detect_label "${BIN_DIR:-}")"
 : "${LABEL:=default}"
 
 # Result CSVs + logs live under OUTPUT_DIR/matrices (MATRICES_DIR from generate-quants.sh).

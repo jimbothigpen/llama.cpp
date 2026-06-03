@@ -41,12 +41,9 @@ esac; done
 : "${SPEC_BIN:=$(command -v llama-speculative-simple 2>/dev/null || true)}"
 [ -n "$SPEC_BIN" ] && [ -x "$SPEC_BIN" ] || { echo "ERROR: llama-speculative-simple not found (set BIN_DIR or SPEC_BIN)" >&2; exit 3; }
 
-# Default label = smart basename of BIN_DIR (parent if basename is literally 'bin')
-if [ -z "$LABEL" ] && [ -n "${BIN_DIR:-}" ]; then
-  _lbase="$(basename "$BIN_DIR")"
-  if [ "$_lbase" = "bin" ]; then _lbase="$(basename "$(dirname "$BIN_DIR")")"; fi
-  LABEL="$_lbase"
-fi
+# Default label = auto-detected <hw>-<backend> (gfx1150-rocm, gfx1103-hsa1102-rocm, T4-cuda, …):
+# hardware-honest + collision-free across hosts. Override with --label. (gq_detect_label from generate-quants.sh)
+[ -z "$LABEL" ] && LABEL="$(gq_detect_label "${BIN_DIR:-}")"
 : "${LABEL:=default}"
 
 GPU_EXCL="${GPU_EXCL:-$HERE/scripts/gpu-exclusive-run.sh}"

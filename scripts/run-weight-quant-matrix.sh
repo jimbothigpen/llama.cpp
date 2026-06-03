@@ -47,12 +47,9 @@ esac; done
 [ -n "$BENCH_BIN" ] && [ -x "$BENCH_BIN" ] || { echo "ERROR: llama-bench not found (set BIN_DIR or BENCH_BIN)" >&2; exit 3; }
 [ -n "$PPL_BIN"   ] && [ -x "$PPL_BIN"   ] || { echo "ERROR: llama-perplexity not found (set BIN_DIR or PPL_BIN)" >&2; exit 3; }
 
-# Default label = smart basename of BIN_DIR ('bin' → parent dir name)
-if [ -z "$LABEL" ] && [ -n "${BIN_DIR:-}" ]; then
-  _lbase="$(basename "$BIN_DIR")"
-  if [ "$_lbase" = "bin" ]; then _lbase="$(basename "$(dirname "$BIN_DIR")")"; fi
-  LABEL="$_lbase"
-fi
+# Default label = auto-detected <hw>-<backend> (gfx1150-rocm, gfx1103-hsa1102-rocm, T4-cuda, …):
+# hardware-honest + collision-free across hosts. Override with --label. (gq_detect_label from generate-quants.sh)
+[ -z "$LABEL" ] && LABEL="$(gq_detect_label "${BIN_DIR:-}")"
 : "${LABEL:=default}"
 
 PPL_WRAP="${PPL_WRAP:-$HERE/ppl-run.sh}"   # co-located canonical PPL wrapper (ships beside this script)

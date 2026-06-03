@@ -106,6 +106,42 @@ SKIP_QUANT_TYPES=(BF16 F16 COPY TQ1_0 TQ2_0)
 # (these are what the run-*-matrix.sh scripts reuse when they `source` this file)
 gq_in_list() { local x="$1"; shift; local e; for e in "$@"; do [ "$e" = "$x" ] && return 0; done; return 1; }
 gq_mtp_tag() { [ "${INCLUDE_MTP:-0}" = "1" ] && printf -- "-MTP" || printf ""; }
+
+# ---- Hardware-honest run label: <hw>-<backend> (used to tag matrix CSV rows) ----
+# hw = physical accelerator (gfx####/T4/P100/…); on ROCm with HSA_OVERRIDE_GFX_VERSION active, a
+# `-hsa<target>` qualifier is appended (kernels compiled for a different gfx than the silicon) — so the
+# label is honest for BOTH throughput (physical device) AND PPL/reproducibility (override target flagged).
+gq_hsa_to_gfx() { case "$1" in 11.0.2) echo gfx1102;; 11.0.0) echo gfx1100;; 10.3.0) echo gfx1030;; 9.0.*) echo gfx90a;; *) echo "gfx${1//./}";; esac; }
+gq_detect_backend() {
+  local b="${1:-${BIN_DIR:-}}"
+  case "$b" in *vulkan*) echo vulkan; return;; *rocm*|*hip*) echo rocm; return;; *cuda*|*cublas*) echo cuda; return;; esac
+  if command -v nvidia-smi >/dev/null 2>&1; then echo cuda
+  elif command -v rocminfo >/dev/null 2>&1; then echo rocm
+  else echo cpu; fi
+}
+gq_detect_hw() {
+  local backend="$1"
+  case "$backend" in
+    cuda)
+      local name n
+      name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | grep -oiE 'T4|P100|V100|A100|H100|L40|L4|A10|RTX[0-9]+|[34]090' | head -1)
+      n=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -c . )
+      [ -z "$name" ] && name=gpu
+      [ "${n:-1}" -gt 1 ] && echo "${name}x${n}" || echo "$name" ;;
+    rocm|vulkan)
+      local phys
+      phys=$(env -u HSA_OVERRIDE_GFX_VERSION rocminfo 2>/dev/null | grep -m1 -oE 'gfx[0-9a-f]+')
+      [ -z "$phys" ] && phys=$(vulkaninfo --summary 2>/dev/null | grep -m1 -oE 'gfx[0-9a-f]+')
+      [ -z "$phys" ] && phys=gfxUNK
+      if [ "$backend" = rocm ] && [ -n "${HSA_OVERRIDE_GFX_VERSION:-}" ]; then
+        local ovr; ovr=$(gq_hsa_to_gfx "$HSA_OVERRIDE_GFX_VERSION")
+        [ "$ovr" != "$phys" ] && echo "${phys}-hsa${ovr#gfx}" || echo "$phys"
+      else echo "$phys"; fi ;;
+    *) echo cpu ;;
+  esac
+}
+# Compose <hw>-<backend>. Pass a backend hint (else inferred from BIN_DIR / available runtimes).
+gq_detect_label() { local be; be=$(gq_detect_backend "${1:-}"); echo "$(gq_detect_hw "$be")-$be"; }
 gq_model_dir()   { printf '%s/%s/%s' "$1" "$2" "$3"; }                  # <root> <org> <model>
 gq_src_dir()     { printf '%s/%s' "$1" "${SRC_SUBDIR:-src}"; }          # <model_dir>
 gq_bf16_name()   { printf '%s%s-BF16.gguf' "$1" "$(gq_mtp_tag)"; }      # <model>
