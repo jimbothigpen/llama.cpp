@@ -199,7 +199,9 @@ gq_same_path() { [ "$(readlink -m -- "$1")" = "$(readlink -m -- "$2")" ]; }
 # publish a staged artifact to its output path (no-op if staging==output)
 gq_publish() {  # <staged> <output>
   gq_same_path "$1" "$2" && return 0
-  echo "    publish → $2"; df -h "$(dirname "$2")" | tail -1 | awk '{print "      output fs: "$4" free"}'
+  # progress → stderr (NOT stdout): gq_publish is called inside $(gq_ensure_mtp_bf16 ...) whose stdout is
+  # captured as the returned path; stdout logs here corrupted the --imat-mtp src= arg (multi-line path bug).
+  echo "    publish → $2" >&2; df -h "$(dirname "$2")" | tail -1 | awk '{print "      output fs: "$4" free"}' >&2
   cp -f "$1" "$2"
 }
 # true if the model snapshot declares an MTP / NextN head
