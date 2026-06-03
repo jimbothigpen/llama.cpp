@@ -1734,12 +1734,18 @@ static void ggml_cuda_op_mul_mat_cublas(
                 ggml_dequantize_iq4_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ3_KS) {
                 ggml_dequantize_iq3_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KS) {
+                ggml_dequantize_iq2_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ5_KS) {
+                ggml_dequantize_iq5_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KSS) {
                 ggml_dequantize_iq4_kss_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KT) {
                 ggml_dequantize_iq4_kt_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ3_KT) {
                 ggml_dequantize_iq3_kt_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ1_KT) {
+                ggml_dequantize_iq1_kt_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else {
                 const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(src0->type);
                 GGML_ASSERT(to_fp16_cuda != nullptr);
@@ -1806,12 +1812,18 @@ static void ggml_cuda_op_mul_mat_cublas(
                 ggml_dequantize_iq4_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ3_KS) {
                 ggml_dequantize_iq3_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KS) {
+                ggml_dequantize_iq2_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ5_KS) {
+                ggml_dequantize_iq5_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KSS) {
                 ggml_dequantize_iq4_kss_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KT) {
                 ggml_dequantize_iq4_kt_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ3_KT) {
                 ggml_dequantize_iq3_kt_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ1_KT) {
+                ggml_dequantize_iq1_kt_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else {
                 const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
                 GGML_ASSERT(to_fp32_cuda != nullptr);
@@ -5296,9 +5308,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     // Phase 5b-1b: row-meta KS family
                     case GGML_TYPE_IQ4_KS:
                     case GGML_TYPE_IQ3_KS:
+                    case GGML_TYPE_IQ2_KS:
+                    case GGML_TYPE_IQ5_KS:
                     case GGML_TYPE_IQ4_KSS:
                     case GGML_TYPE_IQ4_KT:
                     case GGML_TYPE_IQ3_KT:
+                    case GGML_TYPE_IQ1_KT:
                     // Phase 5b-2: no-row-meta 5/6-bit IK family
                     case GGML_TYPE_IQ5_K:
                     case GGML_TYPE_IQ6_K:

@@ -460,6 +460,17 @@ typedef struct {
 } block_iq2_k;
 static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
 
+// IQ2_KS: ik_llama.cpp 2-bit small (2.1875 bpw)
+// Row layout: 2-byte ggml_half row scale prepended (row_meta_size=2), then blocks below.
+// Per-block: 16-bit extra (low 8 = per-sub-block codebook-shift bits; bits 8..15 = per-sub-block
+//            scale high bits) + 4 scale bytes (4-bit low parts of 8 sub-block scales) + 64 qs bytes.
+typedef struct {
+    uint16_t extra;
+    uint8_t  scales[QK_K/64];
+    uint8_t  qs[QK_K/4];
+} block_iq2_ks;
+static_assert(sizeof(block_iq2_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4, "wrong iq2_ks block size/padding");
+
 // IQ4_KS: ik_llama.cpp 4-bit small (4.25 bpw)
 // Row layout: 4-byte float row scale prepended (row_meta_size=4), then blocks below.
 // Per-block: 8 scale bytes (1 codebook-shift bit + 7-bit signed-offset scale)
@@ -469,6 +480,18 @@ typedef struct {
     uint8_t qs[QK_K/2];          // 128 bytes: 4-bit indices, 2 per byte
 } block_iq4_ks;
 static_assert(sizeof(block_iq4_ks) == QK_K/32 + QK_K/2, "wrong iq4_ks block size/padding");
+
+// IQ5_KS: ik_llama.cpp 5-bit small (5.25 bpw)
+// Row layout: 4-byte float row scale prepended (row_meta_size=4), then blocks below.
+// Per-block: 8 scale bytes (1 codebook-shift bit + 7-bit signed scale, decoded (s&254)-127)
+//          + 128 qs bytes (4-bit low index, 2 sub-blocks per byte)
+//          + 32 qh bytes (5th index bit, packed per element, shift-selected per ib64).
+typedef struct {
+    uint8_t scales[QK_K/32];     // 8 bytes
+    uint8_t qs[QK_K/2];          // 128 bytes
+    uint8_t qh[QK_K/8];          // 32 bytes
+} block_iq5_ks;
+static_assert(sizeof(block_iq5_ks) == QK_K/32 + QK_K/2 + QK_K/8, "wrong iq5_ks block size/padding");
 
 // IQ3_KT: ik_llama.cpp trellis-coded 3-bit (3.0 bpw, per-row float scale, IS_ABS=true)
 // Row layout: [float row_scale][block_iq3_kt blocks].  Block format (96 bytes = 24 u32):
@@ -501,6 +524,20 @@ typedef struct {
     uint16_t qs[QK_K/8];          // 32 uint16_t = 64 bytes
 } block_iq2_kt;
 static_assert(sizeof(block_iq2_kt) == QK_K/4, "wrong iq2_kt block size");
+
+// IQ1_KT: ik_llama.cpp trellis-coded 1.75-bit (1.75 bpw, per-row float scale, IS_ABS=false)
+// Row layout: [float row_scale][block_iq1_kt blocks].  Block format (56 bytes):
+//   sh[0..7]  (8 B)  = per-sub-block: low nibble = iq4k scale index; high nibble = 13th
+//                      index bit for the 4 groups (bit 4+g for group g)
+//   ql[0..31] (32 B) = 8 low bits of the 13-bit index, one byte per group (32 groups)
+//   qh[0..15] (16 B) = 4 mid bits per group, 2 groups/byte (nibble each)
+// idx = ql[jj] | ((qh[jj%16]<<(8-4*(jj/16)))&0xf00) | ((sh[jj/4]<<(8-(jj%4)))&0x1000); seed=idx+4096
+typedef struct {
+    uint8_t sh[QK_K/32];          //  8 bytes
+    uint8_t ql[QK_K/8];           // 32 bytes
+    uint8_t qh[QK_K/16];          // 16 bytes
+} block_iq1_kt;
+static_assert(sizeof(block_iq1_kt) == QK_K/8 + QK_K/16 + QK_K/32, "wrong iq1_kt block size/padding");
 
 // IQ4_KSS: ik_llama.cpp 4-bit super-small (4.0 bpw)
 // Row layout: 4-byte float row scale prepended (row_meta_size=4), then blocks below.

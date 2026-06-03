@@ -2035,6 +2035,19 @@ struct block_iq6_k {
 // P3a: IQ2_KT trellis 2-bit. P3b: IQ3_KT trellis 3-bit.
 // These types have per-row metadata (float or half scale) before the block array.
 
+// IQ1_KT — ik_llama.cpp trellis-coded 1.75-bit (1.75 bpw, row_meta=4 = float row scale).
+// Block: 56 bytes = 14 u32 (sh[8]+ql[32]+qh[16]). Bound as raw uint32_t[].
+#define QUANT_K_IQ1_KT 256
+#define QUANT_R_IQ1_KT 1
+
+#if defined(DATA_A_IQ1_KT)
+#define QUANT_K QUANT_K_IQ1_KT
+#define QUANT_R QUANT_R_IQ1_KT
+#define QUANT_AUXF 1
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
 // IQ2_KT — ik_llama.cpp trellis-coded 2-bit (2.0 bpw, row_meta=4 = float row scale).
 // Block: 16 u32 = 64 bytes. No struct; bound as raw uint32_t[].
 #define QUANT_K_IQ2_KT 256
@@ -2086,6 +2099,18 @@ struct block_iq6_k {
 #define DATA_A_QUANT_K
 #endif
 
+// IQ2_KS — ik_llama.cpp 2-bit small (2.1875 bpw, row_meta=2 = ggml_half row scale).
+// Per block (70B = 35 u16): uint16 extra | uint8[4] scales | uint8[64] qs. Bound as uint16_t[].
+#define QUANT_K_IQ2_KS 256
+#define QUANT_R_IQ2_KS 1
+
+#if defined(DATA_A_IQ2_KS)
+#define QUANT_K QUANT_K_IQ2_KS
+#define QUANT_R QUANT_R_IQ2_KS
+#define A_TYPE uint16_t
+#define DATA_A_QUANT_K
+#endif
+
 // IQ4_KS — ik_llama.cpp 4-bit small (4.25 bpw, row_meta=4 = float row scale).
 // Per block: uint8[8] scales | uint8[128] qs. Bound as uint32_t[].
 #define QUANT_K_IQ4_KS 256
@@ -2094,6 +2119,18 @@ struct block_iq6_k {
 #if defined(DATA_A_IQ4_KS)
 #define QUANT_K QUANT_K_IQ4_KS
 #define QUANT_R QUANT_R_IQ4_KS
+#define A_TYPE uint32_t
+#define DATA_A_QUANT_K
+#endif
+
+// IQ5_KS — ik_llama.cpp 5-bit small (5.25 bpw, row_meta=4 = float row scale).
+// Per block: uint8[8] scales | uint8[128] qs | uint8[32] qh = 168 B. Bound as uint32_t[].
+#define QUANT_K_IQ5_KS 256
+#define QUANT_R_IQ5_KS 1
+
+#if defined(DATA_A_IQ5_KS)
+#define QUANT_K QUANT_K_IQ5_KS
+#define QUANT_R QUANT_R_IQ5_KS
 #define A_TYPE uint32_t
 #define DATA_A_QUANT_K
 #endif

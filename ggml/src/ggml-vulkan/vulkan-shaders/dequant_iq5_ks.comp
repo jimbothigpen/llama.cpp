@@ -1,0 +1,87 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ5_KS — ik_llama.cpp 5-bit small (5.25 bpw, row_meta=4)
+// Row layout: [float d_row][block_0 (168B)][block_1]...[block_{nb-1}]
+//
+// Per block (168 bytes = 42 u32):
+//   uint8_t scales[8]  (offset 0,   u32 0..1)   — (s & 254) - 127 signed scale; bit0 = codebook shift
+//   uint8_t qs[128]    (offset 8,   u32 2..33)  — 4-bit low index, 2 sub-blocks/byte
+//   uint8_t qh[32]     (offset 136, u32 34..41) — 5th index bit, shift-selected per ib64
+//
+// Buffer bound as uint32_t[] (168B = 42 u32, row stride 4 + nb*168 is 4-aligned).
+// Layout (CPU-exact): 4 ib64 groups of 64; group ib64 holds sub-blocks 2*ib64 (low nibble,
+// qh bit 2*ib64) in elems 0..31 and 2*ib64+1 (high nibble, qh bit 2*ib64+1) in elems 32..63.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq5nl_values[64] = int[64](
+    -126,-114,-103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6,
+      -1,   5,  11,  17,  23,  29,  36,  43,  51,  59,  68,  77,  87,  97, 109, 121,
+    -124,-112,-101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10,  -4,
+       1,   7,  13,  19,  25,  31,  38,  45,  53,  61,  70,  79,  89,  99, 111, 123
+);
+
+void main() {
+    const uint nb           = p.K / 256;
+    const uint row_size_u32 = 1 + nb * 42;          // 1 (d_row) + nb*42 (blocks)
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const uint block_u32 = row_u32 + 1 + ib_in_row * 42;   // u32 base of this block
+    const uint qs_u32    = block_u32 + 2;                   // qs starts at byte 8
+    const uint qh_u32    = block_u32 + 34;                  // qh starts at byte 136
+
+    const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+    // Scales: 8 bytes in u32[0..1] of the block.
+    const uint sc03 = data_a[block_u32 + 0];   // scales[0..3]
+    const uint sc47 = data_a[block_u32 + 1];   // scales[4..7]
+    float dl[8];
+    uint  cb_off[8];   // codebook offset 0 or 32
+    [[unroll]] for (uint ib = 0; ib < 8; ++ib) {
+        const uint sc_word = (ib < 4) ? sc03 : sc47;
+        const uint sc_byte = (sc_word >> ((ib & 3) * 8)) & 0xff;
+        dl[ib]     = d_row * float(int(sc_byte & 254) - 127);
+        cb_off[ib] = (sc_byte & 1) << 5;
+    }
+
+    // 64 threads × 4 outputs = 256.  Thread t writes y[4t..4t+3].
+    // For output element k:  ib64 = k>>6, pos = k&63, nibh = pos>=32, j = pos&31, ib = 2*ib64+nibh.
+    //   qs byte index = 32*ib64 + j ;  nibble = nibh? hi : lo ;  qh bit shift = 2*ib64 + nibh.
+    const uint tid = gl_LocalInvocationID.x;
+    [[unroll]] for (uint r = 0; r < 4; ++r) {
+        const uint k    = tid * 4 + r;
+        const uint ib64 = k >> 6;
+        const uint pos  = k & 63;
+        const uint nibh = pos >> 5;          // 0 or 1
+        const uint j    = pos & 31;          // 0..31
+        const uint ib   = 2*ib64 + nibh;     // sub-block 0..7
+
+        const uint qs_byte_idx = 32*ib64 + j;            // 0..127
+        const uint qs_w  = data_a[qs_u32 + (qs_byte_idx >> 2)];
+        const uint qs_b  = (qs_w >> ((qs_byte_idx & 3) * 8)) & 0xff;
+        const uint nib   = (nibh == 0u) ? (qs_b & 0xf) : (qs_b >> 4);
+
+        const uint qh_w  = data_a[qh_u32 + (j >> 2)];
+        const uint qh_b  = (qh_w >> ((j & 3) * 8)) & 0xff;
+        const uint qhbit = (qh_b >> (2*ib64 + nibh)) & 1u;
+
+        const uint idx5  = nib | (qhbit << 4);
+        data_b[ib_global * 256 + k] = D_TYPE(dl[ib] * float(iq5nl_values[cb_off[ib] + idx5]));
+    }
+}

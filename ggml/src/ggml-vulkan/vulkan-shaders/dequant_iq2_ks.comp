@@ -1,0 +1,99 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ2_KS — ik_llama.cpp 2-bit small (2.1875 bpw, row_meta=2)
+// Row layout in memory: [ggml_half d][block_0 (70B)][block_1]...[block_{nb-1}]
+//
+// Per block (70 bytes = 35 u16):
+//   uint16_t extra        (offset 0)            -> u16[0]
+//   uint8_t  scales[4]    (offset 2)            -> u16[1..2]
+//   uint8_t  qs[64]       (offset 6)            -> u16[3..34]
+//
+// Bound as uint16_t[]; byte offsets computed manually because each row begins
+// with a 2-byte d that breaks tight block_iq2_ks[] indexing.
+//
+// Dispatch: one workgroup per super-block (256 elements). 64 threads cooperate;
+// each thread writes 4 elements.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint16_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const int iq2nl_values_const[8] = int[8](
+    -31, -13, 1, 17,   -26, -8, 6, 22
+);
+
+void main() {
+    const uint nb           = p.K / 256;          // blocks per row
+    const uint row_size_u16 = 1 + nb * 35;        // u16 elements per row (1 d + 35/block)
+    const uint total_blocks = p.nel / 256;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u16 = row * row_size_u16;
+    const float d = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+    const uint block_u16 = row_u16 + 1 + ib_in_row * 35;
+
+    const uint extra = uint(data_a[block_u16]);   // u16[0]
+
+    // scales[4] packed in u16[1..2]
+    const uint sc01 = uint(data_a[block_u16 + 1]);
+    const uint sc23 = uint(data_a[block_u16 + 2]);
+    uint sc[4];
+    sc[0] =  sc01        & 0xff;
+    sc[1] = (sc01 >> 8 ) & 0xff;
+    sc[2] =  sc23        & 0xff;
+    sc[3] = (sc23 >> 8 ) & 0xff;
+
+    // 8 sub-block scales (proven CPU/CUDA layout). For sub-block sb:
+    //   ls = (scales[sb/2] nibble) | (extra-bit (8+sb) << 4), biased -16.
+    // sb even -> low nibble, sb odd -> high nibble. The 5th scale bit lives in the
+    // HIGH byte of extra (bits 8..15), NOT bits 4..11.
+    float dl[8];
+    for (uint ib64 = 0u; ib64 < 4u; ++ib64) {
+        const uint sbA = 2u*ib64 + 0u;
+        const uint sbB = 2u*ib64 + 1u;
+        int ls1 = int(sc[ib64] & 0xf) | (int((extra >> (8u + sbA)) & 1u) << 4);
+        int ls2 = int(sc[ib64] >> 4 ) | (int((extra >> (8u + sbB)) & 1u) << 4);
+        dl[sbA] = d * float(ls1 - 16);
+        dl[sbB] = d * float(ls2 - 16);
+    }
+
+    // 64 threads: sb = tid/8 (0..7 sub-block), quarter = tid%8 → 4 elements each.
+    const uint tid     = gl_LocalInvocationID.x;
+    const uint sb      = tid / 8;     // 0..7 sub-block index
+    const uint quarter = tid % 8;
+
+    // Proven CPU/CUDA qs layout (dequantize_block_iq2_ks):
+    //   sub-block sb (0..7): the 32 elements share qs byte-base 32*(sb/4) + e (e=0..31),
+    //   2-bit field at bit position 2*(sb%4). Output element = 32*sb + e.
+    const uint qs_base   = 32u * (sb / 4u);   // 0 for sb 0..3, 32 for sb 4..7
+    const uint qs_shift  = 2u * (sb % 4u);    // 0,2,4,6 for the four sub-blocks in a 128-group
+
+    // codebook shift bit: low byte of extra, bit = sb
+    const uint shift_bit  = (extra >> sb) & 1u;
+    const uint values_off = shift_bit << 2;   // 0 or 4 into iq2nl_values_const
+
+    const uint j_base = quarter * 4;
+    const uint y_base = ib_global * 256 + 32u * sb + j_base;
+
+    for (uint i = 0; i < 4; ++i) {
+        const uint e = j_base + i;                    // 0..31 within sub-block
+        const uint qs_byte_idx = qs_base + e;         // 0..63
+        // qs[] is 64 bytes = 32 u16 at u16 offset block_u16+3.
+        const uint qs_byte = (uint(data_a[block_u16 + 3 + qs_byte_idx / 2]) >> ((qs_byte_idx & 1) * 8)) & 0xff;
+        const uint idx = (qs_byte >> qs_shift) & 3u;
+        const int  val = iq2nl_values_const[values_off + idx];
+        data_b[y_base + i] = D_TYPE(dl[sb] * float(val));
+    }
+}

@@ -926,4 +926,320 @@ void ggml_vec_dot_iq3_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sumf;
 }
 
+// =============================================================================
+// IQ1_KT — 1.75 bpw trellis-coded (row_meta_size = 4: per-row float scale)
+//
+// QuantizerIQKT<block=32, group=8, bits=13, is_abs=false, is_int=true>:
+//   kBlockSize=32, kGroupSize=8, kNg=4, kNblock=8, kNumVal=8192, offset=4096.
+// Block layout (block_iq1_kt, 56 B): sh[8] ql[32] qh[16].
+//   idx[jj]  = ql[jj] | ((qh[jj%16] << (8-4*(jj/16))) & 0xf00)
+//                     | ((sh[jj/4]  << (8-(jj%4)))     & 0x1000)
+//   per-sub-block scale: dl = d_row * iq4k_values[sh[ib] & 0xf]
+// =============================================================================
+
+namespace {
+
+constexpr int kIQ1KT_GroupSize = IQ1KTParams::kGroupSize;  // 8
+constexpr int kIQ1KT_NumBits   = IQ1KTParams::kNumBits;    // 13
+constexpr int kIQ1KT_NumVal    = IQ1KTParams::kNumVal;     // 8192
+constexpr int kIQ1KT_BlockSize = 32;                       // sub-block (kBlockSize)
+constexpr int kIQ1KT_Ng        = kIQ1KT_BlockSize / kIQ1KT_GroupSize;  // 4
+constexpr int kIQ1KT_NBlock    = QK_K / kIQ1KT_BlockSize;  // 8
+constexpr int kIQ1KT_NumGroups = QK_K / kIQ1KT_GroupSize;  // 32
+constexpr int kIQ1KT_Offset    = 4096;
+
+// iq4k_values mirror (first 16 entries) for the per-sub-block scale LUT.
+// MUST match ggml-iqk-quants.c iq4k_values[0..15].
+static const int8_t kIQ1KT_iq4k_values[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+};
+
+static inline int iq1kt_best_index_iq4nl(float x) {
+    if (x <= kIQ1KT_iq4k_values[0])  return 0;
+    if (x >= kIQ1KT_iq4k_values[15]) return 15;
+    int ml = 0, mu = 15;
+    while (mu - ml > 1) {
+        int mav = (ml + mu) / 2;
+        if (x < kIQ1KT_iq4k_values[mav]) mu = mav; else ml = mav;
+    }
+    return x - kIQ1KT_iq4k_values[mu-1] < kIQ1KT_iq4k_values[mu] - x ? mu-1 : mu;
+}
+
+struct IQ1KT_Codebook {
+    IQKTCookedBook<kIQ1KT_GroupSize, kIQ1KT_NumBits> cb;
+    bool initialized = false;
+};
+static IQ1KT_Codebook g_iq1kt_codebook;
+static std::once_flag g_iq1kt_init_once;
+
+static void iq1kt_codebook_do_init() {
+    // k_neighbours must be large enough to populate the soft-bin index so the
+    // accelerated NN search actually reaches each query's true-nearest entry.
+    // ikllama constructs QuantizerIQ1KT(256, /*num_neighbours=*/32); IQ1_KT has
+    // only kNumVal=8192 entries spread over 3^8=6561 bins (~1.25 entries/bin), so
+    // k_neighbours=1 leaves most bins under-populated and the search misses the
+    // best codebook entry for the majority of groups (observed: 56% per-weight
+    // round-trip RMSE).  Match ikllama's 32 (cf. IQ2_KT=256, IQ3_KT=60 here).
+    iqkt_cooked_book_init<kIQ1KT_GroupSize, kIQ1KT_NumBits, false>(
+        g_iq1kt_codebook.cb, kIQ1KT_Offset, 32);
+    g_iq1kt_codebook.initialized = true;
+}
+static inline void iq1kt_codebook_init() {
+    std::call_once(g_iq1kt_init_once, iq1kt_codebook_do_init);
+}
+
+// Helper: pack a 13-bit index into ql/qh/sh for flat group jj (0..31).
+static inline void iq1kt_pack_index(block_iq1_kt * b, int jj, uint32_t idx) {
+    b->ql[jj] = (uint8_t)(idx & 0xff);                                   // 8 low
+    const int qh_byte = jj % 16;
+    const int qh_shift = (jj / 16) ? 4 : 0;                              // hi/lo nibble
+    b->qh[qh_byte] |= (uint8_t)(((idx >> 8) & 0xf) << qh_shift);         // 4 mid
+    b->sh[jj / 4]  |= (uint8_t)(((idx >> 12) & 0x1) << (4 + (jj % 4)));  // 13th bit
+}
+
+// Per-row IQ1_KT quantizer.  Two-stage: per-sub-block index+scale search, then a
+// row-level WLS refinement of d_row that picks each sub-block's iq4k scale index.
+static void quantize_row_iq1_kt_impl(const float * x, char * cy, int n_per_row,
+                                     const float * quant_weights) {
+    iq1kt_codebook_init();
+    const float * cb = g_iq1kt_codebook.cb.values.data();
+
+    const int nblock = n_per_row / QK_K;
+    float * dptr = (float *)cy;
+    block_iq1_kt * y = (block_iq1_kt *)(dptr + 1);
+
+    std::vector<float> weights(n_per_row);
+    std::vector<float> all_scales((size_t)nblock * kIQ1KT_NBlock, 0.f);
+    std::vector<int>   all_idx((size_t)nblock * kIQ1KT_NumGroups, 0);
+
+    // Importance weights: sigma^2 + x^2, scaled by imatrix when present.
+    {
+        constexpr float kEps2 = 1e-14f, kWeight = 1e-4f, kSigmaScale = 2.0f;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            const float * xbl = x + ibl * QK_K;
+            float * wbl = weights.data() + ibl * QK_K;
+            float sumx2 = 0;
+            for (int j = 0; j < QK_K; ++j) sumx2 += xbl[j] * xbl[j];
+            if (sumx2 < kEps2 * QK_K) { for (int j = 0; j < QK_K; ++j) wbl[j] = kWeight; continue; }
+            const float sigma2 = kSigmaScale * sumx2 / QK_K;
+            if (quant_weights) {
+                const float * qw = quant_weights + ibl * QK_K;
+                for (int j = 0; j < QK_K; ++j) wbl[j] = qw[j] * sqrtf(sigma2 + xbl[j]*xbl[j]);
+            } else {
+                for (int j = 0; j < QK_K; ++j) wbl[j] = 0.25f * sigma2 + xbl[j]*xbl[j];
+            }
+        }
+    }
+
+    float amax_row = 0;
+    for (int j = 0; j < n_per_row; ++j) amax_row = std::max(amax_row, std::abs(x[j]));
+    if (amax_row == 0.f) {
+        dptr[0] = 0.f;
+        std::memset(y, 0, (size_t)nblock * sizeof(block_iq1_kt));
+        return;
+    }
+
+    // Stage 1: per-sub-block best index set + a continuous scale estimate.
+    float max_scale = 0.f, amax_scale = 0.f;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        std::memset(&y[ibl], 0, sizeof(block_iq1_kt));
+        const float * xbl = x + ibl * QK_K;
+        float * sc = all_scales.data() + (size_t)ibl * kIQ1KT_NBlock;
+        for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+            const float * xb = xbl + ib * kIQ1KT_BlockSize;
+            const float * wb = weights.data() + ibl * QK_K + ib * kIQ1KT_BlockSize;
+            float amax = 0;
+            for (int j = 0; j < kIQ1KT_BlockSize; ++j) amax = std::max(amax, std::abs(xb[j]));
+            if (amax < 1e-16f) { sc[ib] = 0.f; continue; }
+            float scale_0 = std::max(90.f, 124.f * amax / amax_row);
+            int * idxslot = &all_idx[(size_t)ibl * kIQ1KT_NumGroups + ib * kIQ1KT_Ng];
+
+            // Match ikllama's Stage-1: try BOTH scale signs (+/- amax/scale_0) and a
+            // second scale_0-8 pass, keeping whichever gives the best WLS score.
+            // Searching only the positive sign (the previous port) biased every block
+            // to a positive effective scale and produced a negative row d, diverging
+            // from ground truth.  find_best (sumqx^2/sumq2) selects the better fit.
+            int   cand[kIQ1KT_Ng];
+            float best_d = 0.f, best_score = -1.f;
+            auto try_scale = [&](float dtry) {
+                if (dtry == 0.f) return;
+                float sumqx = 0, sumq2 = 0;
+                for (int ig = 0; ig < kIQ1KT_Ng; ++ig) {
+                    const float * xg = xb + ig * kIQ1KT_GroupSize;
+                    const float * wg = wb + ig * kIQ1KT_GroupSize;
+                    cand[ig] = iqkt_find_best_index<kIQ1KT_GroupSize, kIQ1KT_NumBits, false>(
+                        xg, wg, dtry, g_iq1kt_codebook.cb);
+                    const float * v = cb + (size_t)cand[ig] * kIQ1KT_GroupSize;
+                    for (int k = 0; k < kIQ1KT_GroupSize; ++k) {
+                        sumqx += wg[k] * v[k] * xg[k];
+                        sumq2 += wg[k] * v[k] * v[k];
+                    }
+                }
+                if (sumq2 <= 0.f) return;
+                const float score = sumqx * sumqx / sumq2;   // WLS fit quality
+                if (score > best_score) {
+                    best_score = score;
+                    best_d     = sumqx / sumq2;
+                    for (int ig = 0; ig < kIQ1KT_Ng; ++ig) idxslot[ig] = cand[ig];
+                }
+            };
+            try_scale( amax / scale_0);
+            try_scale(-amax / scale_0);
+            scale_0 -= 8.f;
+            if (scale_0 > 0.f) {
+                try_scale( amax / scale_0);
+                try_scale(-amax / scale_0);
+            }
+            sc[ib] = best_score > 0.f ? best_d : amax / std::max(90.f, 124.f * amax / amax_row);
+            const float as = std::abs(sc[ib]);
+            if (as > amax_scale) { amax_scale = as; max_scale = sc[ib]; }
+        }
+    }
+    if (max_scale == 0.f) { dptr[0] = 0.f; return; }
+
+    // Stage 2: pick row scale d via small grid search over the iq4k-quantized sub-scales.
+    float d = max_scale / kIQ1KT_iq4k_values[0];
+    float best = 0.f;
+    for (int itry = -9; itry <= 9; ++itry) {
+        const float id = (itry + kIQ1KT_iq4k_values[0]) / max_scale;
+        float sumqx = 0, sumq2 = 0;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            const float * xb = x + ibl * QK_K;
+            const float * wb = weights.data() + ibl * QK_K;
+            const float * sc = all_scales.data() + (size_t)ibl * kIQ1KT_NBlock;
+            for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+                const int ls = iq1kt_best_index_iq4nl(id * sc[ib]);
+                const float dl = kIQ1KT_iq4k_values[ls];
+                for (int ig = 0; ig < kIQ1KT_Ng; ++ig) {
+                    const float * v = cb + (size_t)all_idx[(size_t)ibl*kIQ1KT_NumGroups + ib*kIQ1KT_Ng + ig] * kIQ1KT_GroupSize;
+                    for (int k = 0; k < kIQ1KT_GroupSize; ++k) {
+                        const int jj = ig * kIQ1KT_GroupSize + k;
+                        const float q = dl * v[k];
+                        sumqx += wb[jj] * xb[jj] * q;
+                        sumq2 += wb[jj] * q * q;
+                    }
+                }
+                xb += kIQ1KT_BlockSize; wb += kIQ1KT_BlockSize;
+            }
+        }
+        if (sumq2 > 0 && sumqx*sumqx > best*sumq2) { d = sumqx / sumq2; best = d * sumqx; }
+    }
+
+    // Commit sub-block scale indices (low nibble of sh) using the chosen d.
+    const float id = d != 0.f ? 1.f / d : 0.f;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const float * sc = all_scales.data() + (size_t)ibl * kIQ1KT_NBlock;
+        for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+            y[ibl].sh[ib] = (uint8_t)iq1kt_best_index_iq4nl(id * sc[ib]);
+        }
+    }
+    dptr[0] = d;
+    if (d == 0.f) return;
+
+    // Stage 3: final index assignment at the committed per-sub-block scale; pack bits.
+    float sumqx = 0, sumq2 = 0;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const float * xbl = x + ibl * QK_K;
+        for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+            const float * xb = xbl + ib * kIQ1KT_BlockSize;
+            const float * wb = weights.data() + ibl * QK_K + ib * kIQ1KT_BlockSize;
+            const int   lsv = kIQ1KT_iq4k_values[y[ibl].sh[ib] & 0xf];
+            const float dl  = d * (float)lsv;
+            for (int ig = 0; ig < kIQ1KT_Ng; ++ig) {
+                const float * xg = xb + ig * kIQ1KT_GroupSize;
+                const float * wg = wb + ig * kIQ1KT_GroupSize;
+                const int gi = (dl != 0.f)
+                    ? iqkt_find_best_index<kIQ1KT_GroupSize, kIQ1KT_NumBits, false>(xg, wg, dl, g_iq1kt_codebook.cb)
+                    : 0;
+                const int jj = ib * kIQ1KT_Ng + ig;     // flat group 0..31
+                iq1kt_pack_index(&y[ibl], jj, (uint32_t)gi);
+                const float * v = cb + (size_t)gi * kIQ1KT_GroupSize;
+                for (int k = 0; k < kIQ1KT_GroupSize; ++k) {
+                    const float q = (float)lsv * v[k];
+                    sumqx += wg[k] * xg[k] * q;
+                    sumq2 += wg[k] * q * q;
+                }
+            }
+        }
+    }
+    if (sumq2 > 0) dptr[0] = (sumqx / sumq2) * 1.07f;   // ikllama final 1.07 fudge
+}
+
+}  // anonymous namespace (IQ1_KT)
+
+void dequantize_row_iq1_kt(const block_iq1_kt * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const float * dptr = (const float *)vx;
+    const float d = dptr[0];
+    const block_iq1_kt * x = (const block_iq1_kt *)(dptr + 1);
+    const int nb = (int)(k / QK_K);
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+            const float sl = d * (float)kIQ1KT_iq4k_values[x[ibl].sh[ib] & 0xf];
+            for (int ig = 0; ig < kIQ1KT_Ng; ++ig) {
+                const int jj = ib * kIQ1KT_Ng + ig;     // 0..31
+                uint32_t idx = (uint32_t)x[ibl].ql[jj]
+                    | (((uint32_t)x[ibl].qh[jj % 16] << (8 - 4 * (jj / 16))) & 0xf00u)
+                    | (((uint32_t)x[ibl].sh[jj / 4]  << (8 - (jj % 4)))      & 0x1000u);
+                iqkt_gen_group_int<kIQ1KT_GroupSize, false>((int)idx, kIQ1KT_Offset, y);
+                for (int kk = 0; kk < kIQ1KT_GroupSize; ++kk) y[kk] *= sl;
+                y += kIQ1KT_GroupSize;
+            }
+        }
+    }
+}
+
+size_t quantize_iq1_kt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_K == 0);
+    const size_t row_size = ggml_row_size(GGML_TYPE_IQ1_KT, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq1_kt_impl(src + row * n_per_row, qrow, (int)n_per_row, imatrix);
+        qrow += row_size;
+    }
+    return (size_t)nrows * row_size;
+}
+
+void quantize_row_iq1_kt_ref(const float * GGML_RESTRICT x, block_iq1_kt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_iq1_kt(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq1_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_iq1_kt_ref(x, (block_iq1_kt *)y, k);
+}
+
+void ggml_vec_dot_iq1_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                               const void * GGML_RESTRICT vx, size_t bx,
+                               const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    (void)nrc; (void)bx; (void)by; (void)bs;
+    const float * dptr = (const float *)vx;
+    const float d = dptr[0];
+    const block_iq1_kt * x = (const block_iq1_kt *)(dptr + 1);
+    const block_q8_K   * y = (const block_q8_K   *)vy;
+    const int nblock = n / QK_K;
+    float sumf = 0;
+    float gv[kIQ1KT_GroupSize];
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const float db = d * y[ibl].d;
+        const int8_t * q8 = y[ibl].qs;
+        for (int ib = 0; ib < kIQ1KT_NBlock; ++ib) {
+            const float sl = (float)kIQ1KT_iq4k_values[x[ibl].sh[ib] & 0xf];
+            for (int ig = 0; ig < kIQ1KT_Ng; ++ig) {
+                const int jj = ib * kIQ1KT_Ng + ig;
+                uint32_t idx = (uint32_t)x[ibl].ql[jj]
+                    | (((uint32_t)x[ibl].qh[jj % 16] << (8 - 4 * (jj / 16))) & 0xf00u)
+                    | (((uint32_t)x[ibl].sh[jj / 4]  << (8 - (jj % 4)))      & 0x1000u);
+                iqkt_gen_group_int<kIQ1KT_GroupSize, false>((int)idx, kIQ1KT_Offset, gv);
+                for (int kk = 0; kk < kIQ1KT_GroupSize; ++kk) sumf += db * sl * gv[kk] * (float)q8[kk];
+                q8 += kIQ1KT_GroupSize;
+            }
+        }
+    }
+    *s = sumf;
+}
+
 }  // extern "C"

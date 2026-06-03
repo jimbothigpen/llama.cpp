@@ -226,6 +226,105 @@ static void launch_mul_mat_vec_iq3_kt_q8_1(
 }
 
 // ============================================================================
+// IQ1_KT MMVQ kernel.  Per-row layout: float row scale + N block_iq1_kt (56 B:
+// sh[8] ql[32] qh[16]).  Trellis, GROUP_SIZE=8, NUM_BITS=13, offset=4096,
+// IS_ABS=false (signed outputs, NO abs).  Per-sub-block scale = iq4k_values[sh&0xf].
+//   idx[jj] = ql[jj] | ((qh[jj%16]<<(8-4*(jj/16)))&0xf00) | ((sh[jj/4]<<(8-(jj%4)))&0x1000)
+// ============================================================================
+static __global__ void mul_mat_vec_iq1_kt_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    constexpr uint32_t ka = 0xCBAC1FED;
+    constexpr uint32_t km = 0x3f3f3f3f;
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+
+    const int lane = threadIdx.x;
+
+    const char * row_ptr = (const char *)vx + (size_t)row * row_size_x;
+    const float row_scale = *(const float *)row_ptr;
+    const block_iq1_kt * x = (const block_iq1_kt *)(row_ptr + sizeof(float));
+
+    const block_q8_1 * y = (const block_q8_1 *)vy;
+
+    const int n_blocks = ncols_x / QK_K;
+    const int total_subblocks = n_blocks * 8;   // 8 sub-blocks per QK_K=256 superblock
+
+    float sumf = 0.0f;
+
+    for (int sb_flat = lane; sb_flat < total_subblocks; sb_flat += 32) {
+        const int blk  = sb_flat / 8;
+        const int ib32 = sb_flat % 8;   // sub-block 0..7
+
+        const block_iq1_kt * bq1 = &x[blk];
+        const block_q8_1 * bq8 = &y[blk * (QK_K / QK8_1) + ib32];
+
+        const int32_t * q8 = (const int32_t *)bq8->qs;  // 8 int32 = 32 int8
+
+        const int   sh_b = bq1->sh[ib32];
+        const float dl   = row_scale * (float)iq4k_values[sh_b & 0xf];
+
+        int sumi = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {   // 4 groups per sub-block (Ng=4)
+            const int jj = 4 * ib32 + j;     // flat group 0..31
+            const uint32_t idx = (uint32_t)bq1->ql[jj]
+                | (((uint32_t)bq1->qh[jj % 16] << (8 - 4 * (jj / 16))) & 0xf00u)
+                | (((uint32_t)bq1->sh[jj / 4]  << (8 - (jj % 4)))      & 0x1000u);
+            uint32_t val = idx + 4096u;
+
+            // First 4 elements of the 8-element group
+            int v4a = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                const int sv = ggml_cuda_dp4a((int)(val & km), 0x01010101, -126);
+                v4a |= (sv & 0xff) << (8 * k);   // signed, NOT abs (IS_ABS=false)
+            }
+            // Second 4 elements
+            int v4b = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                const int sv = ggml_cuda_dp4a((int)(val & km), 0x01010101, -126);
+                v4b |= (sv & 0xff) << (8 * k);
+            }
+
+            sumi = ggml_cuda_dp4a(v4a, q8[2 * j],     sumi);
+            sumi = ggml_cuda_dp4a(v4b, q8[2 * j + 1], sumi);
+        }
+
+        sumf += dl * __low2float(bq8->ds) * (float)sumi;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+
+    if (lane == 0) {
+        dst[row] = sumf;
+    }
+}
+
+static void launch_mul_mat_vec_iq1_kt_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq1_kt_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
 // IQ4_KS MMVQ kernel.  Per-row layout: float row scale + N block_iq4_ks (136 B
 // each: 8 scale bytes + 128 qs bytes).  Each sub-block (32 elements) has:
 //   - scale byte: low bit selects iq4k_values vs +16-shifted variant; high 7
@@ -845,6 +944,106 @@ static __device__ __forceinline__ uint32_t iq2k_lookup4(uint32_t idx_packed, uin
 
 extern __constant__ int8_t iq2nl_values_dev[];
 
+// ============================================================================
+// IQ2_KS MMVQ kernel.
+// Row layout: [half row_scale][N × block_iq2_ks (70 B: 2 extra + 4 scales + 64 qs)]
+// QK_K=256 elements split into 2 ib128 halves; each half holds 4 sub-blocks of 32
+// (scales d1..d4). Each lane processes one ib128 across all blocks, strided by 32.
+// 4-entry codebook; per-sub-block 1-bit shift selects iq2nl_values_dev[+4].
+// ============================================================================
+static __global__ void mul_mat_vec_iq2_ks_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+
+    const int lane = threadIdx.x;
+
+    const char * row_ptr = (const char *)vx + (size_t)row * row_size_x;
+    const float d = __half2float(*(const __half *)row_ptr);
+    const block_iq2_ks * x = (const block_iq2_ks *)(row_ptr + sizeof(__half));
+    const block_q8_1   * y = (const block_q8_1 *)vy;
+
+    const int n_blocks = ncols_x / QK_K;
+    const int total_halves = n_blocks * (QK_K / 128);   // n_blocks * 2
+
+    float sumf = 0.0f;
+
+    for (int hb_flat = lane; hb_flat < total_halves; hb_flat += WARP_SIZE) {
+        const int blk   = hb_flat / 2;
+        const int ib128 = hb_flat % 2;
+
+        const block_iq2_ks * bq2 = &x[blk];
+        const uint8_t * qs = bq2->qs + 32*ib128;          // 32 bytes = this half's 4 sub-blocks
+        const uint16_t  extra = bq2->extra >> (4*ib128);
+
+        // Four q8_1 blocks for this 128-element half.
+        const block_q8_1 * bq8 = &y[blk * (QK_K/QK8_1) + 4*ib128];
+        const int32_t * q8_1 = (const int32_t *)bq8[0].qs;
+        const int32_t * q8_2 = (const int32_t *)bq8[1].qs;
+        const int32_t * q8_3 = (const int32_t *)bq8[2].qs;
+        const int32_t * q8_4 = (const int32_t *)bq8[3].qs;
+
+        // Per-sub-block scales (5-bit, offset −16).
+        const int s1 = (int)(((bq2->scales[2*ib128+0] & 0xf) | ((extra >> 4) & 0x10)) - 16);
+        const int s2 = (int)(((bq2->scales[2*ib128+0] >>  4) | ((extra >> 5) & 0x10)) - 16);
+        const int s3 = (int)(((bq2->scales[2*ib128+1] & 0xf) | ((extra >> 6) & 0x10)) - 16);
+        const int s4 = (int)(((bq2->scales[2*ib128+1] >>  4) | ((extra >> 7) & 0x10)) - 16);
+
+        const int8_t * v1tab = (extra & 1) ? iq2nl_values_dev + 4 : iq2nl_values_dev;
+        const int8_t * v2tab = (extra & 2) ? iq2nl_values_dev + 4 : iq2nl_values_dev;
+        const int8_t * v3tab = (extra & 4) ? iq2nl_values_dev + 4 : iq2nl_values_dev;
+        const int8_t * v4tab = (extra & 8) ? iq2nl_values_dev + 4 : iq2nl_values_dev;
+
+        int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
+        for (int g = 0; g < 8; ++g) {     // 8 groups of 4 bytes = 32 elements
+            int32_t p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+            #pragma unroll
+            for (int b = 0; b < 4; ++b) {
+                const uint8_t qb = qs[4*g + b];
+                p1 |= ((int32_t)(uint8_t)v1tab[(qb >> 0) & 3]) << (8*b);
+                p2 |= ((int32_t)(uint8_t)v2tab[(qb >> 2) & 3]) << (8*b);
+                p3 |= ((int32_t)(uint8_t)v3tab[(qb >> 4) & 3]) << (8*b);
+                p4 |= ((int32_t)(uint8_t)v4tab[(qb >> 6) & 3]) << (8*b);
+            }
+            sumi1 = ggml_cuda_dp4a(p1, q8_1[g], sumi1);
+            sumi2 = ggml_cuda_dp4a(p2, q8_2[g], sumi2);
+            sumi3 = ggml_cuda_dp4a(p3, q8_3[g], sumi3);
+            sumi4 = ggml_cuda_dp4a(p4, q8_4[g], sumi4);
+        }
+
+        sumf += d * (__low2float(bq8[0].ds) * (float)s1 * (float)sumi1 +
+                     __low2float(bq8[1].ds) * (float)s2 * (float)sumi2 +
+                     __low2float(bq8[2].ds) * (float)s3 * (float)sumi3 +
+                     __low2float(bq8[3].ds) * (float)s4 * (float)sumi4);
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+
+    if (lane == 0) {
+        dst[row] = sumf;
+    }
+}
+
+static void launch_mul_mat_vec_iq2_ks_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq2_ks_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
 static __global__ void mul_mat_vec_iq2_k_q8_1_kernel(
         const void * __restrict__ vx,
         const void * __restrict__ vy,
@@ -1028,6 +1227,100 @@ static void launch_mul_mat_vec_iq5_k_q8_1(
 }
 
 // ============================================================================
+// IQ5_KS MMVQ kernel.  Per-row layout: float row scale + N block_iq5_ks (168 B:
+// 8 scales + 128 qs + 32 qh).  Per sub-block (32 elems): scale byte (bit0 =
+// codebook shift, bits1..7 = signed scale (s&254)-127); 16 qs bytes give the
+// low nibble, qh gives the 5th index bit shift-selected by the ib64 group.
+// Value codebook = iq5nl_values_dev (64 entries; +32 = shifted half).
+// ============================================================================
+static __global__ void mul_mat_vec_iq5_ks_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+    const int lane = threadIdx.x;
+
+    const char * row_ptr = (const char *)vx + (size_t)row * row_size_x;
+    const float row_scale = *(const float *)row_ptr;
+    const block_iq5_ks * x = (const block_iq5_ks *)(row_ptr + sizeof(float));
+    const block_q8_1 * y = (const block_q8_1 *)vy;
+
+    const int total_subblocks = (ncols_x / QK_K) * 8;   // 8 sub-blocks of 32 per superblock
+    float sumf = 0.0f;
+
+    for (int sb_flat = lane; sb_flat < total_subblocks; sb_flat += 32) {
+        const int blk  = sb_flat / 8;
+        const int ib32 = sb_flat % 8;          // 0..7 sub-block within superblock
+        const int ib64 = ib32 / 2;             // 0..3 group
+        const int half = ib32 & 1;             // 0 => low nibble + qh bit (2*ib64), 1 => high nibble + qh bit (2*ib64+1)
+
+        const block_iq5_ks * bq5 = &x[blk];
+        const block_q8_1   * bq8 = &y[blk * (QK_K / QK8_1) + ib32];
+        const int32_t * q8 = (const int32_t *)bq8->qs;     // 8 int32 = 32 int8
+
+        const uint8_t sc = bq5->scales[ib32];
+        const int     ls = (int)(sc & 254) - 127;
+        const int8_t * vals = iq5nl_values_dev + ((sc & 1) << 5);
+
+        // qs bytes for this sub-block: 32 bytes at qs + 32*ib64; this sub-block uses
+        // nibble selected by `half`, qh bit at (2*ib64 + half).
+        const uint8_t * qs = bq5->qs + 32*ib64;
+        const uint8_t * qh = bq5->qh;          // 32 bytes, bit-selected
+        const int qh_shift = 2*ib64 + half;
+
+        int sumi = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = j*4 + k;       // 0..15 element within sub-block
+                const int nib  = half ? (qs[e] >> 4) : (qs[e] & 0xf);
+                const int idx5 = nib | (((qh[e] >> qh_shift) & 1) << 4);
+                v |= ((uint32_t)(uint8_t)vals[idx5] << (k * 8));
+            }
+            sumi = ggml_cuda_dp4a(v, q8[j], sumi);
+        }
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int v = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                const int e    = 16 + j*4 + k;  // 16..31 element within sub-block
+                const int nib  = half ? (qs[e] >> 4) : (qs[e] & 0xf);
+                const int idx5 = nib | (((qh[e] >> qh_shift) & 1) << 4);
+                v |= ((uint32_t)(uint8_t)vals[idx5] << (k * 8));
+            }
+            sumi = ggml_cuda_dp4a(v, q8[j + 4], sumi);
+        }
+
+        sumf += row_scale * (float)ls * __low2float(bq8->ds) * (float)sumi;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+    if (lane == 0) dst[row] = sumf;
+}
+
+static void launch_mul_mat_vec_iq5_ks_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq5_ks_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
 // IQ6_K MMVQ kernel.  No row meta.  Per block_iq6_k:
 //   half d, uint16 extra (1 codebook-shift bit per 16-element group),
 //   scales[16] (direct int8 per 16-element group, no offset),
@@ -1132,13 +1425,16 @@ static void launch_mul_mat_vec_iq6_k_q8_1(
 
 bool ggml_cuda_iqk_mmvq_supported(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_IQ1_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
         case GGML_TYPE_IQ4_KS:
+        case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ3_KS:
+        case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ5_K:
@@ -1181,6 +1477,11 @@ void ggml_cuda_mul_mat_iqk_mmvq(ggml_backend_cuda_context & ctx,
                            ne10_padded, /*ne11=*/1, /*ne12=*/1, /*ne13=*/1, stream);
 
     switch (src0->type) {
+        case GGML_TYPE_IQ1_KT:
+            launch_mul_mat_vec_iq1_kt_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
         case GGML_TYPE_IQ3_KT:
             launch_mul_mat_vec_iq3_kt_q8_1(
                 src0->data, src1_q8_1.get(), (float *)dst->data,
@@ -1213,6 +1514,16 @@ void ggml_cuda_mul_mat_iqk_mmvq(ggml_backend_cuda_context & ctx,
             break;
         case GGML_TYPE_IQ3_KS:
             launch_mul_mat_vec_iq3_ks_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ2_KS:
+            launch_mul_mat_vec_iq2_ks_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ5_KS:
+            launch_mul_mat_vec_iq5_ks_q8_1(
                 src0->data, src1_q8_1.get(), (float *)dst->data,
                 (int)ne00, (int)ne01, row_size_x, stream);
             break;

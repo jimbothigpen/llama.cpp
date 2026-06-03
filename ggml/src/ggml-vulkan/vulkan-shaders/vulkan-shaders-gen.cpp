@@ -74,8 +74,11 @@ const std::vector<std::string> type_names = {
     "iq3_k",
     "iq4_k",
     "iq3_ks",
+    "iq2_ks",
     "iq4_ks",
+    "iq5_ks",
     "iq4_kss",
+    "iq1_kt",
     "iq2_kt",
     "iq4_kt",
     "iq3_kt",
@@ -602,7 +605,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         }
         // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
         // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
-        if (tname == "iq3_ks" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
+        if (tname == "iq3_ks" || tname == "iq2_ks" || tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq4_kss" || tname == "iq1_kt" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
 
@@ -731,7 +734,7 @@ void process_shaders() {
     for (const auto& tname : type_names) {
         // mul mat vec
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
-        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || tname == "wht4_0" || tname == "wht3_0" || tname == "iq4_ks" || tname == "iq4_kss" || tname == "iq4_kt" || tname == "iq3_kt") ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
+        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || tname == "wht4_0" || tname == "wht3_0" || tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq4_kss" || tname == "iq4_kt" || tname == "iq3_kt") ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
 
         string_to_spv("mul_mat_vec_" + tname + "_f32_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float"}, {"B_TYPEV2", "vec2"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}));
         string_to_spv("mul_mat_vec_" + tname + "_f16_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float16_t"}, {"B_TYPEV2", "f16vec2"}, {"B_TYPEV4", "f16vec4"}, {"D_TYPE", "float"}}));
@@ -772,8 +775,9 @@ void process_shaders() {
         // dequant_funcs.glsl backing which is not implemented for these types. Skip get_rows.
         if (tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" &&
             tname != "iq5_k" && tname != "iq6_k" &&
-            tname != "iq3_ks" && tname != "iq4_ks" && tname != "iq4_kss" &&
-            tname != "iq2_kt" && tname != "iq3_kt" && tname != "iq4_kt" &&
+            tname != "iq3_ks" && tname != "iq2_ks" && tname != "iq4_ks" &&
+            tname != "iq5_ks" && tname != "iq4_kss" &&
+            tname != "iq1_kt" && tname != "iq2_kt" && tname != "iq3_kt" && tname != "iq4_kt" &&
             tname != "iq2_kl") {
             shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
 

@@ -1,0 +1,97 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage  : require
+
+#include "dequant_head.glsl"
+
+// IQ1_KT — ik_llama.cpp trellis-coded 1.75-bit (1.75 bpw, row_meta=4 = float row scale).
+// Row layout: [float d_row][block_iq1_kt blocks].  Block = 56 bytes = 14 u32:
+//   bytes  0.. 7  = sh[8]  : per-sub-block (8 sub-blocks). low nibble = iq4k scale index,
+//                            high nibble bit (4+g) = 13th index bit of group g (g 0..3).
+//   bytes  8..39  = ql[32] : 8 low bits of the 13-bit index, one byte per group (32 groups).
+//   bytes 40..55  = qh[16] : 4 mid bits per group, 2 groups/byte (nibble each).
+//
+//   idx[jj] = ql[jj] | ((qh[jj%16] << (8-4*(jj/16))) & 0xf00) | ((sh[jj/4] << (8-(jj%4))) & 0x1000)
+//   per-sub-block scale: dl = d_row * iq4k_values[sh[jj/4] & 0xf]
+//   trellis seed = idx + 4096 ; IS_ABS=false (signed outputs)
+//
+// Dispatch: 1 WG per super-block (256 elements), 32 threads — one thread per group of 8.
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {uint32_t data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+const uint IQ1KT_KA     = 0xCBAC1FEDu;
+const uint IQ1KT_Offset = 4096u;
+
+const int iq1kt_iq4k_values[16] = int[16](
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113
+);
+
+void iq1kt_gen_group(uint idx, out float result[8]) {
+    uint x = idx + IQ1KT_Offset;
+    [[unroll]] for (int k = 0; k < 8; k++) {
+        x = IQ1KT_KA * x;
+        const uint s = x & 0x3f3f3f3fu;
+        const int sum =  int(s         & 0xffu)
+                       + int((s >>  8) & 0xffu)
+                       + int((s >> 16) & 0xffu)
+                       + int((s >> 24) & 0xffu);
+        result[k] = float(sum - 126);   // signed; no abs
+    }
+}
+
+// Read byte `b` (0-based) of the 56-byte block, given block base in u32 units.
+uint iq1kt_get_byte(uint block_u32, uint b) {
+    const uint word = data_a[block_u32 + (b >> 2)];
+    return (word >> ((b & 3u) * 8u)) & 0xffu;
+}
+
+void main() {
+    const uint nb           = p.K / 256u;
+    const uint row_size_u32 = 1u + nb * 14u;   // 1 float row_scale + nb * 14 u32/block
+    const uint total_blocks = p.nel / 256u;
+
+    const uint ib_global = gl_WorkGroupID.x;
+    if (ib_global >= total_blocks) return;
+
+    const uint row       = ib_global / nb;
+    const uint ib_in_row = ib_global - row * nb;
+
+    const uint row_u32   = row * row_size_u32;
+    const float d        = uintBitsToFloat(uint(data_a[row_u32]));
+    const uint block_u32 = row_u32 + 1u + ib_in_row * 14u;
+
+    const uint jj = gl_LocalInvocationID.x;     // flat group 0..31
+    const uint sb = jj >> 2;                     // sub-block 0..7  (jj/4)
+    const uint gi = jj & 3u;                      // group within sub-block 0..3 (jj%4)
+
+    // sh byte for this sub-block: bytes 0..7
+    const uint sh_byte = iq1kt_get_byte(block_u32, sb);
+    const float sl = d * float(iq1kt_iq4k_values[sh_byte & 0xfu]);
+
+    // ql byte for this group: bytes 8 + jj
+    const uint ql_byte = iq1kt_get_byte(block_u32, 8u + jj);
+
+    // qh byte: bytes 40 + (jj%16); nibble selected by (jj/16).
+    // Match the flat-group reconstruction exactly:
+    //   idx |= (qh[jj%16] << (8 - 4*(jj/16))) & 0xf00
+    const uint qh_byte = iq1kt_get_byte(block_u32, 40u + (jj % 16u));
+    const uint qh_mid  = (qh_byte << (8u - 4u * (jj / 16u))) & 0xf00u;
+
+    // 13th bit from sh: (sh[jj/4] << (8 - (jj%4))) & 0x1000
+    const uint sh_hi   = (sh_byte << (8u - gi)) & 0x1000u;
+
+    const uint idx = ql_byte | qh_mid | sh_hi;
+
+    float gv[8];
+    iq1kt_gen_group(idx, gv);
+
+    const uint y_base = ib_global * 256u + jj * 8u;
+    [[unroll]] for (uint i = 0u; i < 8u; i++) {
+        data_b[y_base + i] = D_TYPE(gv[i] * sl);
+    }
+}
