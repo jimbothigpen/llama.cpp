@@ -168,11 +168,18 @@ measure_one() {
   local pp_tps="" tg_tps="" bench_rc
   local log_bench="$LOG_DIR/wq-bench-${REPO_MODEL}-${t}-${LABEL}.log"
   echo "  [$t] BENCH → $(basename "$log_bench")"
+  # NOTE: deployed /opt llama-bench has no bare `-fit` flag — fit is `-fitt/--fit-target <MiB>`,
+  # default off. Passing `-fit off` made llama-bench print usage + exit 1 (lost all TG/PP). Omit it:
+  # default fit-target=off already means "no auto-fit, full -ngl 99 offload" (GTT covers oversize).
   timeout -k 30s "${BENCH_TIMEOUT}s" bash "$GPU_EXCL" "$log_bench" "$BENCH_BIN" \
-    -m "$run_gguf" --mmap 0 -ngl 99 -fa on -fit off -p 512 -n 128 -r "$BENCH_REPS"
+    -m "$run_gguf" --mmap 0 -ngl 99 -fa on -p 512 -n 128 -r "$BENCH_REPS"
   bench_rc=$?
-  pp_tps=$(awk '/pp512/ { for(i=1;i<=NF;i++) if($i~/^[0-9]+\.[0-9]+$/){print $i; exit} }' "$log_bench")
-  tg_tps=$(awk '/tg128/ { for(i=1;i<=NF;i++) if($i~/^[0-9]+\.[0-9]+$/){print $i; exit} }' "$log_bench")
+  # llama-bench markdown row: | name | SIZE GiB | PARAMS B | backend | ... | pp512 | <t/s> ± <sd> |
+  # The t/s is the first whitespace token of the LAST `|`-delimited data column. The old
+  # field-scan grabbed the first decimal on the line = the model SIZE (e.g. 16.68 GiB), recording
+  # garbage throughput. Parse by `|` and take col NF-1's leading number.
+  pp_tps=$(awk -F'|' '/pp512/ { split($(NF-1), a, " "); print a[1]; exit }' "$log_bench")
+  tg_tps=$(awk -F'|' '/tg128/ { split($(NF-1), a, " "); print a[1]; exit }' "$log_bench")
   local bench_status="OK"
   [ "$bench_rc" -ne 0 ] && bench_status="FAIL-rc${bench_rc}"
 
