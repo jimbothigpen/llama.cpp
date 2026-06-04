@@ -9,9 +9,56 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b848 shipped 2026-06-01.
+HEAD: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b848 shipped 2026-06-01.
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up). RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+
+### Changed — weight-quant matrix: PPL-reference + bench-only split methodology (2026-06-04)
+
+`a7a2a1d0d`. Refactors the weight-quantization matrix measurement strategy. PPL is
+expensive and quality is host-invariant, so a single reference configuration measures
+full 50-chunk PPL for every quantization type; every other measurement leg runs
+bench-only (pp512 / tg128) plus a short 5-chunk PPL sanity sample on a fixed quant
+subset. Changed: `scripts/run-weight-quant-matrix.sh` (−55 / +208 LOC), new
+`scripts/weight-matrix-driver.sh` (+79 LOC) for per-cell dispatch.
+
+### Changed — generate-quants.sh: mmproj auto-generation for multimodal models (2026-06-04)
+
+`c5d918feb`. `scripts/generate-quants.sh` now auto-builds the `<model>-mmproj-F16.gguf`
+projector for multimodal checkpoints (vision / audio tower). Step 2b runs
+`convert_hf_to_gguf.py --mmproj` and emits a companion `<model>-mmproj-f16.gguf`.
+Gate: `gq_is_multimodal()` checks `vision_config` / `audio_config` in `config.json`
+(`BUILD_MMPROJ=auto|1|0`). Projector is kept at full F16 precision (`MMPROJ_OUTTYPE=f16`)
+and is outside the quantization type ladder. New `--mmproj-only` flag builds just the
+projector (skips BF16 / imatrix / quant + the `QUANTIZE_BIN` requirement) for targeted
+runs. Qwen3.5 / Qwen3.6 and other multimodal checkpoints are handled automatically.
+
+### Changed — WHT3_0/WHT4_0 added to generate-quants quant ladder (non-imatrix) (2026-06-04)
+
+`b57d308f6`. Adds a `WHT_TYPES` family (`WHT3_0 WHT4_0`) to `ALL_QUANT_TYPES` in
+`scripts/generate-quants.sh`, propagating to matrix scripts via `source`. WHT types were
+held out of `ALL_QUANT_TYPES` pending the imatrix audit that shipped in `a6ccf0bfa`;
+they are now included. Deliberately excluded from `IMATRIX_REQUIRED_TYPES` — RHT
+rotation misaligns original-basis importance weights (see `a6ccf0bfa` below).
+
+### Fixed — WHT3_0/WHT4_0: imatrix path disabled (rotation misaligns importance weights) (2026-06-04)
+
+`a6ccf0bfa`. Root-cause audit: `WHT3_0` and `WHT4_0` were erroneously marked
+imatrix-required (ADR-016 port assumption). The forward RHT mixes all 32 columns of a
+block, so post-rotation coefficient `buf[j]` no longer corresponds to original column
+`j`; weighting the rotated residual by original-basis importance `iw[j]` misaligns
+importance with the rotated coefficient and measurably degrades quality.
+
+Fix: both types quantize unweighted in scale search and WLS refinement, byte-for-byte
+matching the `TheTom/llama-cpp-turboquant` upstream reference. `tensor_requires_imatrix()`
+returns false for both types — no imatrix is needed or beneficial.
+
+**A/B PPL gate (Qwen3.5-9B WHT3_0, wikitext-2-raw, 30 chunks, ROCm):**
+- with-imatrix (defect): PPL 8.6105 ±0.092
+- no-imatrix (fixed): PPL **7.2728** ±0.074 — −15.5%; matches and beats the upstream reference (7.6776)
+
+Changed: `ggml/src/ggml-turbo-quant.c`, `src/llama-quant.cpp`, `scripts/generate-quants.sh`
+(3 files, +45/−32). See also `docs/features/wht-weight-quants.md` §2 (updated).
 
 ### Changed — `scripts/` standardized + internal tooling purged (2026-06-02)
 

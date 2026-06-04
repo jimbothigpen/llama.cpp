@@ -1,6 +1,6 @@
 # WHT Weight Quantization (`WHT3_0` / `WHT4_0`)
 
-> **Status: Stable** — CPU, CUDA/HIP, and Vulkan backends for both types; imatrix required.
+> **Status: Stable** — CPU, CUDA/HIP, and Vulkan backends for both types. WHT3_0 and WHT4_0 do **not** use imatrix — calibration-free.
 
 ---
 
@@ -13,19 +13,16 @@
 | `WHT3_0` | `GGML_TYPE_WHT3_0` (slot 80) | `MOSTLY_WHT3_0` (41) | 3-bit (8 centroids) | **4.0** | 16 (QK=32) | CPU, CUDA/HIP, Vulkan |
 | `WHT4_0` | `GGML_TYPE_WHT4_0` (slot 81) | `MOSTLY_WHT4_0` (42) | 4-bit (16 centroids) | **5.0** | 20 (QK=32) | CPU, CUDA/HIP, Vulkan |
 
-**TL;DR.** WHT4_0 competes with Q5_K_M — not Q4_K_M — because its true cost is ~5 bpw. A Walsh-Hadamard rotation applied before quantization flattens weight outliers and lets a compact fitted codebook achieve better quality than a plain low-bit quant at the same cost. Both types require an imatrix.
+**TL;DR.** WHT4_0 competes with Q5_K_M — not Q4_K_M — because its true cost is ~5 bpw. A Walsh-Hadamard rotation applied before quantization flattens weight outliers and lets a compact fitted codebook achieve better quality than a plain low-bit quant at the same cost. No imatrix calibration is needed.
 
 **Quick start:**
 
 ```bash
-# Generate imatrix
-llama-imatrix -m model-F16.gguf -f calibration.txt -o model.imatrix
-
 # Quantize to WHT4_0 (~5 bpw, competes with Q5_K_M)
-llama-quantize --imatrix model.imatrix model-F16.gguf model-WHT4_0.gguf WHT4_0
+llama-quantize model-F16.gguf model-WHT4_0.gguf WHT4_0
 
 # Quantize to WHT3_0 (~4 bpw, competes with Q4_0 / IQ4_XS)
-llama-quantize --imatrix model.imatrix model-F16.gguf model-WHT3_0.gguf WHT3_0
+llama-quantize model-F16.gguf model-WHT3_0.gguf WHT3_0
 
 # Run inference
 llama-cli -m model-WHT4_0.gguf --no-mmap -fa on -p "Hello"
@@ -41,37 +38,33 @@ The upstream names were `TQ3_1S` and `TQ4_1S`. They were renamed `WHT3_0` / `WHT
 
 ### Differences from upstream
 
-This fork adds ROCm and Vulkan backend support and retrofits the imatrix importance-weighting requirement (ADR-016) into the WLS scale refinement step. The core quantization algorithm and block layout are unchanged from TheTom's original. Model files quantized with TheTom's build are compatible; only the type names on the command line differ.
+This fork adds ROCm and Vulkan backend support. An imatrix path was initially ported (ADR-016), but a quantizer audit confirmed it measurably hurts quality: the forward RHT rotation mixes all 32 block columns, so weighting the rotated residual by the original-basis importance misaligns importance with the rotated coefficients. Both types now quantize unweighted, byte-for-byte matching TheTom's upstream reference. The core quantization algorithm and block layout are unchanged. Model files quantized with TheTom's build are compatible; only the type names on the command line differ.
 
 ---
 
 ## §2 Use in production
 
-### imatrix is required
+### imatrix is not used
 
-Both WHT3_0 and WHT4_0 are imatrix-mandatory (`src/llama-quant.cpp:778–779`). The WLS (weighted least-squares) scale refinement step during quantization uses per-element importance weights from the imatrix; skipping it yields substantially worse quality. `llama-quantize` will error if no imatrix is provided (token-embd and output tensors are exempt).
+WHT3_0 and WHT4_0 do **not** use an imatrix. The forward Walsh-Hadamard rotation mixes
+all 32 columns of each block, so post-rotation coefficient `buf[j]` no longer corresponds
+to original column `j`. Weighting the rotated residual by original-basis importance `iw[j]`
+misaligns importance with the rotated coefficient and measurably degrades quality. Both
+types quantize unweighted — the scale search and WLS refinement ignore the imatrix
+entirely. `tensor_requires_imatrix()` returns false for both types.
 
-See the [imatrix workflow primer](concepts/ik-quantization-family.md) for guidance on generating a calibration matrix.
+**A/B PPL confirming the fix (Qwen3.5-9B WHT3_0, wikitext-2-raw, 30 chunks, ROCm):**
+- with-imatrix (defect): PPL 8.6105 ±0.092
+- no-imatrix (fixed): PPL **7.2728** ±0.074 — −15.5%; matches and beats the upstream reference (7.6776)
 
 ### Quantization
 
 ```bash
-# Step 1: generate an imatrix from a representative dataset
-llama-imatrix \
-    -m model-F16.gguf \
-    -f calibration.txt \
-    -o model.imatrix \
-    -c 512 --chunks 200
-
-# Step 2: quantize
 llama-quantize \
-    --imatrix model.imatrix \
     model-F16.gguf \
     model-WHT4_0.gguf \
     WHT4_0
 ```
-
-Use the same imatrix for both types if quantizing a model family to multiple precision levels.
 
 ### Inference flags
 
@@ -97,7 +90,6 @@ Use the same imatrix for both types if quantizing a model family to multiple pre
 
 ### Potential drawbacks
 
-- **imatrix required** — there is no calibration-free fallback; plan for a one-time calibration step per base model.
 - **Name understates the cost** — `WHT4_0` is a 4-bit index quant that costs ~5 bpw; its honest peer is Q5_K_M. Evaluate against the right baseline.
 - **At 4–5 bpw the gap to F16 is already small** — the Hadamard edge over K-quants is real but modest; the benchmark matrix (below) will quantify it.
 
@@ -144,7 +136,7 @@ For each 32-weight block:
 
 1. **Forward Walsh-Hadamard rotation** (`tq3_0_rht_forward`, `:823–835`) — a ±1 sign pattern applied before and after log₂ butterfly stages, normalized by 1/√32. This spreads weight energy across the block, making the distribution approximately Gaussian.
 2. **Per-half-block RMS normalization** — independently for elements 0–15 and 16–31 (producing `d0` and `d1`).
-3. **Scale search** — WLS scale refinement over candidate scales using imatrix importance weights.
+3. **Scale search** — WLS scale refinement over candidate scales; importance weights are **not** applied (imatrix ignored; see §2).
 4. **Centroid quantization** — rotated coefficients are mapped to the nearest Lloyd-Max centroid fitted for a unit Gaussian: 8 levels (3-bit, WHT3_0) or 16 levels (4-bit, WHT4_0).
 
 Decode (`tq3_0_rht_inverse`, `:838–849`): unpack indices → centroid lookup → inverse WHT to restore the original weight domain.
