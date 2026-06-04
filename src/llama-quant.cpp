@@ -775,12 +775,17 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ1_S:
+            return true;
         case GGML_TYPE_WHT3_0:
         case GGML_TYPE_WHT4_0:
-            // ADR-016: yggdrasil WHT-rotated weight quants require imatrix.
-            // The WLS scale optimization in quantize_block_wht{3,4}_0 uses
-            // per-element importance weights for substantial PPL gain.
-            return true;
+            // WHT imatrix audit (2026-06-04): ADR-016 marked these imatrix-required
+            // on the assumption that per-element importance weighting helped. It does
+            // NOT: the RHT rotates the 32-column block, so original-basis importance
+            // weights are misaligned with the rotated coefficients and weighting them
+            // measurably HURT PPL (9B WHT3_0: 8.89 weighted vs 7.6776 unweighted, +16%).
+            // The quantizer now ignores imatrix (matches TheTom tq{3,4}_1s_ref), so
+            // these no longer require — nor benefit from — an importance matrix.
+            return false;
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ2_K:

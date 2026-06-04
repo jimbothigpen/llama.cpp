@@ -365,9 +365,9 @@ gq_main() {
   # ---- imatrix availability gate (ADR-016) ----
   local need_imatrix=0 t
   for t in "${SEL[@]}"; do gq_in_list "$t" "${IMATRIX_REQUIRED_TYPES[@]}" && need_imatrix=1; done
-  if [ "$need_imatrix" = 1 ] && [ -z "$IMATRIX_CORPUS" ]; then
-    echo "ERROR: requested types include imatrix-REQUIRED quants but IMATRIX_CORPUS is unset." >&2
-    echo "       Set IMATRIX_CORPUS=<semantic calibration corpus> or drop the IQ-K/KT/low-IQ types." >&2
+  if [ "$need_imatrix" = 1 ] && [ -z "$IMATRIX_CORPUS" ] && [ -z "$IMATRIX_FILE" ]; then
+    echo "ERROR: requested types include imatrix-REQUIRED quants but neither IMATRIX_CORPUS nor IMATRIX_FILE is set." >&2
+    echo "       Set IMATRIX_CORPUS=<semantic calibration corpus>, pass --imatrix-file <prebuilt.gguf>, or drop the IQ-K/KT/low-IQ types." >&2
     return 4
   fi
   if [ -n "$IMATRIX_CORPUS" ] && [ ! -f "$IMATRIX_CORPUS" ]; then
