@@ -102,8 +102,8 @@ _GQ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # NOTE: ALL_QUANT_TYPES is no longer the default type list; gq_enumerate_types() derives it from
 # the binary at runtime (Item 2b). These arrays are kept as the imatrix-required classification.
 IQ_K_TYPES=(IQ1_KT IQ2_K IQ2_KS IQ2_KL IQ2_KT IQ3_K IQ3_KS IQ3_KT IQ4_K IQ4_KS IQ4_KSS IQ4_KT IQ5_K IQ5_KS IQ6_K)
-IQ_PLAIN=(IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XS IQ3_M IQ4_XS IQ4_NL)
-K_QUANTS=(Q2_K Q3_K_S Q3_K_M Q3_K_L Q4_K_S Q4_K_M Q5_K_S Q5_K_M Q6_K)
+IQ_PLAIN=(IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XXS IQ3_XS IQ3_S IQ3_M IQ4_XS IQ4_NL)
+K_QUANTS=(Q2_K Q2_K_S Q3_K_S Q3_K_M Q3_K_L Q4_K_S Q4_K_M Q5_K_S Q5_K_M Q6_K)
 STD_QUANTS=(Q8_0 Q5_0 Q5_1 Q4_0 Q4_1)
 ALL_QUANT_TYPES=("${IQ_K_TYPES[@]}" "${IQ_PLAIN[@]}" "${K_QUANTS[@]}" "${STD_QUANTS[@]}")
 # IQ-K/KT + low-bit IQ families REQUIRE an imatrix (ADR-016, hard gate):
