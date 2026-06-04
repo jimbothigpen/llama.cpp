@@ -90,6 +90,14 @@ _GQ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${KEEP_SAFETENSORS:=1}"        # 1=keep <model>/src/ snapshot; 0=delete after BF16 convert
 : "${KEEP_BF16:=1}"               # 1=keep BF16 in OUTPUT; 0=delete after all quants are made
 
+# ---- mmproj (multimodal vision/audio projector) ----
+# Built directly from the HF safetensors snapshot via `convert_hf_to_gguf.py --mmproj` (a second pass
+# that exports the vision tower + projector, NOT the language model). It is NOT a quant-ladder type —
+# one companion file per model, kept high-precision (vision towers are tiny vs the LM and degrade if
+# quantized hard). Output name: <model>-mmproj-<OUTTYPE>.gguf (e.g. Qwen3.5-9B-mmproj-F16.gguf).
+: "${MMPROJ_OUTTYPE:=f16}"        # output type for the mmproj GGUF
+: "${BUILD_MMPROJ:=auto}"         # auto = build iff the snapshot declares a vision tower; 1 = force; 0 = never
+
 # ---- GPU offload for imatrix (CPU-only: NGL=0) ----
 : "${NGL:=99}"
 
@@ -166,6 +174,27 @@ gq_detect_label() { local be; be=$(gq_detect_backend "${1:-}"); echo "$(gq_detec
 gq_model_dir()   { printf '%s/%s/%s' "$1" "$2" "$3"; }                  # <root> <org> <model>
 gq_src_dir()     { printf '%s/%s' "$1" "${SRC_SUBDIR:-src}"; }          # <model_dir>
 gq_bf16_name()   { printf '%s%s-BF16.gguf' "$1" "$(gq_mtp_tag)"; }      # <model>
+gq_mmproj_name() { printf '%s-mmproj-%s.gguf' "$1" "$(printf '%s' "${MMPROJ_OUTTYPE}" | tr '[:lower:]' '[:upper:]')"; }  # <model> → Qwen3.5-9B-mmproj-F16.gguf (no MTP tag — vision is independent)
+gq_is_multimodal() {  # <src_dir> — true if the HF config declares a vision/audio tower
+  local cfg="$1/config.json"
+  [ -f "$cfg" ] && grep -qE '"(vision_config|vision_encoder|vision_tower|audio_config)"' "$cfg"
+}
+gq_build_mmproj() {  # <src_dir> <out_model_dir> <stg_model_dir> <model_name> — auto-gated, idempotent
+  local src="$1" out_md="$2" stg_md="$3" model="$4" want=0
+  case "${BUILD_MMPROJ}" in
+    1) want=1;; 0) want=0;;
+    *) gq_is_multimodal "$src" && want=1;;
+  esac
+  if [ "$want" != 1 ]; then echo "--- mmproj: not multimodal (or BUILD_MMPROJ=0) → skip" >&2; return 0; fi
+  local out stg; out="$out_md/$(gq_mmproj_name "$model")"; stg="$stg_md/$(gq_mmproj_name "$model")"
+  if [ -f "$out" ] && gq_ask_reuse "$out" "mmproj GGUF"; then
+    echo "--- mmproj present → reuse ($(basename "$out"))"; return 0
+  fi
+  echo "--- mmproj: convert → $(basename "$stg") (--mmproj --outtype $MMPROJ_OUTTYPE)"
+  python3 "$CONVERT_BIN" "$src" --mmproj --outfile "$stg" --outtype "$MMPROJ_OUTTYPE" \
+    || { echo "ERROR: mmproj convert failed" >&2; return 7; }
+  gq_publish "$stg" "$out"
+}
 gq_imatrix_name(){ printf '%s-imatrix.gguf' "$1"; }   # <model> — ONE shared, MTP-inclusive imatrix (no tag)
 # <model> <type> — with MTP quant marker when MTP_QUANT is set, INCLUDE_MTP=1, and differs from base
 gq_quant_name() {
@@ -298,11 +327,12 @@ gq_ask_reuse() {  # <path> <description>
 # ================================ pipeline ================================
 gq_main() {
   set -uo pipefail
-  local REPO="" TYPES_CSV="" BIN_DIR_ARG="" FORCE_ARG=0
+  local REPO="" TYPES_CSV="" BIN_DIR_ARG="" FORCE_ARG=0 MMPROJ_ONLY=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo)       REPO="$2"; shift 2;;
       --types)      TYPES_CSV="$2"; shift 2;;
+      --mmproj-only) MMPROJ_ONLY=1; shift;;
       --include-mtp) INCLUDE_MTP=1; shift;;
       --no-mtp)     INCLUDE_MTP=0; shift;;
       --assistant)  ASSISTANT=1; shift;;
@@ -330,15 +360,18 @@ gq_main() {
   fi
 
   # ---- resolve + validate binaries ----
-  local b ok=1
-  for b in CONVERT_BIN QUANTIZE_BIN; do
+  local b ok=1 _need_bins=(CONVERT_BIN QUANTIZE_BIN)
+  [ "${MMPROJ_ONLY:-0}" = 1 ] && _need_bins=(CONVERT_BIN)   # mmproj-only uses the converter, not the quantizer
+  for b in "${_need_bins[@]}"; do
     [ -n "${!b}" ] || { echo "ERROR: $b not found in \$PATH (set BIN_DIR or $b explicitly)" >&2; ok=0; }
   done
   [ "$ok" = 1 ] || return 3
 
-  # ---- selected types ----
+  # ---- selected types (skipped for --mmproj-only) ----
   local SEL=()
-  if [ -n "$TYPES_CSV" ]; then
+  if [ "${MMPROJ_ONLY:-0}" = 1 ]; then
+    :   # mmproj-only: no quant types needed
+  elif [ -n "$TYPES_CSV" ]; then
     IFS=',' read -r -a SEL <<<"$TYPES_CSV"
   else
     # Dynamic enumeration from binary (Item 2b) — auto-adapts to fork IK/turbo/OScaR vs mainline
@@ -399,6 +432,15 @@ gq_main() {
     return 6
   fi
 
+  # ---- --mmproj-only short-circuit: build just the vision projector from the snapshot, skip the LM pipeline ----
+  if [ "${MMPROJ_ONLY:-0}" = 1 ]; then
+    BUILD_MMPROJ=1   # explicit intent — attempt even if auto-detect is unsure (converter errors cleanly if no vision tower)
+    gq_build_mmproj "$SRC" "$OUT_MD" "$STG_MD" "$REPO_MODEL"
+    local mmrc=$?
+    echo "--- --mmproj-only: done (rc=$mmrc) — skipped BF16 + imatrix + quant ladder"
+    return $mmrc
+  fi
+
   # ---- Step 2: convert → BF16 (staged) ----
   local BF16_OUT BF16_STG
   BF16_OUT="$OUT_MD/$(gq_bf16_name "$REPO_MODEL")"
@@ -424,6 +466,11 @@ gq_main() {
       || { echo "ERROR: convert failed" >&2; return 7; }
     gq_publish "$BF16_STG" "$BF16_OUT"
   fi
+
+  # ---- Step 2b: mmproj (vision/audio projector) — auto-detected; multimodal models only ----
+  # Non-fatal to the quant ladder: a mmproj hiccup must not discard the (independent) weight quants.
+  gq_build_mmproj "$SRC" "$OUT_MD" "$STG_MD" "$REPO_MODEL" \
+    || echo "WARN: mmproj step failed (rc=$?) — continuing with the quant ladder" >&2
 
   # ---- Step 3: imatrix (staged) — ONE shared, MTP-INCLUSIVE imatrix per model ----
   local IMAT_OUT="" IMAT_STG="" IMAT_USE=""
