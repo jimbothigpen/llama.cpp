@@ -105,8 +105,12 @@ IQ_K_TYPES=(IQ1_KT IQ2_K IQ2_KS IQ2_KL IQ2_KT IQ3_K IQ3_KS IQ3_KT IQ4_K IQ4_KS I
 IQ_PLAIN=(IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XXS IQ3_XS IQ3_S IQ3_M IQ4_XS IQ4_NL)
 K_QUANTS=(Q2_K Q2_K_S Q3_K_S Q3_K_M Q3_K_L Q4_K_S Q4_K_M Q5_K_S Q5_K_M Q6_K)
 STD_QUANTS=(Q8_0 Q5_0 Q5_1 Q4_0 Q4_1)
-ALL_QUANT_TYPES=("${IQ_K_TYPES[@]}" "${IQ_PLAIN[@]}" "${K_QUANTS[@]}" "${STD_QUANTS[@]}")
-# IQ-K/KT + low-bit IQ families REQUIRE an imatrix (ADR-016, hard gate):
+# WHT_TYPES: Walsh-Hadamard-rotated weight quants. Deliberately NOT imatrix types — RHT rotates the
+# block so original-basis importance weights misalign with the rotated coeffs (imatrix HURTS them);
+# the quantizer ignores any imatrix for these (fix a6ccf0bfa). Kept OUT of IMATRIX_REQUIRED_TYPES.
+WHT_TYPES=(WHT3_0 WHT4_0)
+ALL_QUANT_TYPES=("${IQ_K_TYPES[@]}" "${IQ_PLAIN[@]}" "${K_QUANTS[@]}" "${STD_QUANTS[@]}" "${WHT_TYPES[@]}")
+# IQ-K/KT + low-bit IQ families REQUIRE an imatrix (ADR-016, hard gate). WHT is intentionally absent:
 IMATRIX_REQUIRED_TYPES=("${IQ_K_TYPES[@]}" "${IQ_PLAIN[@]}")
 
 # Types to skip when enumerating all types from the binary (Item 2b — LOCKED skip set):
