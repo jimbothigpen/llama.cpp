@@ -629,16 +629,16 @@ void ggml_cuda_mul_mat_vec_tq(ggml_backend_cuda_context & ctx,
     float       * dst_d  = (float *) dst->data;
     cudaStream_t stream = ctx.stream();
 
-    const int id = ggml_cuda_get_device();
-    const int cc = ggml_cuda_info().devices[id].cc;
-
-    // Multi-token (speculative / short prefill): per-warp weight reuse across tokens.
-    // Decode (ncols_dst == 1) keeps the proven shmem-sharing V12/V8 kernels on AMD/WHT3_0,
-    // where the separate-rotation multi path offers no benefit; NVIDIA WHT4_0 uses dp4a.
+    // Decode (ncols_dst == 1) and short multi-token batches both route to the fused
+    // *_multi<ncols_dst> path: dp4a int8 on NVIDIA WHT4_0, scalar/half elsewhere. The weight
+    // block is loaded once per warp-lane and reused across tokens, so single-token decode no
+    // longer pays the slow fp32 mul_mat_vec_wht*_v12 cost.
+    //
+    // The legacy fp32 V12/V8 decode kernels are retired from the default path but kept reachable
+    // via GGML_WHT_DECODE_V12=1 for single-binary A/B (throughput + PPL parity) validation.
     const int ncols_dst = src1->ne[1];
-    const bool decode_native = (ncols_dst == 1) &&
-                               !(!GGML_CUDA_CC_IS_AMD(cc) && src0->type == GGML_TYPE_WHT4_0);
-    if (!decode_native) {
+    static const bool use_legacy_v12_decode = (getenv("GGML_WHT_DECODE_V12") != nullptr);
+    if (!(ncols_dst == 1 && use_legacy_v12_decode)) {
         ggml_cuda_mul_mat_tq_multi(ctx, src0, src1, dst);
         return;
     }
