@@ -28,7 +28,15 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader & ml) {
     }
 
     // tok_embd is full target vocab; optional so compact drafts can inherit it from the target.
-    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab},       TENSOR_NOT_REQUIRED);
+    // EAGLE3 32K-vocab + d2t loader (TODO 174): a compact-vocab draft (d2t present) may ship its
+    // own draft-space token_embd ({n_embd, n_draft_vocab}), but the EAGLE3 driver feeds the draft
+    // *target-space* token ids (last accepted target token + sampled ids already scattered to the
+    // target vocab in llama-context.cpp), which a draft-space table cannot index. Skip the draft's
+    // token_embd so the target's full-vocab tok_embd is inherited at
+    // common_speculative_setup_draft_model(); loading the compact one would index out of range at
+    // decode. (TENSOR_SKIP also bypasses the strict vocab-dim check that otherwise rejects the load.)
+    const int tok_embd_flags = TENSOR_NOT_REQUIRED | (d2t_meta ? TENSOR_SKIP : 0);
+    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab},       tok_embd_flags);
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},                0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, TENSOR_NOT_REQUIRED);
     if (!output && tok_embd) {

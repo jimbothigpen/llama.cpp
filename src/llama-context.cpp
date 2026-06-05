@@ -2103,8 +2103,32 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                     static thread_local std::vector<int64_t> d2t_map;
                     if ((int64_t) d2t_map.size() != model.d2t->ne[0]) {
-                        d2t_map.resize(model.d2t->ne[0]);
-                        ggml_backend_tensor_get(model.d2t, d2t_map.data(), 0, d2t_map.size()*sizeof(int64_t));
+                        // EAGLE3 32K-vocab + d2t loader (TODO 174): d2t is a draft->target offset
+                        // table whose stored dtype varies by converter (SpecForge ships F32; others
+                        // I32/I64). Read it in its native width and normalize to int64 offsets.
+                        // Previously this unconditionally read sizeof(int64_t) per element, which
+                        // over-reads (and aborts in ggml_backend_tensor_get) for a 4-byte F32/I32 d2t.
+                        const int64_t nd = model.d2t->ne[0];
+                        d2t_map.resize(nd);
+                        switch (model.d2t->type) {
+                            case GGML_TYPE_I64:
+                                ggml_backend_tensor_get(model.d2t, d2t_map.data(), 0, nd*sizeof(int64_t));
+                                break;
+                            case GGML_TYPE_I32: {
+                                std::vector<int32_t> tmp(nd);
+                                ggml_backend_tensor_get(model.d2t, tmp.data(), 0, nd*sizeof(int32_t));
+                                for (int64_t j = 0; j < nd; ++j) { d2t_map[j] = tmp[j]; }
+                                break;
+                            }
+                            case GGML_TYPE_F32: {
+                                std::vector<float> tmp(nd);
+                                ggml_backend_tensor_get(model.d2t, tmp.data(), 0, nd*sizeof(float));
+                                for (int64_t j = 0; j < nd; ++j) { d2t_map[j] = (int64_t) tmp[j]; }
+                                break;
+                            }
+                            default:
+                                GGML_ABORT("EAGLE3 d2t: unsupported dtype %s", ggml_type_name(model.d2t->type));
+                        }
                     }
 
                     std::vector<float> draft_logits((size_t) n_outputs * draft_vocab);
