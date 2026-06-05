@@ -433,7 +433,8 @@ extern "C" {
         GGML_TYPE_TURBOQ2_0 = 60, // TurboQuant 2-bit KV cache: 2-bit PolarQuant only (no QJL)
         GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 4-bit PolarQuant (default TURBOQ4_USE_4BIT=1; legacy 3-bit+QJL mode via TURBOQ4_USE_4BIT=0)
-        // slots 63–65 reserved for yggdrasil future TurboQuant variants — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_TURBOQ8_0 = 63, // SKELETON (DRAFT, not wired): TurboQuant 8-bit KV cache — Lloyd-Max 256-centroid + group-WHT + per-block norm; native-VEC port of buun TURBO8_0 (4ab44ae1c). See worker-scratch/buun-turbo8kv-codec-recon-draft-2026-06-05/RECON.md
+        // slots 64–65 reserved for yggdrasil future TurboQuant variants — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_TURBOQ2_TCQ = 66, // TurboQuant 2-bit KV cache: TCQ (k=2, L=8, 256 states) — source: buun TURBO2_TCQ
         GGML_TYPE_TURBOQ3_TCQ = 67, // TurboQuant 3-bit KV cache: TCQ (k=3, L=9, 512 states, Viterbi) — source: buun TURBO3_TCQ
         GGML_TYPE_TURBOQ2_INNERQ = 68, // 2-bit + InnerQ K-cache equalization; block_turboq2_0 (34 bytes, QK=128)

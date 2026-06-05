@@ -373,6 +373,21 @@ typedef struct {
 static_assert(sizeof(block_turboq4_0) == 2*sizeof(ggml_half) + QK_TURBOQ4*3/8 + QK_TURBOQ4/8, "wrong turboq4_0 block size");
 #endif
 static_assert(QK_TURBOQ4 == 128, "turboq4 kernels assume QK_TURBOQ4 == 128");
+
+// ===== TURBOQ8_0 (slot 63) — SKELETON / DRAFT, NOT wired into build =====
+// 8-bit TurboQuant KV: Lloyd-Max 256-centroid codebook + group-level WHT + per-block
+// fp16 norm. 1 byte/value, NO nibble packing, NO QJL. Native-VEC port of buun TURBO8_0
+// (4ab44ae1c) — we adopt buun's CPU/Lloyd-Max codec math, NOT buun's CUDA uniform+absmax
+// codec or its fused-MMA path (absent in our tree). See RECON.md §3–§4.
+// Per block: norm(fp16) + 8-bit indices (128 bytes) = 130 bytes / 128 vals = 8.125 bpw.
+#define QK_TURBOQ8 128
+typedef struct {
+    ggml_half  norm;                    //   2 bytes: L2 norm for rescaling
+    uint8_t    qs[QK_TURBOQ8];          // 128 bytes: 8-bit Lloyd-Max codebook indices (1/byte)
+} block_turboq8_0;                      // 130 bytes total
+static_assert(sizeof(block_turboq8_0) == sizeof(ggml_half) + QK_TURBOQ8, "wrong turboq8_0 block size");
+static_assert(QK_TURBOQ8 == 128, "turboq8 kernels assume QK_TURBOQ8 == 128");
+
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max for N(0,1))
 // Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
 // Per block: d0(fp16) + d1(fp16) + 3-bit indices packed (12 bytes) = 16 bytes per 32 values
