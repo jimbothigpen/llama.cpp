@@ -2721,8 +2721,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (!split && is_iqk_mmvq) {
         // IQK base weight types: dedicated single-token MMVQ kernel
         ggml_cuda_mul_mat_iqk_mmvq(ctx, src0, src1, dst);
-    } else if (!split && is_tq_weight && src1->ne[1] == 1) {
-        // Fused TQ weight mul_mat_vec with pre-rotated activations via warp shuffle WHT
+    } else if (!split && is_tq_weight && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE
+               && src1->ne[2] == 1 && src1->ne[3] == 1 && ggml_is_contiguous(src1)) {
+        // Fused TQ weight mul_mat with pre-rotated activations via warp shuffle WHT.
+        // Decode (ne[1]==1) and small-batch (ne[1]<=8: speculative / short prefill) reuse
+        // each weight block across all tokens, avoiding the dequant-to-f16 + cuBLAS path.
         ggml_cuda_mul_mat_vec_tq(ctx, src0, src1, dst);
     } else {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
