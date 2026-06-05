@@ -172,7 +172,7 @@ tps_cell() {
 }
 
 run_model() {
-  local mlabel="$1" local_gguf="$2"
+  local mlabel="$1" local_gguf="$2" do_ppl="${3:-1}"
   echo ""
   echo "=== MODEL: $mlabel ==="
   local pair kk kv rest
@@ -185,12 +185,17 @@ run_model() {
       echo "  skip $kk/$kv (bpw K<V — violates K>=V rule)"
       continue
     fi
-    ppl_cell "$kk" "$kv" "$mlabel" "$local_gguf"
+    [ "$do_ppl" = 1 ] && ppl_cell "$kk" "$kv" "$mlabel" "$local_gguf"
     tps_cell "$kk" "$kv" "$mlabel" "$local_gguf"
   done
 }
 
 # ── MAIN: copy each base GGUF OUTPUT→STAGING, measure all KV-pairs, rm staging copy ──
+# PPL venue control (added 2026-06-05): PPL is host-invariant → compute it once on the fastest host that fits.
+#   PPL_MODE=none     → skip ALL ppl_cell (TPS-only leg; e.g. ai01, vulkan legs)
+#   PPL_BASES="Q8_0"  → run ppl_cell ONLY for the listed base quants (TPS still runs for all bases). empty=all.
+: "${PPL_MODE:=full}"
+: "${PPL_BASES:=}"
 BASE_QUANTS=(Q8_0 Q4_K_M)
 for bq in "${BASE_QUANTS[@]}"; do
   gguf_name="$(gq_quant_name "$REPO_MODEL" "$bq")"
@@ -206,7 +211,10 @@ for bq in "${BASE_QUANTS[@]}"; do
     df -h "$STG_MD"
     cp "$src_gguf" "$run_gguf"
   fi
-  run_model "${REPO_MODEL}-${bq}" "$run_gguf"
+  do_ppl=1
+  [ "$PPL_MODE" = none ] && do_ppl=0
+  if [ -n "$PPL_BASES" ]; then case " $PPL_BASES " in *" $bq "*) ;; *) do_ppl=0 ;; esac; fi
+  run_model "${REPO_MODEL}-${bq}" "$run_gguf" "$do_ppl"
   if [ "$STAGE_LOCAL" = 1 ]; then
     echo "  Removing staging copy"
     rm -f "$run_gguf"
