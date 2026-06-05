@@ -226,6 +226,98 @@ static void launch_mul_mat_vec_iq3_kt_q8_1(
 }
 
 // ============================================================================
+// IQ2_KT MMVQ kernel.  Per-row layout: float row scale + N block_iq2_kt (64 B:
+// uint16_t qs[32], one 16-bit codebook index per GROUP_SIZE=8 group).  Trellis,
+// NUM_BITS=16, offset=0, IS_ABS=false (signed outputs, NO abs).  There is no
+// sub-block scale: the per-row float is the only scale (mirrors the CPU
+// ggml_vec_dot_iq2_kt_q8_K, which uses iqkt_gen_group_int<8> signed values).
+// ============================================================================
+static __global__ void mul_mat_vec_iq2_kt_q8_1_kernel(
+        const void * __restrict__ vx,
+        const void * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int    ncols_x,
+        const int    nrows_x,
+        const size_t row_size_x) {
+    constexpr uint32_t ka = 0xCBAC1FED, km = 0x3f3f3f3f;
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows_x) return;
+
+    const int lane = threadIdx.x;
+
+    const char * row_ptr = (const char *)vx + (size_t)row * row_size_x;
+    const float row_scale = *(const float *)row_ptr;
+    const block_iq2_kt * x = (const block_iq2_kt *)(row_ptr + sizeof(float));
+
+    const block_q8_1 * y = (const block_q8_1 *)vy;
+
+    const int n_blocks = ncols_x / QK_K;
+    const int total_subblocks = n_blocks * 8;   // 8 q8_1 sub-blocks (32 elems) per QK_K superblock
+
+    float sumf = 0.0f;
+
+    for (int sb_flat = lane; sb_flat < total_subblocks; sb_flat += 32) {
+        const int blk  = sb_flat / 8;
+        const int ib32 = sb_flat % 8;   // sub-block 0..7
+
+        const block_iq2_kt * bq2 = &x[blk];
+        const block_q8_1 * bq8 = &y[blk * (QK_K / QK8_1) + ib32];
+
+        const int32_t * q8 = (const int32_t *)bq8->qs;  // 8 int32 = 32 int8
+
+        int sumi = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {   // 4 groups of 8 = 32 elems per sub-block
+            const int g = 4 * ib32 + j;             // flat group 0..31
+            uint32_t val = (uint32_t)bq2->qs[g];    // offset 0
+
+            // First 4 elements of the 8-element group
+            int v4a = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                const int sv = ggml_cuda_dp4a((int)(val & km), 0x01010101, -126);
+                v4a |= (sv & 0xff) << (8 * k);   // signed, NOT abs (IS_ABS=false)
+            }
+            // Second 4 elements
+            int v4b = 0;
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                const int sv = ggml_cuda_dp4a((int)(val & km), 0x01010101, -126);
+                v4b |= (sv & 0xff) << (8 * k);
+            }
+
+            sumi = ggml_cuda_dp4a(v4a, q8[2 * j],     sumi);
+            sumi = ggml_cuda_dp4a(v4b, q8[2 * j + 1], sumi);
+        }
+
+        sumf += row_scale * __low2float(bq8->ds) * (float)sumi;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sumf += __shfl_xor_sync(0xffffffff, sumf, offset, WARP_SIZE);
+    }
+
+    if (lane == 0) {
+        dst[row] = sumf;
+    }
+}
+
+static void launch_mul_mat_vec_iq2_kt_q8_1(
+        const void * vx, const void * vy, float * dst,
+        const int ncols_x, const int nrows_x, const size_t row_size_x,
+        cudaStream_t stream) {
+    GGML_ASSERT(ncols_x % QK_K == 0);
+    const dim3 block(WARP_SIZE, MMVQ_IQK_NWARPS);
+    const dim3 grid((nrows_x + MMVQ_IQK_NWARPS - 1) / MMVQ_IQK_NWARPS);
+    mul_mat_vec_iq2_kt_q8_1_kernel<<<grid, block, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, row_size_x);
+}
+
+// ============================================================================
 // IQ1_KT MMVQ kernel.  Per-row layout: float row scale + N block_iq1_kt (56 B:
 // sh[8] ql[32] qh[16]).  Trellis, GROUP_SIZE=8, NUM_BITS=13, offset=4096,
 // IS_ABS=false (signed outputs, NO abs).  Per-sub-block scale = iq4k_values[sh&0xf].
@@ -1426,6 +1518,7 @@ static void launch_mul_mat_vec_iq6_k_q8_1(
 bool ggml_cuda_iqk_mmvq_supported(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_IQ1_KT:
+        case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
         case GGML_TYPE_IQ4_KS:
@@ -1479,6 +1572,11 @@ void ggml_cuda_mul_mat_iqk_mmvq(ggml_backend_cuda_context & ctx,
     switch (src0->type) {
         case GGML_TYPE_IQ1_KT:
             launch_mul_mat_vec_iq1_kt_q8_1(
+                src0->data, src1_q8_1.get(), (float *)dst->data,
+                (int)ne00, (int)ne01, row_size_x, stream);
+            break;
+        case GGML_TYPE_IQ2_KT:
+            launch_mul_mat_vec_iq2_kt_q8_1(
                 src0->data, src1_q8_1.get(), (float *)dst->data,
                 (int)ne00, (int)ne01, row_size_x, stream);
             break;

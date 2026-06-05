@@ -1736,6 +1736,10 @@ static void ggml_cuda_op_mul_mat_cublas(
                 ggml_dequantize_iq3_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ2_KS) {
                 ggml_dequantize_iq2_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KL) {
+                ggml_dequantize_iq2_kl_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KT) {
+                ggml_dequantize_iq2_kt_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ5_KS) {
                 ggml_dequantize_iq5_ks_to_fp16_cuda(src0_dd_i, src0_as_f16.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KSS) {
@@ -1814,6 +1818,10 @@ static void ggml_cuda_op_mul_mat_cublas(
                 ggml_dequantize_iq3_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ2_KS) {
                 ggml_dequantize_iq2_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KL) {
+                ggml_dequantize_iq2_kl_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
+            } else if (src0->type == GGML_TYPE_IQ2_KT) {
+                ggml_dequantize_iq2_kt_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ5_KS) {
                 ggml_dequantize_iq5_ks_to_fp32_cuda(src0_dd_i, src0_ddq_as_f32.get(), row_diff, ne00, stream);
             } else if (src0->type == GGML_TYPE_IQ4_KSS) {
@@ -5305,6 +5313,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ2_K:
+                    case GGML_TYPE_IQ2_KL:
                     // Phase 5b-1b: row-meta KS family
                     case GGML_TYPE_IQ4_KS:
                     case GGML_TYPE_IQ3_KS:
@@ -5313,6 +5322,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_KSS:
                     case GGML_TYPE_IQ4_KT:
                     case GGML_TYPE_IQ3_KT:
+                    case GGML_TYPE_IQ2_KT:
                     case GGML_TYPE_IQ1_KT:
                     // Phase 5b-2: no-row-meta 5/6-bit IK family
                     case GGML_TYPE_IQ5_K:

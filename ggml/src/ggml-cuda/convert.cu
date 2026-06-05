@@ -904,6 +904,62 @@ void ggml_dequantize_iq2_ks_to_fp16_cuda(const void * vx, half * y,
     dequantize_row_iq2_ks_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
+// IQ2_KL row-aware dequant (port of ik_llama.cpp's dequantize_row_iq2_kl).
+// One CUDA block per QK_K elements; 32 threads, each emitting 8 elements.
+// Codebook iq2kl_values[32] (uint16_t, two packed int8 each); 2-byte fp16 row
+// scale prepended; per-block scales_h/scales_l 6-bit signed (- 32); qh adds the
+// 5th codebook index bit. Matches dequantize_row_iq2_kl byte-for-byte.
+template <typename dst_t>
+static __global__ void dequantize_block_iq2_kl(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                               int64_t n_per_row, int64_t row_size) {
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    const float d = __half2float(*(const half *)cx);
+    const block_iq2_kl * x = (const block_iq2_kl *)(cx + sizeof(half));
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const uint8_t * qh = x[i].qh;
+    const uint16_t scales_h = x[i].scales_h;
+
+    const int tid = threadIdx.x;                 // 0..31
+    // Each thread handles two (ib64, j) pairs over the flat range 0..63.
+    for (int p = tid; p < 64; p += 32) {
+        const int ib64 = p / 16;                 // 0..3
+        const int j    = p % 16;                 // 0..15
+        const float dl1 = d * (float)((int)(((x[i].scales_l[(2*ib64+0)%4] >> (4*(ib64/2))) & 0xf)
+                                       | (((scales_h >> (4*ib64+0)) & 3) << 4)) - 32);
+        const float dl2 = d * (float)((int)(((x[i].scales_l[(2*ib64+1)%4] >> (4*(ib64/2))) & 0xf)
+                                       | (((scales_h >> (4*ib64+2)) & 3) << 4)) - 32);
+        const uint8_t * qs = x[i].qs + 16*ib64;
+        const int8_t * val1 = (const int8_t *)(iq2kl_values + ((qs[j] & 0xf) | (((qh[j] >> (2*ib64+0)) & 1) << 4)));
+        const int8_t * val2 = (const int8_t *)(iq2kl_values + ((qs[j] >>  4) | (((qh[j] >> (2*ib64+1)) & 1) << 4)));
+        dst_t * y = yy + ii*QK_K + 64*ib64;
+        y[2*j+ 0] = ggml_cuda_cast<dst_t>(dl1 * (float)val1[0]);
+        y[2*j+ 1] = ggml_cuda_cast<dst_t>(dl1 * (float)val1[1]);
+        y[2*j+32] = ggml_cuda_cast<dst_t>(dl2 * (float)val2[0]);
+        y[2*j+33] = ggml_cuda_cast<dst_t>(dl2 * (float)val2[1]);
+    }
+}
+
+template <typename dst_t>
+static void dequantize_row_iq2_kl_cuda(const void * vx, dst_t * y,
+                                       int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ2_KL, n_per_row);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq2_kl<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+void ggml_dequantize_iq2_kl_to_fp32_cuda(const void * vx, float * y,
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    dequantize_row_iq2_kl_cuda<float>(vx, y, nrows, n_per_row, stream);
+}
+void ggml_dequantize_iq2_kl_to_fp16_cuda(const void * vx, half * y,
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    dequantize_row_iq2_kl_cuda<half>(vx, y, nrows, n_per_row, stream);
+}
+
 // IQ4_KSS row-aware dequant (port of ik_llama.cpp's dequantize_block_iq4_kss).
 // One CUDA block per QK_K elements, 32 threads each producing 4×2 output elements.
 // Decode: scale byte is the LSBs of 8 uint16_t pairs; descramble via aux ^= (aux>>1).
@@ -1105,6 +1161,52 @@ void ggml_dequantize_iq3_kt_to_fp32_cuda(const void * vx, float * y,
 void ggml_dequantize_iq3_kt_to_fp16_cuda(const void * vx, half * y,
                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
     dequantize_row_iq3_kt_cuda<half>(vx, y, nrows, n_per_row, stream);
+}
+
+// IQ2_KT row-aware dequant.  Trellis IS_ABS=false (signed values, no abs);
+// GROUP_SIZE=8; 32 groups per QK_K superblock; single per-row float scale;
+// offset 0; one 16-bit codebook index per group.  One thread per group.
+// Mirrors dequantize_row_iq2_kt (iqkt_gen_group_int<8>, then *= row_scale).
+template <typename dst_t>
+static __global__ void dequantize_block_iq2_kt(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                               int64_t n_per_row, int64_t row_size) {
+    constexpr int kGroupSize = 8;
+    constexpr uint32_t ka = 0xCBAC1FEDu, km = 0x3f3f3f3fu, kOff = 0u;
+
+    const int64_t ii  = blockIdx.x;
+    const int64_t row = (QK_K * ii) / n_per_row;
+    const float * dptr = (const float *)((const char *)vx + row * row_size);
+    const float row_scale = dptr[0];
+    const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+    const int64_t i = ii - (row * n_per_row) / QK_K;
+
+    const int jj = threadIdx.x;             // flat group index 0..31
+    uint32_t val = (uint32_t)x[i].qs[jj] + kOff;
+
+    dst_t * y = yy + ii * QK_K + kGroupSize * jj;
+    for (int k = 0; k < kGroupSize; ++k) {
+        val = ka * val;
+        const int sv = ggml_cuda_dp4a((int)(val & km), 0x01010101, -126);   // no abs (IS_ABS=false)
+        y[k] = ggml_cuda_cast<dst_t>(row_scale * (float)sv);
+    }
+}
+
+template <typename dst_t>
+static void dequantize_row_iq2_kt_cuda(const void * vx, dst_t * y,
+                                       int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq2_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+void ggml_dequantize_iq2_kt_to_fp32_cuda(const void * vx, float * y,
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    dequantize_row_iq2_kt_cuda<float>(vx, y, nrows, n_per_row, stream);
+}
+void ggml_dequantize_iq2_kt_to_fp16_cuda(const void * vx, half * y,
+                                         int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
+    dequantize_row_iq2_kt_cuda<half>(vx, y, nrows, n_per_row, stream);
 }
 
 // IQ1_KT row-aware dequant (trellis, IS_ABS=false; per-sub-block iq4k scale).

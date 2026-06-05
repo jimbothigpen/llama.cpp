@@ -30,6 +30,14 @@ void ggml_dequantize_iq2_ks_to_fp32_cuda(const void * vx, float * y,
                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
 void ggml_dequantize_iq2_ks_to_fp16_cuda(const void * vx, half * y,
                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq2_kl_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq2_kl_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq2_kt_to_fp32_cuda(const void * vx, float * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
+void ggml_dequantize_iq2_kt_to_fp16_cuda(const void * vx, half * y,
+                                          int64_t nrows, int64_t n_per_row, cudaStream_t stream);
 void ggml_dequantize_iq5_ks_to_fp32_cuda(const void * vx, float * y,
                                           int64_t nrows, int64_t n_per_row, cudaStream_t stream);
 void ggml_dequantize_iq5_ks_to_fp16_cuda(const void * vx, half * y,
