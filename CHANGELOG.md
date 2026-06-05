@@ -105,7 +105,7 @@ Added `scripts/generate-quants.sh` (the standard download→convert→imatrix→
 pipeline; configured via env / `scripts/matrix-env.sh.example`) so all GGUFs are produced by one
 reproducible, apples-to-apples path. Removed 12 internal-only workflow scripts that should never
 have shipped (host-/model-specific build + prequant + measurement helpers carrying local infra):
-`baseline-matrix*.py`, `build-rocm-ai01-gfx110{2,3}.sh`, `ppl-harness.py(+README)`,
+`baseline-matrix*.py`, `build-rocm-gfx110{2,3}.sh`, `ppl-harness.py(+README)`,
 `prequant-qwen35-9b-*.sh`, `push-milestone.sh`, `with-bench-mutex.sh`. `scripts/` now contains
 only mainline-llama.cpp scripts, ported-fork scripts, and fork-functional tooling.
 
@@ -192,9 +192,9 @@ DFlash `--target-model-dir` docs.
 `c809225f6`. IQ3_KT was silently falling back to CPU on ROCm because the CUDA dequantize kernel
 (`dequantize_block_iq3_kt`) was absent and `ggml-cuda.cu:supports_op` never returned true for
 IQ3_KT. Fix mirrors IQ4_KT: +73 LOC CUDA dequant (block + matvec), `supports_op` registration,
-and two GEMM-dispatch sites. **Gate PASS (gfx1150, ai00):** GPU path executes at 99% utilization /
+and two GEMM-dispatch sites. **Gate PASS (gfx1150):** GPU path executes at 99% utilization /
 7.66s-per-pass vs CPU-hang; IQ3_KT:IQ4_KT PPL ratio 1.30 ≈ anchor 1.29 (IQ3_KT=9.05/IQ4_KT=6.95).
-§-FLAG note: ai01-gfx1102 warmup crash is a separate known gfx1102 Tensile confound, not IQ3_KT.
+§-FLAG note: gfx1102 warmup crash is a separate known gfx1102 Tensile confound, not IQ3_KT.
 Closes TODO 168.
 
 ### Added — PFlash scorer generalized to non-Qwen models (TODO 162 sub-2) (2026-05-31)
@@ -266,7 +266,7 @@ double-compression safety check suppressed for CLI-compressed tokens.
 
 ### Verdicts — IQ2_KT Qwen3.5-9B PPL = 33.96 (RED) (TODO 124 CLOSED) (2026-05-31)
 
-**IQ2_KT on Qwen3.5-9B yields PPL = 33.96 ±0.48 (20 chunks, Vulkan ai01 b812), confirming general
+**IQ2_KT on Qwen3.5-9B yields PPL = 33.96 ±0.48 (20 chunks, Vulkan gfx1103 b812), confirming general
 codebook defect at all scales.** Scale-dependent hypothesis (small-model capacity collapse) rejected:
 - 0.8B: 99.58 PPL (broken-but-improvable by scale)
 - 9B: 33.96 PPL (catastrophic, 5.2× worse than IQ4_KT at 6.54)
@@ -278,7 +278,7 @@ adaptation like IQ4_KT), random-hash codebook (not learned VQ), greedy per-group
 
 ### Measurements — IQ3_KT/IQ3_K baseline-matrix Qwen3.5-9B (TODO 167 CLOSED) (2026-05-31)
 
-Vulkan ai01 20-chunk baseline confirms both IQ3 types drifted identically (−6.8% binary-refresh drift,
+Vulkan gfx1103 20-chunk baseline confirms both IQ3 types drifted identically (−6.8% binary-refresh drift,
 consistent with `/opt/llama-yggdrasil-vulkan` rebase from 2026-05-25 mainline sync):
 - **IQ3_KT: 8.4299 ±0.107 PPL** (was anchor 9.0493; ratio vs IQ3_K = +23.3%)
 - **IQ3_K: 6.8348 ±0.084 PPL** (was anchor 7.3243; same −6.8% drift)
