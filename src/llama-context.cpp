@@ -1485,6 +1485,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+        LLAMA_LOG_WARN("%s: graph reused [%s], eagle3_extract=%d, extract_tensors=%zu\n", __func__,
+            model.name.c_str(), (int)cparams.eagle3_extract_enabled, eagle3_state.extract_tensors.size());
 
         // with pipeline parallelism, the previous graph_compute_async may still be running
         // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
@@ -1503,6 +1505,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         gf = model.build_graph(gparams);
+        LLAMA_LOG_WARN("%s: graph REBUILT [%s], eagle3_extract=%d, extract_tensors=%zu, extract_layers=%zu\n", __func__,
+            model.name.c_str(), (int)cparams.eagle3_extract_enabled, eagle3_state.extract_tensors.size(),
+            eagle3_state.extract_layer_indices.size());
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
@@ -1537,24 +1542,28 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     // EAGLE3: extract intermediate hidden states from the target model after each decode
-    if (cparams.eagle3_extract_enabled && !eagle3_state.extract_tensors.empty()) {
-        const int64_t n_embd = model.hparams.n_embd;
-        const int32_t n_tok  = (int32_t) ubatch.n_tokens;
+    if (cparams.eagle3_extract_enabled) {
+        LLAMA_LOG_WARN("%s: EAGLE3 extraction check [%s]: enabled=%d, tensors=%zu\n", __func__,
+            model.name.c_str(), (int)cparams.eagle3_extract_enabled, eagle3_state.extract_tensors.size());
+        if (!eagle3_state.extract_tensors.empty()) {
+            const int64_t n_embd = model.hparams.n_embd;
+            const int32_t n_tok  = (int32_t) ubatch.n_tokens;
 
-        eagle3_state.target_features.resize(eagle3_state.extract_tensors.size() * n_embd * n_tok);
-        eagle3_state.n_tokens_last_batch = n_tok;
+            eagle3_state.target_features.resize(eagle3_state.extract_tensors.size() * n_embd * n_tok);
+            eagle3_state.n_tokens_last_batch = n_tok;
 
-        for (size_t i = 0; i < eagle3_state.extract_tensors.size(); ++i) {
-            ggml_tensor * t = eagle3_state.extract_tensors[i];
-            if (t) {
-                float * dst = eagle3_state.target_features.data() + i * n_embd * n_tok;
-                const size_t tensor_bytes = ggml_nbytes(t);
-                const size_t wanted_bytes = (size_t)n_embd * n_tok * sizeof(float);
-                const size_t copy_bytes   = std::min(tensor_bytes, wanted_bytes);
-                ggml_backend_tensor_get(t, dst, 0, copy_bytes);
+            for (size_t i = 0; i < eagle3_state.extract_tensors.size(); ++i) {
+                ggml_tensor * t = eagle3_state.extract_tensors[i];
+                if (t) {
+                    float * dst = eagle3_state.target_features.data() + i * n_embd * n_tok;
+                    const size_t tensor_bytes = ggml_nbytes(t);
+                    const size_t wanted_bytes = (size_t)n_embd * n_tok * sizeof(float);
+                    const size_t copy_bytes   = std::min(tensor_bytes, wanted_bytes);
+                    ggml_backend_tensor_get(t, dst, 0, copy_bytes);
+                }
             }
-        }
-    }
+        } // !eagle3_state.extract_tensors.empty()
+    } // eagle3_extract_enabled
 
     ret = GGML_STATUS_SUCCESS;
 
