@@ -93,9 +93,23 @@ llama-quantize \
 - **Name understates the cost** — `WHT4_0` is a 4-bit index quant that costs ~5 bpw; its honest peer is Q5_K_M. Evaluate against the right baseline.
 - **At 4–5 bpw the gap to F16 is already small** — the Hadamard edge over K-quants is real but modest; the benchmark matrix (below) will quantify it.
 
+### Performance
+
+Decode throughput on RDNA3 ROCm (Qwen3.5-9B, tg128, scalar/half path):
+
+| Type | tg128 | Notes |
+|---|---|---|
+| WHT4_0 | **10.49 t/s** | +52.7% vs prior fp32 kernel |
+| WHT3_0 | **9.42 t/s** | +65.3% vs prior fp32 kernel |
+
+NVIDIA WHT4_0 (dp4a int8 path): T4×2 tg128 ~39.88 t/s ≈ IQ4_XS. AMD RDNA dp4a is not
+available; the scalar/half path is used instead. Standard prefill (`-ub512`) throughput
+is unchanged (cuBLAS/rocBLAS path). Small-batch prefill (`-ub8`) throughput on RDNA3:
+WHT3_0 +290%, WHT4_0 unchanged (dp4a path is NVIDIA-only; scalar/half ties cuBLAS here).
+
 ### Benchmark matrix
 
-*TBD (pending benchmark)*
+*TBD (PPL + full backend matrix pending)*
 
 **Configuration:** model=TBD, context=TBD tokens, GPU class=TBD (RDNA3.5 / RDNA3), backends=ROCm + Vulkan.
 
@@ -153,7 +167,10 @@ The three share the same mathematical family (Walsh-Hadamard Transform) but are 
 ### Backend support
 
 - **CPU** — fully implemented in `ggml-turbo-quant.c`
-- **CUDA/HIP** — fused WHT mul_mat_vec (decode) + convert-to-Q8_0 path (`ggml/src/ggml-cuda/mmvq-tq.cu`)
+- **CUDA/HIP** — three-tier dispatch in `ggml/src/ggml-cuda/mmvq-tq.cu`:
+  - **`ne1 == 1` (single-token decode):** fused `ggml_cuda_mul_mat_tq_multi<1>` — dp4a int8 on NVIDIA WHT4_0; scalar/half on AMD RDNA (dp4a not available on RDNA).
+  - **`ne1 = 2–8` (small-batch / low `-ub`):** fused `ggml_cuda_mul_mat_tq_multi`, reusing each weight block across all tokens.
+  - **`ne1 > 8` (standard prefill):** dequant-to-Q8_0 → cuBLAS/rocBLAS.
 - **Vulkan** — mul_mat_vec pipelines for both types wired in `ggml-vulkan.cpp` (`dequant_wht3_0.comp` / `mul_mat_vec_wht3_0.comp` shaders)
 
 ---

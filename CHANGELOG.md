@@ -9,9 +9,48 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b848 shipped 2026-06-01.
+HEAD: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b944 shipped 2026-06-05.
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up). RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+
+### Optimized — WHT3_0/WHT4_0: `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12 (2026-06-05)
+
+`6fcd17fce`. Single-token decode (`ne1==1`) for WHT3_0/WHT4_0 was pinned to the slow fp32
+`mul_mat_vec_wht*_v12` shared-memory kernel. Routes `ne1==1` through the same fused
+`ggml_cuda_mul_mat_tq_multi<1>` path used for `ne1=2..8` (TheTom mmvq-tq dispatch):
+dp4a int8 on NVIDIA for WHT4_0; scalar/half on AMD RDNA (dp4a NO-GO on RDNA). Prefill
+(`ne1>8` cuBLAS/rocBLAS) path unchanged.
+
+The legacy fp32 v12/v8 decode kernels are retired from the default path but kept reachable
+via `GGML_WHT_DECODE_V12=1` for single-binary A/B validation.
+
+**Measured (gfx1103 ROCm, Qwen3.5-9B, scalar/half path, same-binary env-toggle A/B):**
+- WHT4_0 tg128: 6.87 → **10.49 t/s** (+52.7%)
+- WHT3_0 tg128: 5.70 → **9.42 t/s** (+65.3%)
+
+NVIDIA WHT4_0 dp4a: T4×2 tg128 ~39.88 t/s ≈ IQ4_XS throughput.
+
+Changed: `ggml/src/ggml-cuda/mmvq-tq.cu` (9 lines — retire v12 carve-out, route `ne1==1`
+to `*_multi<1>`). test-backend-ops MUL_MAT 158/158 WHT f32 PASS.
+
+### Optimized — WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ multi-token kernel (2026-06-05)
+
+`3abe1c048`. WHT3_0/WHT4_0 small-batch prefill (`ne1=2..8`, i.e. `-ub` values ≤ 8) fell
+through to the slow dequant-to-f16 + cuBLAS/rocBLAS path. Routes `ne1 ≤ MMVQ_MAX_BATCH_SIZE`
+for contiguous 2D tensors through `ggml_cuda_mul_mat_tq_multi`, reusing each weight block
+across all tokens via the fused pre-rotated-activation WHT kernel.
+
+**Measured (gfx1103 ROCm, Qwen3.5-9B, -ub8):**
+- WHT3_0 pp512: 7.16 → **27.90 t/s** (+290%)
+- WHT4_0 pp512: 52.02 → 52.00 t/s (unchanged — dp4a path is NVIDIA-only; AMD scalar/half ties cuBLAS)
+
+Standard pp512 (`-ub512`) and tg128 are separate dispatch paths and are not affected.
+PPL parity verified (WHT4_0 9.4514 vs 9.5759; WHT3_0 9.5442 vs 9.6222 — within error bars).
+
+Changed: `ggml/src/ggml-cuda/mmvq-tq.cu` (+390 LOC: multi-token kernels +
+`ggml_cuda_mul_mat_tq_multi` dispatch), `ggml/src/ggml-cuda/ggml-cuda.cu` (route
+`is_tq_weight` with `ne[1] ≤ MMVQ_MAX_BATCH_SIZE` + contiguous 2D guard). No CPU or
+Vulkan path changes.
 
 ### Changed — weight-quant matrix: PPL-reference + bench-only split methodology (2026-06-04)
 
