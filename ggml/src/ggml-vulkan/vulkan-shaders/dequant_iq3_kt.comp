@@ -25,6 +25,9 @@ layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
 
 const uint IQ3KT_KA     = 0xCBAC1FEDu;
 const uint IQ3KT_Offset = 4096u;
+// TODO(IQ3KT-dualcodebook): replace fixed IQ3KT_Offset with per-sub-block selection.
+// shb[ib] bit 24 = codebook-B selector; offset = (shb >> 24) & 1u ? 36864u : 4096u.
+// Requires adding a uint offset param to iq3kt_gen_group().
 
 void iq3kt_gen_group(uint idx, out float result[8]) {
     uint x = idx + IQ3KT_Offset;

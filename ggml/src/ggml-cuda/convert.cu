@@ -1111,7 +1111,8 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
     constexpr int kNumGroups = 32;      // kNblock * kNg
     constexpr uint32_t ka    = 0xCBAC1FEDu;
     constexpr uint32_t km    = 0x3f3f3f3fu;
-    constexpr uint32_t kOff  = 4096u;   // kIQ3KT_Offset
+    constexpr uint32_t kOffA = 4096u;
+    constexpr uint32_t kOffB = 4096u + 32768u;
 
     const int64_t ii  = blockIdx.x;
     const int64_t row = (QK_K * ii) / n_per_row;
@@ -1130,6 +1131,7 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
 
     const int ls = (int)(shb[ib] & 0xff) - 128;
     const float dl = row_scale * (float)ls;
+    const uint32_t kOff = (shb[ib] >> 24) & 1u ? kOffB : kOffA;
 
     const uint8_t  qh_nibble = (qh[jj / 2] >> ((jj & 1) * 4)) & 0xf;
     const uint32_t sh_4bits  = (shb[ib] >> (8 + 4 * ig)) & 0xfu;

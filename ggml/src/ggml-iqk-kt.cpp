@@ -556,10 +556,12 @@ static void quantize_row_iq2_kt_impl(const float * x, char * cy, int n_per_row,
 // IQ3_KT — 3.0 bpw trellis-coded (row_meta_size = 4: per-row float scale)
 //
 // IQ3KTParams = IQKTParams<GROUP_SIZE=8, NUM_BITS=16, IS_ABS=false>.
-// kNumVal = 65536.  Single implicit codebook (offset = 4096, signed output).
+// kNumVal = 65536.  Dual implicit codebooks (OffsetA=4096, OffsetB=36864), selected
+// per-sub-block via shb[ib] bit 24.  Old files with bit 24 == 0 decode correctly (OffsetA).
 //
 // Block layout (96 bytes = 24 uint32_t per QK_K=256 elements):
-//   qs[0..7]   (32 B): shb — bits[7:0] = scale byte (ls+128), bits[8+4g..11+4g] = idx[15:12]
+//   qs[0..7]   (32 B): shb — bits[7:0] = scale byte (ls+128), bits[8+4g..11+4g] = idx[15:12],
+//                            bit 24 = codebook selector (0=OffsetA, 1=OffsetB)
 //   qs[8..15]  (32 B): ql  — 8 low bits per group, 4 groups per uint32_t (32 groups)
 //   qs[16..19] (16 B): qh  — 4 mid bits per group, 2 groups per nibble (32 groups)
 //   qs[20..23] (16 B): padding
@@ -575,11 +577,14 @@ constexpr int kIQ3KT_NumVal     = IQ3KTParams::kNumVal;      // 65536
 constexpr int kIQ3KT_Ng         = kIQ3KT_BlockSize / kIQ3KT_GroupSize; // 4
 constexpr int kIQ3KT_Nblock     = QK_K / kIQ3KT_BlockSize;             // 8
 constexpr int kIQ3KT_NumGroups  = QK_K / kIQ3KT_GroupSize;             // 32
-constexpr int kIQ3KT_Offset     = 4096;
+constexpr int kIQ3KT_OffsetA     = 4096;
+constexpr int kIQ3KT_OffsetB     = 4096 + 32768;  // second implicit codebook
+constexpr uint32_t kIQ3KT_SelBit = 1u << 24;       // shb[ib] bit 24 = use OffsetB
 constexpr int kIQ3KT_NeighboursPB = 60;
 
 struct IQ3KT_Codebook {
-    IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> a;
+    IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> a;  // offset = kIQ3KT_OffsetA
+    IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> b;  // offset = kIQ3KT_OffsetB
     bool initialized = false;
 };
 
@@ -588,7 +593,9 @@ static std::once_flag g_iq3kt_init_once;
 
 static void iq3kt_codebook_do_init() {
     iqkt_cooked_book_init<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
-        g_iq3kt_codebook.a, kIQ3KT_Offset, kIQ3KT_NeighboursPB);
+        g_iq3kt_codebook.a, kIQ3KT_OffsetA, kIQ3KT_NeighboursPB);
+    iqkt_cooked_book_init<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
+        g_iq3kt_codebook.b, kIQ3KT_OffsetB, kIQ3KT_NeighboursPB);
     g_iq3kt_codebook.initialized = true;
 }
 
@@ -616,8 +623,10 @@ static float iq3kt_find_best_scale(const float * xb, const float * weight,
 static void quantize_row_iq3_kt_impl(const float * x, char * cy, int n_per_row,
                                      const float * quant_weights) {
     iq3kt_codebook_init();
-    const IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> & ck = g_iq3kt_codebook.a;
-    const float * cb = ck.values.data();
+    const IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> & ckA = g_iq3kt_codebook.a;
+    const IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> & ckB = g_iq3kt_codebook.b;
+    const float * cb_a = ckA.values.data();
+    const float * cb_b = ckB.values.data();
 
     constexpr int kSuperBlockSize = QK_K;
     const int nblock = n_per_row / kSuperBlockSize;
@@ -687,24 +696,49 @@ static void quantize_row_iq3_kt_impl(const float * x, char * cy, int n_per_row,
             }
             const float scale_0 = std::max(64.f, 96.f * amax / amax_row);
             float best_score = -INFINITY;
+            // Codebook A trials
             for (int sign = 0; sign < 2; ++sign) {
                 const float d_init = (sign == 0 ? amax : -amax) / scale_0;
                 for (int g = 0; g < kIQ3KT_Ng; ++g) {
                     best_idx[g] = iqkt_find_best_index<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
                         xaux + g * kIQ3KT_GroupSize,
                         weight + g * kIQ3KT_GroupSize,
-                        d_init, ck);
+                        d_init, ckA);
                 }
-                const float d = iq3kt_find_best_scale(xaux, weight, best_idx, cb);
+                const float d = iq3kt_find_best_scale(xaux, weight, best_idx, cb_a);
                 float sumqx = 0;
                 for (int g = 0; g < kIQ3KT_Ng; ++g) {
-                    const float * v  = cb + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+                    const float * v  = cb_a + (size_t)best_idx[g] * kIQ3KT_GroupSize;
                     const float * xl = xaux + g * kIQ3KT_GroupSize;
                     const float * wl = weight + g * kIQ3KT_GroupSize;
                     for (int k = 0; k < kIQ3KT_GroupSize; ++k) sumqx += wl[k] * v[k] * xl[k];
                 }
                 const float score = sumqx * d;
                 if (score > best_score) { best_score = score; scales[ib] = d; }
+            }
+            // Codebook B trials — set selector bit if B wins
+            for (int sign = 0; sign < 2; ++sign) {
+                const float d_init = (sign == 0 ? amax : -amax) / scale_0;
+                for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                    best_idx[g] = iqkt_find_best_index<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
+                        xaux + g * kIQ3KT_GroupSize,
+                        weight + g * kIQ3KT_GroupSize,
+                        d_init, ckB);
+                }
+                const float d = iq3kt_find_best_scale(xaux, weight, best_idx, cb_b);
+                float sumqx = 0;
+                for (int g = 0; g < kIQ3KT_Ng; ++g) {
+                    const float * v  = cb_b + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+                    const float * xl = xaux + g * kIQ3KT_GroupSize;
+                    const float * wl = weight + g * kIQ3KT_GroupSize;
+                    for (int k = 0; k < kIQ3KT_GroupSize; ++k) sumqx += wl[k] * v[k] * xl[k];
+                }
+                const float score = sumqx * d;
+                if (score > best_score) {
+                    best_score = score;
+                    scales[ib] = d;
+                    y[ibl].qs[ib] = kIQ3KT_SelBit;  // codebook B wins
+                }
             }
             const float abs_scale = std::abs(scales[ib]);
             if (abs_scale > amax_scale) { amax_scale = abs_scale; max_scale = scales[ib]; }
@@ -728,14 +762,18 @@ static void quantize_row_iq3_kt_impl(const float * x, char * cy, int n_per_row,
 
             int ls = (int)nearbyintf(id * scales[ib]);
             ls = std::max(-128, std::min(127, ls));
-            shb[ib] = (uint32_t)(ls + 128) & 0xff;
+            // Preserve selector bit (bit 24) set in phase 1, write scale in bits [7:0]
+            const bool use_b = (shb[ib] & kIQ3KT_SelBit) != 0;
+            shb[ib] = ((uint32_t)(ls + 128) & 0xff) | (use_b ? kIQ3KT_SelBit : 0u);
 
+            const IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> & ck2 = use_b ? ckB : ckA;
+            const float * cb2 = use_b ? cb_b : cb_a;
             const float dl = d_row * (float)ls;
             for (int g = 0; g < kIQ3KT_Ng; ++g) {
                 best_idx[g] = iqkt_find_best_index<kIQ3KT_GroupSize, kIQ3KT_NumBits, false>(
                     xaux + g * kIQ3KT_GroupSize,
                     weight + g * kIQ3KT_GroupSize,
-                    dl, ck);
+                    dl, ck2);
             }
 
             for (int g = 0; g < kIQ3KT_Ng; ++g) {
@@ -750,7 +788,7 @@ static void quantize_row_iq3_kt_impl(const float * x, char * cy, int n_per_row,
                 // High 4 bits in shb[ib] bits[8+4g..11+4g]
                 shb[ib] |= (uint32_t)((idx16 >> 12) & 0xf) << (8 + 4 * g);
 
-                const float * v = cb + (size_t)best_idx[g] * kIQ3KT_GroupSize;
+                const float * v = cb2 + (size_t)best_idx[g] * kIQ3KT_GroupSize;
                 const float * xl = xaux + g * kIQ3KT_GroupSize;
                 const float * wl = weight + g * kIQ3KT_GroupSize;
                 for (int k = 0; k < kIQ3KT_GroupSize; ++k) {
@@ -850,13 +888,14 @@ void dequantize_row_iq3_kt(const block_iq3_kt * GGML_RESTRICT vx, float * GGML_R
         for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
             const int ls = (int)(shb[ib] & 0xff) - 128;
             const float sl = d * (float)ls;
+            const int offset = (shb[ib] & kIQ3KT_SelBit) ? kIQ3KT_OffsetB : kIQ3KT_OffsetA;
             for (int g = 0; g < kIQ3KT_Ng; ++g) {
                 const int jj = kIQ3KT_Ng * ib + g;
                 const int qh_shift = ((jj / 2) & 3) * 8 + (jj % 2) * 4;
                 const uint32_t qh_nibble = (qh_u32[jj / 8] >> qh_shift) & 0xfu;
                 const uint32_t sh_4bits  = (shb[ib] >> (8 + 4 * g)) & 0xfu;
                 const uint32_t idx = (uint32_t)ql[jj] | (qh_nibble << 8) | (sh_4bits << 12);
-                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, kIQ3KT_Offset, y);
+                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, offset, y);
                 for (int kk = 0; kk < kIQ3KT_GroupSize; ++kk) y[kk] *= sl;
                 y += kIQ3KT_GroupSize;
             }
@@ -909,13 +948,14 @@ void ggml_vec_dot_iq3_kt_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
         for (int ib = 0; ib < kIQ3KT_Nblock; ++ib) {
             const int ls = (int)(shb[ib] & 0xff) - 128;
             const float dl = db * (float)ls;
+            const int offset = (shb[ib] & kIQ3KT_SelBit) ? kIQ3KT_OffsetB : kIQ3KT_OffsetA;
             for (int g = 0; g < kIQ3KT_Ng; ++g) {
                 const int jj = kIQ3KT_Ng * ib + g;
                 const int qh_shift = ((jj / 2) & 3) * 8 + (jj % 2) * 4;
                 const uint32_t qh_nibble = (qh_u32[jj / 8] >> qh_shift) & 0xfu;
                 const uint32_t sh_4bits  = (shb[ib] >> (8 + 4 * g)) & 0xfu;
                 const uint32_t idx = (uint32_t)ql[jj] | (qh_nibble << 8) | (sh_4bits << 12);
-                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, kIQ3KT_Offset, gv);
+                iqkt_gen_group_int<kIQ3KT_GroupSize, false>(idx, offset, gv);
                 for (int kk = 0; kk < kIQ3KT_GroupSize; ++kk) {
                     sumf += dl * gv[kk] * (float)q8[kk];
                 }

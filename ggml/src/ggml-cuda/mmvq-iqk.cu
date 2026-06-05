@@ -162,7 +162,7 @@ static __global__ void mul_mat_vec_iq3_kt_q8_1_kernel(
 
         const int ls = (int)(bq3->qs[ib32] & 0xff) - 128;
         const float dl = row_scale * (float)ls;
-        const uint32_t idx0 = 4096u;   // single codebook offset
+        const uint32_t idx0 = (bq3->qs[ib32] >> 24) & 1u ? 4096u + 32768u : 4096u;
 
         // ql: 32 bytes (8 uint32_t) starting at qs[8]; 1 byte per group, 4 groups per u32
         const uint8_t * ql_base = (const uint8_t *)(bq3->qs + 8);
