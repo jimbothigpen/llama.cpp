@@ -29,7 +29,7 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `086c8508f`** on
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `62e9b6e29`** on
 `main` (post-mainline-rebase to `b745`). Recent ships (2026-05-30 PM-49 wave): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30 PM-48 wave): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke TODO 147 PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`, TODO 145) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`, TODO 146). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
@@ -91,7 +91,7 @@ cross-backend PPL matches within tolerance. See
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, DFlash S1, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` / buun | **Q1_0_G128 ported (`87d3705e0`) then removed (pure duplicate of Q1_0, slot 43 returned to mainline reserve); EAGLE3 ported (`c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X ported + Phase 2 dispatch (`d6dc63224`, `388169995`); DFlash S1 model loader ported (`b6a75e524`); TurboMind allocator queued for opportunistic port (PORT-LATER); Wave32 RDNA2 out of scope (`[[supported-rocm-hardware-targets]]`)** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`c12d37dbc`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`63b754e84..a25ee1cf7`); 5b-1c (IQ2_KL type-157) complete CPU+CUDA/HIP+Vulkan (`f18a92a42` + `3723c1f61`); 5b-2 (IQ5_K/IQ6_K) complete CPU+CUDA/HIP+Vulkan (`8e19be061` + `0ade7ff86`); Trellis P3a IQ2_KT shipped CPU+ROCm only (§-FLAG; `0dac276d9` + cluster-accel `1e8501e46`; Vulkan pending); P3b IQ3_KT complete CPU/ROCm/Vulkan, cluster-accel k=60, imatrix required (`623835cc9`, 2026-05-29); P3c IQ1_KT queued; MLA declined** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending — imatrix retrofit required per PM-15 (~6h) before port** |
-| 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **DFlash S1 loader (`b6a75e524`) + S2 `common_speculative_state_dflash` + dispatch (`ef80c728c`) + S3 GPU ring buffer + server spec_type wiring (`9b7ab4e83`) + mask_token_id u32 fix (`1436d1890`) + DFlashDraftModel safetensors→GGUF converter (`ee7d4f896`) all shipped; end-to-end smoke gate GREEN @ `2726a56c0` with 33.3% combined accept (dual-spec mode); isolated DFlash-only accept unmeasured (known-limitation)** |
+| 7a | DFlash spec-decode (drafter-model-based) | buun + beellama | **DFlash S1 loader (`b6a75e524`) + S2 dispatch (`ef80c728c`) + mask_token_id u32 fix (`1436d1890`) + KV-position anchor fix (`003ecc2d1`) + DFlashDraftModel converter (`ee7d4f896`) + tokenizer bundling (`f86a24a95`) shipped; solo accept 25.1 % (`n_drafted=195 n_accept=49`, gfx1150, `--temp 0`); S3 GPU ring buffer in progress (required for net speedup — currently net slowdown vs no-spec)** |
 | 7b | PFlash prompt compression (scorer-based KV compression) | buun SD-089-pflash | **base shipped in v355 — HIP-optimized scorer (24× GPU speedup over CPU baseline); 4b bulk-upload shipped in v365; 4c LRU scorer cache shipped (`38d6b7dea`); NEW-D Vulkan GPU scorer fix shipped (`276508aaa`) — IGPU fallback enables ~0.20s GPU scoring on Strix Halo Vulkan (was 3-5s CPU fallback); NEW-E on-disk persistence (`6930e37e9`)** |
 | 8 | Polish (TURBO_ALPHA env-var defaults, `--hugepages`, asymmetric KV pair matrix completion) | mixed | **partial — asymmetric KV production pairs all shipped (X-2/X-3-s1/X-InnerQ-s1/s2/s3/xrq-wave2); TURBO_ALPHA / hugepages / gfx1030-norm pending; X-3-s2/s3 K-aggressive pairs deferred per policy** |
 | 9 | TriAttention KV compression with GPU scoring | domvox `feature/triattention-scoring` | **COMPLETE — Phase A in-graph K/V capture harness shipped (`6cbc9e06c`); HIP guard + safe null fixes (`eea5e25f5`, `2ad2564f1`); Phase B GQA CPU smoke GREEN 3/3 models (Qwen3.5-9B, Llama-3.1-8B, Gemma-4-E2B); Gemma-4 ISWA capture fix shipped (`cbd071632`); Phase C GPU GQA kernel (HIP `51a64b43c` + Vulkan `0d13ac92b`) shipped — parity achieved on both backends (`--cache-type-k q8_0`); CPU-vs-GPU divergence artifact fixed (`c5f1d135f`); Phase C Part 2 SWA-layer capture for Gemma-4 hybrid models shipped (`086c8508f`)** |
@@ -102,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `d738c4341`**, the following features are on `main`.
+As of **HEAD `62e9b6e29`**, the following features are on `main`.
 
 ---
 
@@ -590,15 +590,16 @@ code-heavy, context-repetitive tasks; avoid for general-chat or creative-writing
 
 ---
 
-### DFlash speculative decode (S1 loader + S2 dispatch + S3 GPU ring buffer) — Phase 7a
+### DFlash speculative decode (S1 loader + S2 dispatch; S3 GPU ring in progress) — Phase 7a
 
 DFlash drafter spec-decode lifted from buun `master` + z-lab drafter:
 
 - **S1 model loader** (`b6a75e524`) — drafter model architecture + GGUF loader in-tree.
 - **S2 dispatch** (`ef80c728c`) — `common_speculative_state_dflash` + factory dispatch wired into `--spec-type dflash`.
-- **S3 GPU ring buffer + bulk argmax + server `spec_type` wiring** (`9b7ab4e83`).
 - **`mask_token_id` GGUF type fix** (`1436d1890`; int32_t → uint32_t to match `llama-hparams.h`).
+- **KV-position anchor fix** (`003ecc2d1`) — anchors drafter batch to drafter KV pos (was: cross-attn ring length); unblocks solo DFlash; 25.1 % accept rate measured.
 - **DFlashDraftModel safetensors→GGUF converter** (`ee7d4f896`) — converts the z-lab dflash drafter family; smoke GREEN on Qwen3.6-DFlash @ 915 MB GGUF.
+- **Tokenizer bundling** (`f86a24a95`) — `--target-model-dir` flag copies base-model tokenizer files (required for z-lab models without standalone tokenizer).
 
 End-to-end smoke gate PASSED on Qwen3.6-35B-A3B-MTP-IQ4_XS target + Qwen3.6 DFlash-draft Q8_0 (1.8 GB):
 
@@ -609,8 +610,8 @@ llama-server --spec-type dflash -m target.gguf -md dflash-draft.gguf \
 
 **Known limitations (open):**
 
-- Dual-spec auto-enable suppressed as of `06d570ab5` (`common/speculative.cpp:2389-2392`); `--spec-type dflash` now runs DFlash alone. **Solo DFlash measured (2026-05-30, ROCm gfx1150; Qwen3.6-35B-A3B-MTP-IQ4_XS target + Qwen3.6 DFlash-draft Q8_0):** accept-rate **25.1 %** (`n_drafted=195 n_accept=49`, `--temp 0`, chat-templated, `--ignore-eos`), coherent output. This required fixing a drafter-batch KV-position bug: the draft batch was anchored to the cross-attention ring length (`cross_len`), which grows every iteration as target hiddens are committed, instead of to the drafter context's own KV position (held at the prompt checkpoint). The two coincide only on the first iteration, so every DFlash draft decode after the first failed the `Y = X + 1` consecutive-position check (`llama_batch_allocr::init()`) — solo DFlash was non-functional (the dual-spec era masked it via the `draft-simple` fallback). Fixed by anchoring the batch to `llama_memory_seq_pos_max(ctx_dft)+1`. **Perf caveat:** the S2 CPU cross-attention/ring path runs at ≈10.7 tok/s vs ≈26.7 tok/s for no-spec decode on this host — solo DFlash is now functionally correct but is a net *slowdown*; the S3+ GPU ring is required before it accelerates. (The diagnosed `can_seq_rm` ±2-token accumulation was a separate red herring — the per-decode `dflash_reset_hidden_capture()` added in `a715ae18f` already neutralises it.) The old 33.3 % figure was dual-spec (DFlash + draft-simple combined) and is obsolete.
-- Gemma-4 DFlash converter path exists but is not yet smoke-tested (z-lab Gemma-4 directory missing tokenizer files at last check).
+- Dual-spec auto-enable suppressed as of `06d570ab5`; `--spec-type dflash` now runs DFlash alone. **Solo DFlash measured (2026-05-30, ROCm gfx1150; Qwen3.6-35B-A3B-MTP-IQ4_XS target + Qwen3.6 DFlash-draft Q8_0):** accept-rate **25.1 %** (`n_drafted=195 n_accept=49`, `--temp 0`, chat-templated, `--ignore-eos`), coherent output (`003ecc2d1` KV-position fix). **Perf caveat:** the S2 CPU cross-attention/ring path runs at ≈10.7 tok/s vs ≈26.7 tok/s baseline on gfx1150 hardware — solo DFlash is functionally correct but is a net *slowdown*; the S3 GPU ring is required for a speedup. See [docs/features/dflash.md](docs/features/dflash.md) for full detail.
+- Gemma-4 DFlash converter path exists but is not yet end-to-end smoke-tested; use `--target-model-dir <gemma-4-model-dir>` to supply the tokenizer when converting.
 - Build must be ≥ `2726a56c0` (`mask_token_id` type fix is required to load any z-lab DFlash drafter).
 
 ---
@@ -781,7 +782,7 @@ conditionals.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
   mainline `b745` (`751ebd17a`); rebased 2026-05-28 (68 new mainline commits
   since `b9310`; PPL 6.5453 GREEN (gfx1103 RDNA3). Next sync ~2026-06-11.
-- Trunk: `main` (HEAD `d738c4341`).
+- Trunk: `main` (HEAD `62e9b6e29`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
@@ -825,7 +826,7 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 - **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
 - **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`); tensor-split with quantized KV unblocked + TURBO_WHT split-planner fix (shipped `6774410fa`, `340f6fe21`)
 - **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope per `[[supported-rocm-hardware-targets]]`
-- **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch + S3 GPU ring buffer shipped)
+- **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch shipped; S3 GPU ring in progress)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending imatrix retrofit per PM-15)
 - **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending); per-layer SWA KV cache type `--cache-type-{k,v}-swa` (shipped `d8ec65064`)
 - **[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** — IK quants (5b-1a/1b/1c/5b-2 all shipped CPU+CUDA/HIP+Vulkan; IQ2_KT Trellis P3a shipped with cluster-accel; P3b IQ3_KT shipped (`623835cc9`, cluster-accel k=60, ROCm GPU confirmed `c809225f6`); P3c IQ1_KT queued), BitNet (pending), MLA/FlashMLA (declined), fused MoE (pending), bf16 KV (pending); ongoing MTP improvements

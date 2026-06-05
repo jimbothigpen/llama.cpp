@@ -52,8 +52,8 @@ llama-server -m model-IQ4_KT.gguf -fa on -ngl 99 --no-mmap
 ## §1 Provenance
 
 IQ4_KT, IQ3_KT, and IQ2_KT are ported from
-[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (`andrew_trellis` and
-`frankenturbo2` branches), the source of the entire IK weight-quant family. This fork adds
+[ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (the `andrew_trellis`
+development branch), the source of the entire IK weight-quant family. This fork adds
 ROCm and Vulkan parity on top of the upstream CUDA-centric implementation.
 
 **Type ID renumbering.** This fork assigns ggml type IDs 153/154/155 — within the ik_llama
