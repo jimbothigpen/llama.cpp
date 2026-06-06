@@ -200,6 +200,30 @@ notes and the README's feature table.
 
 (none yet)
 
+## Known issues and workarounds
+
+### MTP speculative decoding hang with multi-token drafts (Vulkan, n_max ≥ 2)
+
+**Feature:** MTP (Multi-Token Prediction) speculative decoding  
+**Backends affected:** Vulkan  
+**Status:** Known issue; workaround available  
+**Symptom:** The inference process hangs indefinitely when running Vulkan MTP speculative decoding with `n_max >= 2` (multi-token draft batches). Single-token drafts (`n_max = 1`) work correctly.
+
+**Root cause:** Under investigation. The hang occurs during the speculative decoding loop when Vulkan processes batched draft predictions. ROCm is unaffected.
+
+**Workaround:** Constrain MTP draft batch size to 1 token per iteration:
+```bash
+# CLI
+./llama-cli -m model.gguf --mtp-draft-batch-size 1 ...
+
+# Server
+./llama-server -m model.gguf --mtp-draft-batch-size 1 ...
+```
+
+With `n_max = 1`, MTP speculative decoding on Vulkan delivers correct results and maintains accept rates comparable to ROCm. Performance is reduced vs. multi-token batches, but inference completes normally.
+
+**Tracking:** TODO 200 tier-2 documentation task.
+
 ## PPL regression harness requirements
 
 The harness MUST:
