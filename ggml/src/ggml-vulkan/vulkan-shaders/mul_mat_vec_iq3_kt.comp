@@ -21,14 +21,14 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-const uint IQ3KT_KA     = 0xCBAC1FEDu;
-const uint IQ3KT_Offset = 4096u;
-// TODO(IQ3KT-dualcodebook): replace fixed IQ3KT_Offset with per-sub-block selection.
-// shb[ib] bit 24 = codebook-B selector; offset = (shb >> 24) & 1u ? 36864u : 4096u.
-// Requires adding a uint offset param to iq3kt_gen_group() (same change in dequant_iq3_kt.comp).
+const uint IQ3KT_KA      = 0xCBAC1FEDu;
+const uint IQ3KT_OffsetA  = 4096u;            // codebook A (selector bit == 0)
+const uint IQ3KT_OffsetB  = 4096u + 32768u;   // codebook B (selector bit == 1) = 36864u
+// Dual-codebook (TODO 164): shb[ib] bit 24 selects the implicit codebook per sub-block.
+// Old files have bit 24 == 0, mapping to OffsetA = 4096 (backward-compatible).
 
-void iq3kt_gen_group(uint idx, out float result[8]) {
-    uint x = idx + IQ3KT_Offset;
+void iq3kt_gen_group(uint idx, uint koff, out float result[8]) {
+    uint x = idx + koff;
     [[unroll]] for (int k = 0; k < 8; k++) {
         x = IQ3KT_KA * x;
         const uint s = x & 0x3f3f3f3fu;
@@ -94,6 +94,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 const int  ls   = int((shb & 0xffu)) - 128;
                 const float dl  = d_row * float(ls);
 
+                // Per-sub-block codebook selector (bit 24 of shb).
+                const uint koff = ((shb >> 24u) & 1u) != 0u ? IQ3KT_OffsetB : IQ3KT_OffsetA;
+
                 const uint y_base = global_block * 256u + ib * 32u;
 
                 [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -116,7 +119,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                         const uint idx      = ql_byte | (qh_nibble << 8u) | (sh_4bits << 12u);
 
                         float gv[8];
-                        iq3kt_gen_group(idx, gv);
+                        iq3kt_gen_group(idx, koff, gv);
 
                         const uint b_idx = j * p.batch_stride_b + b_offset + y_base + g * 8u;
                         [[unroll]] for (uint i = 0u; i < 8u; i++) {

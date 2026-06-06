@@ -23,14 +23,14 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) readonly buffer A {uint32_t data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
 
-const uint IQ3KT_KA     = 0xCBAC1FEDu;
-const uint IQ3KT_Offset = 4096u;
-// TODO(IQ3KT-dualcodebook): replace fixed IQ3KT_Offset with per-sub-block selection.
-// shb[ib] bit 24 = codebook-B selector; offset = (shb >> 24) & 1u ? 36864u : 4096u.
-// Requires adding a uint offset param to iq3kt_gen_group().
+const uint IQ3KT_KA      = 0xCBAC1FEDu;
+const uint IQ3KT_OffsetA  = 4096u;            // codebook A (selector bit == 0)
+const uint IQ3KT_OffsetB  = 4096u + 32768u;   // codebook B (selector bit == 1) = 36864u
+// Dual-codebook (TODO 164): shb[ib] bit 24 selects the implicit codebook per sub-block.
+// Old files have bit 24 == 0, mapping to OffsetA = 4096 (backward-compatible).
 
-void iq3kt_gen_group(uint idx, out float result[8]) {
-    uint x = idx + IQ3KT_Offset;
+void iq3kt_gen_group(uint idx, uint koff, out float result[8]) {
+    uint x = idx + koff;
     [[unroll]] for (int k = 0; k < 8; k++) {
         x = IQ3KT_KA * x;
         const uint s = x & 0x3f3f3f3fu;
@@ -68,6 +68,9 @@ void main() {
     const int  ls  = int((shb & 0xffu)) - 128;
     const float sl = d * float(ls);
 
+    // Per-sub-block codebook selector (bit 24 of shb).
+    const uint koff = ((shb >> 24u) & 1u) != 0u ? IQ3KT_OffsetB : IQ3KT_OffsetA;
+
     // ql: block_u32 + 8 .. block_u32 + 15 (8 u32 = 32 bytes, 4 groups per u32)
     const uint ql_word  = data_a[block_u32 + 8u + (jj >> 2)];
     const uint ql_byte  = (ql_word >> ((jj & 3u) * 8u)) & 0xffu;
@@ -86,7 +89,7 @@ void main() {
     const uint idx = ql_byte | (qh_nibble << 8u) | (sh_4bits << 12u);
 
     float gv[8];
-    iq3kt_gen_group(idx, gv);
+    iq3kt_gen_group(idx, koff, gv);
 
     const uint y_base = ib_global * 256u + ib * 32u + g * 8u;
     [[unroll]] for (uint i = 0u; i < 8u; i++) {
