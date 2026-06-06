@@ -2503,7 +2503,7 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ ||
         k->type == GGML_TYPE_TURBOQ2_INNERQ || k->type == GGML_TYPE_TURBOQ3_INNERQ) {
         if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-        // InnerQ×TCQ hybrid (TODO 156): for TCQ K types, when InnerQ is ACTIVE the TCQ encode
+        // InnerQ×TCQ hybrid: for TCQ K types, when InnerQ is ACTIVE the TCQ encode
         // pre-scales K[j] by d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by
         // scale_inv[j] before Q's WHT rotation so that dot(Q_rot, K_rot) = dot(Q, K).
         // §-FLAG-B (batch2 2026-06-06): the innerq WHT variant must be engaged ONLY when InnerQ

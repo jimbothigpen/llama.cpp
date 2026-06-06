@@ -4,7 +4,7 @@
 > Qwen3.x is the only validated scorer architecture. Gemma3, Llama, Qwen2,
 > and Mistral code paths were generalized in `500046b0b` but have not had a
 > live end-to-end PPL or acceptance-rate gate run. Do not deploy non-Qwen
-> PFlash scorers in production; treat them as experimental pending TODO 162
+> PFlash scorers in production; treat them as experimental pending validation
 > sub-2 validation.
 
 ---
@@ -84,9 +84,9 @@ inference is done.
 | **Phase 1 — base port** | buun `master` | Scorer loader (`pflash-loader.cpp`), graph builder (`pflash-graph.cpp`), CPU scorer path | ✅ Ported |
 | **Phase 2A — CPU baseline** | — | Scorer model weight storage on CPU; 9.89s → ~0.41s per scorer pass | ✅ Shipped |
 | **Phase 3 — HIP GPU scorer** | `abe0bb81a` | GPU scorer compute via `ggml_backend_dev_by_type(GPU)` in `pflash-loader.cpp` + `pflash-graph.cpp`; CPU fallback retained for Vulkan-only builds | ✅ Shipped 2026-05-19 |
-| **CLI wire (TODO 162 sub-1)** | `92c37266f` | `--pflash-*` flags wired in `tools/cli/cli.cpp`; compression logged as `pflash: N -> M tokens (X% kept)` | ✅ Shipped 2026-05-31 |
+| **CLI wire** | `92c37266f` | `--pflash-*` flags wired in `tools/cli/cli.cpp`; compression logged as `pflash: N -> M tokens (X% kept)` | ✅ Shipped 2026-05-31 |
 | **Server path** | `076f8c069` | PFlash wired into `llama-server` prefill path | ✅ Shipped |
-| **Scorer generalization (TODO 162 sub-2)** | `500046b0b` | Non-Qwen arch support (`llama_model_arch` switch covering qwen3/qwen35/qwen2/llama/mistral3/mistral4/gemma3/gemma4); NULL-deref guards | ✅ Shipped 2026-05-31 — **§-FLAG: unvalidated (see top of doc)** |
+| **Scorer generalization** | `500046b0b` | Non-Qwen arch support (`llama_model_arch` switch covering qwen3/qwen35/qwen2/llama/mistral3/mistral4/gemma3/gemma4); NULL-deref guards | ✅ Shipped 2026-05-31 — **§-FLAG: unvalidated (see top of doc)** |
 | **Phase 4b / 4c** | — | Follow-up scorer-path refinements | 🔄 Deferred |
 
 ---
@@ -106,7 +106,7 @@ Known risks:
 - Token-importance calibration constants are tuned on Qwen3.5; non-Qwen models
   may require different `--pflash-alpha` values.
 
-Tracking: TODO 162 sub-2 (PFlash non-Qwen live-scorer validation).
+Tracking: PFlash non-Qwen live-scorer validation.
 
 ---
 

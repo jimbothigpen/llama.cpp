@@ -2,7 +2,7 @@
 
 > **IQ4_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL excellent (6.54 on Qwen3.5-9B).
 >
-> **IQ3_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL healthy (9.05 on Qwen3.5-9B, +23.5% vs IQ3_K — inherent to single-codebook design; cross-backend PPL parity confirmed: TODO 167 RESOLVED Vulkan / TODO 168 CLOSED ROCm gfx1150).
+> **IQ3_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL healthy (9.05 on Qwen3.5-9B, +23.5% vs IQ3_K — inherent to single-codebook design; cross-backend PPL parity confirmed: RESOLVED Vulkan / CLOSED ROCm gfx1150).
 >
 > **IQ2_KT — Status: Known limitation — DO NOT USE** — blanket DO-NOT-USE at any scale. General codebook defect confirmed: PPL 99.58 (0.8B brute-force baseline) / 107.87 (0.8B shipped k=60) / 33.96 (9B Vulkan, Qwen3.5-9B) — all catastrophic vs IQ2_KL (26.12 at 2.6875 bpw). Use `IQ2_KL` instead.
 
@@ -303,7 +303,7 @@ Each function reads the 4-byte row_meta float prefix first, then iterates blocks
 
 **Dispatch switch cases:** `ggml-vulkan.cpp:6769/6854/6950/16792` for IQ3_KT (IQ2_KT and IQ4_KT have matching slots; search `GGML_TYPE_IQ{2,4}_KT` in the same file).
 
-> **IQ3_KT cross-backend parity (TODO 167 + TODO 168 CLOSED).** Vulkan shaders shipped; cross-backend PPL gate TODO 167 RESOLVED (Vulkan 8.4299 / IQ3_K 6.8348, 9B 20ch). ROCm gfx1150 GPU path confirmed `c809225f6` (TODO 168 CLOSED — 99% GPU utilization / 7.66s-pass); gfx1102 warmup crash is a separate Tensile confound (not IQ3_KT-specific). All three backends confirmed. `BACKEND_PARITY.md` updated to reflect CPU+ROCm+Vulkan.
+> **IQ3_KT cross-backend parity (RESOLVED).** Vulkan shaders shipped; cross-backend PPL gate RESOLVED (Vulkan 8.4299 / IQ3_K 6.8348, 9B 20ch). ROCm gfx1150 GPU path confirmed `c809225f6` (CLOSED — 99% GPU utilization / 7.66s-pass); gfx1102 warmup crash is a separate Tensile confound (not IQ3_KT-specific). All three backends confirmed. `BACKEND_PARITY.md` updated to reflect CPU+ROCm+Vulkan.
 
 ---
 

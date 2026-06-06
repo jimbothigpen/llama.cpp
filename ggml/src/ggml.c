@@ -813,7 +813,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_turboq3_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turboq3_0_ref,
     },
-    // slots 70-71, 72-75 retired/reserved — designated-initializer gaps are intentional (TODO 159)
+    // slots 70-71, 72-75 retired/reserved — designated-initializer gaps are intentional
     [GGML_TYPE_WHT3_0] = {
         .type_name                = "wht3_0",
         .blck_size                = QK_TQ3_0,
@@ -6582,7 +6582,7 @@ struct ggml_tensor * ggml_turbo_wht(
     return result;
 }
 
-// ggml_turbo_wht_innerq — InnerQ×TCQ hybrid (TODO 156)
+// ggml_turbo_wht_innerq — InnerQ×TCQ hybrid
 // Same as ggml_turbo_wht but wires scale_inv as src[1] so the CUDA kernel
 // can apply per-channel equalization inverse before (forward) or after (inverse) the WHT.
 
@@ -6592,7 +6592,7 @@ struct ggml_tensor * ggml_turbo_wht_innerq(
         int                   direction,
         struct ggml_tensor  * scale_inv) {
     struct ggml_tensor * result = ggml_turbo_wht(ctx, a, direction);
-    result->src[1] = scale_inv;  // InnerQ×TCQ hybrid (TODO 156): per-channel scale_inv for Q correction
+    result->src[1] = scale_inv;  // InnerQ×TCQ hybrid: per-channel scale_inv for Q correction
     return result;
 }
 

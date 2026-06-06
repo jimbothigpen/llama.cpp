@@ -468,7 +468,7 @@ void quantize_row_turboq3_tcq_ref(const float * GGML_RESTRICT x, block_turboq3_t
 }
 
 void dequantize_row_turboq3_tcq(const block_turboq3_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    /* CPU dequant stub — placeholder (no codebook on CPU yet, see [[cpu-type-traits-required-for-fork-quants]]) */
+    /* CPU dequant stub — placeholder (no codebook on CPU yet) */
     GGML_UNUSED(x);
     assert(k % QK_TURBOQ3_TCQ == 0);
     const int nb = k / QK_TURBOQ3_TCQ;
@@ -511,7 +511,7 @@ void quantize_row_turboq2_tcq_ref(const float * GGML_RESTRICT x, block_turboq2_t
 }
 
 void dequantize_row_turboq2_tcq(const block_turboq2_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    /* CPU dequant stub — placeholder (no codebook on CPU yet, see [[cpu-type-traits-required-for-fork-quants]]) */
+    /* CPU dequant stub — placeholder (no codebook on CPU yet) */
     GGML_UNUSED(x);
     assert(k % QK_TURBOQ2_TCQ == 0);
     const int nb = k / QK_TURBOQ2_TCQ;
@@ -542,7 +542,7 @@ size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRIC
 
 void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k) {
     // Scalar min-max INT2 quantize (WHT already applied externally; no WHT here).
-    // Used as CPU fallback for ggml_cpy during K-shift re-encode (TODO 182).
+    // Used as CPU fallback for ggml_cpy during K-shift re-encode.
     assert(k % QK_OSCAR_INT2 == 0);
     const int nb = k / QK_OSCAR_INT2;
     for (int i = 0; i < nb; i++) {

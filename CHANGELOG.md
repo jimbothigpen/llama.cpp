@@ -9,9 +9,9 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated (TODO 159)). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256 (TODO 123); `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (TODO 126 forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed (TODO 142). /opt: b944 shipped 2026-06-05.
+HEAD: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256; `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed. /opt: b944 shipped 2026-06-05.
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG from TODO 162 sub-2). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified (TODO 142 follow-up). RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified. RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
 
 ### Optimized — WHT3_0/WHT4_0: `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12 (2026-06-05)
 
@@ -109,7 +109,7 @@ have shipped (host-/model-specific build + prequant + measurement helpers carryi
 `prequant-qwen35-9b-*.sh`, `push-milestone.sh`, `with-bench-mutex.sh`. `scripts/` now contains
 only mainline-llama.cpp scripts, ported-fork scripts, and fork-functional tooling.
 
-### Removed — RotorQuant iso/planar KV family (slots 72–75) (TODO 159) (2026-06-02)
+### Removed — RotorQuant iso/planar KV family (slots 72–75) (2026-06-02)
 
 `55bb0d418`. Removes all four RotorQuant KV types (`RQ_PLANAR3_0`, `RQ_PLANAR4_0`,
 `RQ_ISO3_0`, `RQ_ISO4_0`) ported from carlosfundora `1-bit-turbo`. PPL gap is
@@ -120,9 +120,8 @@ entries (slots 72–75 marked reserved, not renumbered), ggml.c type info table,
 ggml-common.h block struct definitions, ggml-quants.h declarations, entire
 `ggml-roto-quant.c` (~380 LOC), ggml-cpu.c dispatch entries, ggml-cuda fattn dispatch
 (~405 lines). Slots 72–75 are now **reserved**; do not reuse for unrelated types.
-Closes TODO 159.
 
-### Changed — OScaR INT2 KV: full-dim D=256 WHT + GGML_OP_FWHT removed (TODO 142) (2026-06-01)
+### Changed — OScaR INT2 KV: full-dim D=256 WHT + GGML_OP_FWHT removed (2026-06-01)
 
 Replaces the block-wise 128-pt Walsh-Hadamard Transform in OScaR INT2 KV encode/decode with
 a single full-dimension D=256 WHT. Both Qwen3.5-0.8B and -9B have `n_embd_head_k=256`; prior
@@ -139,7 +138,7 @@ rotation, giving H_D²=I (identity) — K stored unrotated → poor INT2 quality
 disabled, OScaR's H_256 is sole rotation → 0.8B: -14.3% vs old baseline, 9B: -2.5% improvement.
 §-FLAG: K-shift (RoPE update for streaming) behavior with attn_rot=false unverified for live use.
 
-### Added — weight-skip optimization for Q4_K MMVQ — port cenconq25/delta-compress-llm cc47a4a (TODO 137) (2026-06-01)
+### Added — weight-skip optimization for Q4_K MMVQ — port cenconq25/delta-compress-llm cc47a4a (2026-06-01)
 
 Ports the Q4_K weight-skip optimization from `cenconq25/delta-compress-llm@cc47a4a`
 (`ggml/src/ggml-cuda/mmvq.cu`). In the `mul_mat_vec_q` inner loop, a 4-byte scale read
@@ -154,7 +153,7 @@ prior behaviour). Scope: `ggml/src/ggml-cuda/mmvq.cu` only, 57 LOC added.
 - **Leg B (LLAMA_WEIGHT_SKIP_THRESHOLD=1e-4):** PPL = 8.8865 RC=0 — bit-identical to Leg A
 - Template-signature divergence check: CLEAN (no IQ4_KT/IQ2_KT/delta markers in our mmvq.cu)
 
-### Added — EAGLE3 compact-vocab draft support (SpecForge) — port PR #18039 (TODO 103) (2026-05-31)
+### Added — EAGLE3 compact-vocab draft support (SpecForge) — port PR #18039 (2026-05-31)
 
 `b2766ef47`. Ports PR #18039 (SpecForge 32K-draft-vocab EAGLE3 support) from upstream. EAGLE3 draft
 GGUFs with a compact vocabulary (e.g. SpecForge 32K-vocab drafters) can now be loaded alongside a
@@ -187,7 +186,7 @@ compression — CLI flags, how it works, benchmark placeholder) and `docs/featur
 (OScaR KV-cache replacement — phase status, design summary). Also updates IK-quant status and
 DFlash `--target-model-dir` docs.
 
-### Fixed — IQ3_KT ROCm: add dequantize kernel + GPU dispatch (TODO 168 CLOSED) (2026-05-31)
+### Fixed — IQ3_KT ROCm: add dequantize kernel + GPU dispatch (CLOSED) (2026-05-31)
 
 `c809225f6`. IQ3_KT was silently falling back to CPU on ROCm because the CUDA dequantize kernel
 (`dequantize_block_iq3_kt`) was absent and `ggml-cuda.cu:supports_op` never returned true for
@@ -195,9 +194,8 @@ IQ3_KT. Fix mirrors IQ4_KT: +73 LOC CUDA dequant (block + matvec), `supports_op`
 and two GEMM-dispatch sites. **Gate PASS (gfx1150):** GPU path executes at 99% utilization /
 7.66s-per-pass vs CPU-hang; IQ3_KT:IQ4_KT PPL ratio 1.30 ≈ anchor 1.29 (IQ3_KT=9.05/IQ4_KT=6.95).
 §-FLAG note: gfx1102 warmup crash is a separate known gfx1102 Tensile confound, not IQ3_KT.
-Closes TODO 168.
 
-### Added — PFlash scorer generalized to non-Qwen models (TODO 162 sub-2) (2026-05-31)
+### Added — PFlash scorer generalized to non-Qwen models (2026-05-31)
 
 `500046b0b`. PFlash prompt-compression scorer (`tools/pflash/pflash-scorer.cpp`) was Qwen3.x-only:
 hard-coded attn/ffn tensor names broke non-Qwen lookup. Fix: arch table driven by
@@ -206,33 +204,30 @@ guards on optional fields (G4/G5 models); loud unknown-arch `LLAMA_LOG_ERROR` re
 silent crash. **Qwen3.x regression: byte-identical.** §-FLAG: Gemma3/Llama live-scorer compile
 paths are new but UNVALIDATED (no non-Qwen scorer GGUF on hand at time of ship) — gate on
 non-Qwen scorer GGUF when available (filed as follow-up TODO: PFlash non-Qwen live-scorer
-validation). Closes TODO 162 sub-2.
+validation).
 
-### Docs — EAGLE 3.1 future-watch ledger entry in eagle3.md §5 (TODO 170b) (2026-05-31)
+### Docs — EAGLE 3.1 future-watch ledger entry in eagle3.md §5 (2026-05-31)
 
 `9ae70fdc5`. Adds §5 "EAGLE 3.1 — future watch" to `docs/features/eagle3.md`: summarizes the
 upstream EAGLE 3.1 paper / implementation status (not yet in mainline or fork); accept-ceiling
-architectural note (1/n_draft); monitoring criteria for when to revisit the port decision. Closes
-TODO 170b.
+architectural note (1/n_draft); monitoring criteria for when to revisit the port decision.
 
-### Docs — InnerQ KV feature doc finalized (TODO 157) (2026-05-31)
+### Docs — InnerQ KV feature doc finalized (2026-05-31)
 
 `6ce2319c3`. Finalizes `docs/features/innerq-kv.md`: backend matrix (CUDA working, HIP working,
 Vulkan §-FLAG KDD-5), corrects line-number references that had drifted after the imatrix port.
-Closes TODO 157.
 
-### Fixed — DFlash converter: --target-model-dir + tokenizer bundling (TODO 122) (2026-05-31)
+### Fixed — DFlash converter: --target-model-dir + tokenizer bundling (2026-05-31)
 
 `f86a24a95`. `conversion/dflash_draft.py` lacked the `--target-model-dir` flag needed to bundle
 the base-model tokenizer alongside the converted DFlash draft GGUF (required by z-lab DFlash
 models that ship without a standalone tokenizer). Fix adds the flag and wires `DFlashDraftModel`
 to copy tokenizer files into the output directory. The converter itself already existed
-(`ba61a9d39` TODO 122 phase 1 + `a2c9c8c49` follow-on); this closes the remaining tokenizer gap.
-Closes TODO 122 (final).
+(`ba61a9d39` phase 1 + `a2c9c8c49` follow-on); this closes the remaining tokenizer gap.
 
 ### Docs — BACKEND_PARITY IQ2_KT/IQ3_KT Vulkan ported; IQ3_KT ROCm crash flagged (2026-05-31)
 
-`docs/BACKEND_PARITY.md` rows 93 (IQ2_KT) + 97 (IQ3_KT) updated: IQ2_KT now CPU+ROCm+Vulkan (do-not-use flag retained); IQ3_KT now CPU+Vulkan (ROCm crashes in warmup, kernel present, root cause TBD — TODO 168).
+`docs/BACKEND_PARITY.md` rows 93 (IQ2_KT) + 97 (IQ3_KT) updated: IQ2_KT now CPU+ROCm+Vulkan (do-not-use flag retained); IQ3_KT now CPU+Vulkan (ROCm crashes in warmup, kernel present, root cause TBD).
 
 ### Docs — TriAttention KV-cache eviction feature doc (2026-05-31)
 
@@ -253,7 +248,7 @@ imatrix quantization requirement (ADR-016); cluster-acceleration tuning (k=60).
 **Status: IQ3_KT/IQ4_KT shipped; IQ2_KT RED (§-FLAG: blanket do-not-use, general codebook defect
 confirmed at all scales); IQ1_KT pending port from ik_llama.**
 
-### Added — PFlash → CLI prompt-compression wire (TODO 162 sub-1) (2026-05-31)
+### Added — PFlash → CLI prompt-compression wire (2026-05-31)
 
 `tools/cli/cli.cpp` (+20 LOC, `92c37266f`). Wires PFlash prompt compression into the
 `llama-cli` prompt path before task submission. Pre-tokenizes and compresses long prompts
@@ -264,7 +259,7 @@ wired in `common/arg.cpp`. **Gate: 3 smokes PASS (passthrough, sub-threshold, 89
 compression at 4.6% kept).** Mirrors server-side gate (`server-context.cpp:1587`); server
 double-compression safety check suppressed for CLI-compressed tokens.
 
-### Verdicts — IQ2_KT Qwen3.5-9B PPL = 33.96 (RED) (TODO 124 CLOSED) (2026-05-31)
+### Verdicts — IQ2_KT Qwen3.5-9B PPL = 33.96 (RED) (CLOSED) (2026-05-31)
 
 **IQ2_KT on Qwen3.5-9B yields PPL = 33.96 ±0.48 (20 chunks, Vulkan gfx1103 b812), confirming general
 codebook defect at all scales.** Scale-dependent hypothesis (small-model capacity collapse) rejected:
@@ -276,7 +271,7 @@ codebook defect at all scales.** Scale-dependent hypothesis (small-model capacit
 on 9B) is the viable 2-bit alternative.** Root cause: single per-row float scale (no per-block
 adaptation like IQ4_KT), random-hash codebook (not learned VQ), greedy per-group VQ.
 
-### Measurements — IQ3_KT/IQ3_K baseline-matrix Qwen3.5-9B (TODO 167 CLOSED) (2026-05-31)
+### Measurements — IQ3_KT/IQ3_K baseline-matrix Qwen3.5-9B (CLOSED) (2026-05-31)
 
 Vulkan gfx1103 20-chunk baseline confirms both IQ3 types drifted identically (−6.8% binary-refresh drift,
 consistent with `/opt/llama-yggdrasil-vulkan` rebase from 2026-05-25 mainline sync):
@@ -285,7 +280,7 @@ consistent with `/opt/llama-yggdrasil-vulkan` rebase from 2026-05-25 mainline sy
 
 Quality ratio IQ3_KT/IQ3_K = +23.3% (stable; inherent to single-codebook design).
 **Action: update baseline-matrix anchors.** §-FLAG: IQ3_KT ROCm backend SEGFAULTs (missing
-`mul_mat_vec_iq3_kt` kernel; TODO 168 CREATED). Vulkan works; CPU fallback unavailable.
+`mul_mat_vec_iq3_kt` kernel). Vulkan works; CPU fallback unavailable.
 
 ### Fixed — EAGLE3 B1+KV: drafter-batch KV-position anchor fix (2026-05-30)
 
@@ -351,7 +346,7 @@ Both paths validated (cli/server dispatch wiring checked; C1 option-A server-pat
 
 `0d13ac92b`. Completes GPU-accelerated scoring parity by porting the Phase C HIP kernel to Vulkan. Vulkan compute shader (`src/ggml-vulkan/` entry point behind `g_tria_backend` ABI) mirrors the HIP logic: K slice dequant (q8_0) + upload H2D, GQA-aware z-normalize, max reduction. Compiled as self-contained static lib (`tria-vulkan`), linked PRIVATE into `llama` (keep `--offload-arch` off C++ compiles). **Validation:** kernel == CPU reference 1e-5 (Qwen3.5-9B); passkey 4/4 GPU-smart vs random (100%); no regressions on Vulkan fallback path. Activates with `--cache-type-k q8_0`; falls back to CPU otherwise. **Status:** TriAttention Vulkan parity gap CLOSED. Both HIP and Vulkan now have GPU scoring backends.
 
-**MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port, TODO 148) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
+**MTP Gemma4 §-FLAG-B** — ✅ LANDED in main @ `d2c332289` (PR #23398 guided port) + `ca62c0756` (§-FLAG-B 0%-accept materialize fix) + `190d83fed` (D1 ASSIST residue retirement). End-to-end external-assistant MTP for Gemma4-26B-A4B is coherent at 47.3% accept (see Fixed entry below).
 
 ### Added — Imatrix collection for MTP/NextN draft-head layers (`--imat-mtp`) (2026-05-30)
 
@@ -368,8 +363,8 @@ double-free in cleanup paths before `llama_batch_free()`); shipped with imatrix 
 
 Adds benchmarking harness (`tools/server/bench/speed-bench/`) for systematic speculative-decode
 throughput measurement across draft strategies. Runs speculative-decode profile against a corpus,
-emits throughput (tokens/s) and accept-rate metrics. Serves TODO 103 (40-cell spec-decode
-validation matrix). Updated `docs/speculative.md` with speed-bench invocation examples.
+emits throughput (tokens/s) and accept-rate metrics. Serves 40-cell spec-decode
+validation matrix. Updated `docs/speculative.md` with speed-bench invocation examples.
 
 ### Fixed — Suppress JSON schema grammar application during thinking blocks (2026-05-30)
 
@@ -427,7 +422,7 @@ MoE Qwen3.5/3.6-35B-A3B path untested (stretch goal; mainline mixin handles MoE 
 
 ### Fixed — MTP Gemma4 §-FLAG-B: end-to-end external-assistant speculative decode (2026-05-30)
 
-Gemma4 Multi-Token Prediction (PR #23398 guided port, TODO 148) now drafts correctly
+Gemma4 Multi-Token Prediction (PR #23398 guided port) now drafts correctly
 end-to-end for the external-assistant path (Gemma4-26B-A4B-it target + `gemma4-assistant`
 drafter). Validated **coherent at 47.3% accept** (`n_drafted=112 n_accept=53`, `--temp 0`,
 ROCm gfx1150, `llama-speculative-simple --spec-type draft-mtp`), near the upstream PR #23398
@@ -506,7 +501,7 @@ Reverts mainline commit ccee426 (PR #23280) in `tools/server/server-context.cpp`
 picked up via 2026-05-25 forward-sync. The change dropped a full batch of cached
 tokens per turn on multi-turn Qwen3.6-35B-A3B (and likely Qwen3.5-35B-A3B-MTP)
 requests, collapsing cache reuse. Revert restores pre-regression cache-reuse
-behavior. Loader-smoke TODO 147 PASS (confirmed post-revert build + smoke on
+behavior. Loader-smoke PASS (confirmed post-revert build + smoke on
 Qwen3.5 MTP models). **§-RISK**: naked revert may reintroduce the hybrid-attention
 crash that #23280 was fixing; monitor mainline #23589 for a cleaner fix.
 Mainline: https://github.com/ggml-org/llama.cpp/issues/23589.
@@ -548,7 +543,7 @@ with `error loading model: missing tensor 'blk.32.attn_norm.weight'`. Root cause
 `modify_tensors` was reached. Fix: `_Qwen35MtpMixin.filter_tensors` override — in
 bundled-MTP mode passes `mtp.*` through to `modify_tensors`; in `--no-mtp` mode
 drops them (preserving the prior behaviour). Also adds missing `from pathlib import
-Path` import needed by the `mtp.fc`/`norm` remapper branch. Closes TODO 145.
+Path` import needed by the `mtp.fc`/`norm` remapper branch.
 
 ### Fixed — convert: zero nextn metadata + decrement `block_count` on `--no-mtp` for Qwen3.5/3.6 (2026-05-28, `d8ec65064`)
 
@@ -556,8 +551,8 @@ Path` import needed by the `mtp.fc`/`norm` remapper branch. Closes TODO 145.
 override) but left `block_count` counting the absent MTP block and
 `nextn_predict_layers >= 1`, causing trunk-only GGUFs to fail loading. When
 `no_mtp`, set `block_count` = trunk-only count and `nextn_predict_layers = 0`.
-Bundled-MTP (default) path unchanged. Loader-smoke TODO 147 PASS (confirmed
-post-merge). Closes TODO 146.
+Bundled-MTP (default) path unchanged. Loader-smoke PASS (confirmed
+post-merge).
 
 ### Added — OScaR Phase 2: INT2 KV residual window with hybrid-memory-chain root bug fix (2026-05-27, `c892e62a3`)
 
@@ -587,25 +582,21 @@ Replace per-row `llama_get_embeddings_pre_norm_ith()` loop with pointer arithmet
 bulk result from `llama_get_embeddings_pre_norm()` in both `common_speculative_impl_draft_mtp` and
 `common_speculative_state_draft_mtp::process()`. Prior profiling showed `embd_read_tgt` at
 65k calls consuming 59.3% wall; projects ~47% speedup (1382 s → ~730 s on 200-token sample).
-Closes TODO 134.
 
 ### Fixed — Suppress draft-simple auto-enable when dflash/mtp/draft-eagle3 explicitly set (2026-05-26, `b1799cf36`)
 
 Conditional gate in speculative loader now respects explicit `--spec-type` selection,
 preventing `draft-simple` from overriding user intent when another speculator is active.
-Closes TODO 120.
 
 ### Added — DFlash converter: safetensors→GGUF DFlashDraftModel port (2026-05-26, `ba61a9d39`)
 
 Ported `DFlashDraftModel` from Anbeeld/beellama.cpp with safetensors loader and GGUF converter.
 Enables end-to-end DFlash spec-decode workflow with externally-defined draft models.
-Closes TODO 122 (phase 1).
 
 ### Fixed — DFlash converter: post_attention_layernorm → attn_post_norm mapping (2026-05-26, `a2c9c8c49`)
 
 Safetensors key `post_attention_layernorm` maps to internal field `attn_post_norm`
 in DFlash layer struct; converter now applies correct field remapping per Anbeeld design.
-Closes TODO 122 (follow-on).
 
 ### Added — GGML_OP_FWHT: Walsh-Hadamard Transform standalone op (2026-05-26, `3d37eb55c`)
 
@@ -647,8 +638,7 @@ tracing of `delta_post = -1` on all 124 iterations ruled that out. Fix is 3 LOC.
 Gates (Qwen3.5-35B-A3B-MTP-IQ4_XS on gfx1150 ROCm):
 mrope_errors **248 → 0**; accept rate **70.769%** (≥70 gate); PPL **6.5604**
 bit-identical to anchor; MTP-ON 17.761 t/s = **0.737× MTP-OFF** (§-FLAG —
-still below 0.78–0.85× projection; clean re-measurement on a quiet host queued
-as TODO 134, since the 24.1 t/s MTP-OFF baseline used here was contaminated by
+still below 0.78–0.85× projection; clean re-measurement on a quiet host queued, since the 24.1 t/s MTP-OFF baseline used here was contaminated by
 concurrent peer-worker builds).
 
 ### Refactored — GGML op enum convergence to mainline (2026-05-25, `b3ec1f8e2`)
@@ -680,7 +670,7 @@ PPL gate (Qwen3.5-0.8B IQ4_KT @ template refactor): **11.4264 ± 2.22**
 **Known limitations:**
 
 - IQ2_KT on Qwen3.5-0.8B PPL=99.58 vs IQ2_KL=26.12 and IQ4_KT=11.43 — anomaly
-  open under `[[iq2-kt-known-issues]]` (scope-TBD: scale-dependent vs general).
+  open as a known issue (scope-TBD: scale-dependent vs general).
 - Vulkan path not yet ported.
 - IQ3_KT / IQ1_KT (Phase P3b / P3c) queued behind P3a.
 
@@ -708,8 +698,7 @@ IQ2_KL is now CPU + CUDA/HIP + Vulkan on `main`.
 ### Added — IQ5_K + IQ6_K Vulkan shaders (Phase 5b-2 S2) (2026-05-25, `0ade7ff86`)
 
 Ported IQ5_K (slot 140) and IQ6_K (slot 141) Vulkan dequant + matvec
-shaders. Both are now CPU + CUDA/HIP + Vulkan on `main`. Imatrix required
-per PM-15.
+shaders. Both are now CPU + CUDA/HIP + Vulkan on `main`. Imatrix required.
 
 ### Fixed — EAGLE3 fc tensor dtype-aware read (BF16/F16 → F32 conversion) (2026-05-25, `4c38845c4`)
 
@@ -840,7 +829,7 @@ generation. Backend-agnostic (CPU n-gram; no novel GPU kernels).
 Port of `Q1_0_G128` from carlosfundora `1-bit-turbo`. 1-bit weight quantization
 with 128-element groups. Placed at ygg canonical slot 96 (first slot of ik_llama
 compat zone) to avoid the three-way slot collision between ik_llama (41),
-carlosfundora (43), and mainline `Q1_0` (41). Imatrix required per PM-15 mandate.
+carlosfundora (43), and mainline `Q1_0` (41). Imatrix required.
 CPU + CUDA/HIP on main.
 
 ### Fixed — Vulkan MUL_MAT_ID is_empty() guard for base-K types (2026-05-24, `c4da029f3`)
@@ -857,7 +846,7 @@ With `ad277572` backend sampling pre-filtering to top-10 and bundled-MTP weight-
 `top_k=1` yields an argmax draft that closely tracks target greedy. Comment guards against
 inadvertent revert: "Do NOT raise to 10 without re-running Smoke B."
 
-### Added — NLD server self-spec loop (TODO 86, 2026-05-23, `1cb8c4218`)
+### Added — NLD server self-spec loop (2026-05-23, `1cb8c4218`)
 
 Port of `tools/server/server-context.cpp` additions from buun `f339dbebe`
 (+589 net LOC, 12 hunks): `is_diffusion` auto-detection via
@@ -869,7 +858,7 @@ cleanly (mutually exclusive: a slot is MTP or diffusion, never both).
 Server self-spec smoke: 4.49 t/s (128 tokens); ~59% draft acceptance.
 MTP regression gate: 84.62% accept on Qwen3.5-35B-A3B-MTP — above v525 anchor (77.78%).
 
-### Added — NLD Tier-B CLI port (TODO 80, 2026-05-23, `49f88e18a` + `35315922c`)
+### Added — NLD Tier-B CLI port (2026-05-23, `49f88e18a` + `35315922c`)
 
 Selective port of Nemotron-Labs Diffusion from buun `f339dbebe` (~612 LOC net):
 GGUF converter (`conversion/nemotron_labs_diffusion.py`), diffusion library
@@ -881,7 +870,7 @@ GGUF converter (`conversion/nemotron_labs_diffusion.py`), diffusion library
 Smokes: block-mode 1.9 t/s; self-spec 7.0 t/s (3.7× speedup, 68.4% draft acceptance).
 MTP regression gate: 69.0% accept on Qwen3.5-35B-A3B-MTP after port (anchor 70.3%, Δ −1.2pp, within ±5pp).
 
-### Fixed — MTP V-J accept-rate gap (TODO 81, 2026-05-23, `705ffccb8`)
+### Fixed — MTP V-J accept-rate gap (2026-05-23, `705ffccb8`)
 
 `examples/speculative-simple/speculative-simple.cpp` was calling `llama_decode(ctx_dft, batch_tgt)` directly
 instead of `common_speculative_process(spec, batch_tgt)` after the target decode. Without the process
@@ -990,7 +979,7 @@ different product line). No code changes.
 
 ### Added — README Attribution section crediting sibling forks and original authors (2026-05-18, `466fc667e`)
 
-Post-v327 follow-up. Merged `feature/readme-attribution-additions-2026-05-18-PM` into main.
+Post-v327 follow-up. Merged the README attribution additions into main.
 Documents the sibling fork lineage (buun, carlosfundora, TheTom,
 ik_llama) and original llama.cpp authors whose work this fork builds upon.
 No code changes.
@@ -1193,8 +1182,7 @@ Phase 0.7 — Sidecar plugin engine. Released at commit `f99ad5df8`.
 ### Added — Sidecar plugin runtime (~355 LoC, backend-agnostic)
 
 Hook points: residual-stream, MoE-expert, post-compute-logits, weight
-deltas. Out-of-tree `.so` plugins via a stable C ABI. Companion plugin
-tools (sidecar-*) tracked separately under `/usr/src/llama-forks/`.
+deltas. Out-of-tree `.so` plugins via a stable C ABI.
 
 ### Added — `llama_model_select_buft` API extension
 

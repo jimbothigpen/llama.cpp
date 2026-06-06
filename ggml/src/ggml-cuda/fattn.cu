@@ -480,7 +480,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_Q5_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ4_0, GGML_TYPE_Q5_1)
 #ifndef __gfx1102__
-    // gfx1102 (ai01) excluded: register pressure triggers unspecified launch failure
+    // gfx1102 excluded: register pressure triggers unspecified launch failure
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_Q4_0)
 #endif
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_Q4_1)

@@ -25,7 +25,7 @@
 // Emit a one-time note when MTP is enabled on a detected iGPU/APU. After C1 (defer+batch the
 // catch-up decode) MTP is iGPU-tuned to n_max=1, where it measures ~1.16x of pure decode on
 // gfx1150 (32.4 vs 28.0 t/s). n_max>=2 remains a net slowdown even with C1, so the iGPU default
-// is clamped to n_max=1 (see the constructor + docs/development/mtp-igpu-perf-2026-05-30.md).
+// is clamped to n_max=1 (see the constructor).
 // Uses the generic backend device registry so CUDA, HIP, and Vulkan iGPUs are all detected.
 static void mtp_warn_igpu_once() {
     static bool warned = false;
@@ -35,8 +35,7 @@ static void mtp_warn_igpu_once() {
         if (ggml_backend_dev_type(ggml_backend_dev_get(d)) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
             LOG_WRN("%s: MTP on integrated GPUs is tuned to n_max=1 (C1 catch-up batching): "
                     "measured ~1.16x of pure decode at n_max=1; n_max>=2 remains a net slowdown. "
-                    "The iGPU default is n_max=1; override with --spec-draft-n-max. "
-                    "See docs/development/mtp-igpu-perf-2026-05-30.md\n", __func__);
+                    "The iGPU default is n_max=1; override with --spec-draft-n-max.\n", __func__);
             warned = true;
             return;
         }
@@ -48,7 +47,6 @@ static void mtp_warn_igpu_once() {
 // the iGPU-tuned MTP draft depth (n_max=1), where defer+batch catch-up (C1) makes MTP a net
 // win (~1.09x of pure decode); n_max>=2 stays a slowdown even with C1.
 // Covers CUDA, HIP, and Vulkan iGPUs uniformly via GGML_BACKEND_DEVICE_TYPE_IGPU.
-// See docs/development/mtp-igpu-perf-2026-05-30.md.
 static bool mtp_any_igpu() {
     const size_t n_dev = ggml_backend_dev_count();
     for (size_t d = 0; d < n_dev; d++) {
@@ -2412,7 +2410,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));
         }
-        // (removed duplicate has_mtp push 2026-05-25 — see [[mtp-mrope-checkpoint-bug]])
+        // (removed duplicate has_mtp push 2026-05-25 — M-RoPE checkpoint fix)
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};

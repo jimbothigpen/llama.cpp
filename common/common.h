@@ -317,8 +317,8 @@ struct common_params_speculative_draft {
     // Default OFF for the MTP draft path — #23287 (commit 0bbdec4aa) default-on regressed
     // V-J accept rate on Qwen3.5-35B-A3B-MTP-IQ4_XS from 79% → 0.20% (pos[0] base sample)
     // because the backend top-k(10) pre-filter produces a different argmax than ggml_argmax
-    // over the same logits row (host argmax ≠ in-graph argmax). Root-cause TBD — see brief
-    // mtp-accept-rate-bisect-2026-05-24. This default-flip is a STOP-GAP; once the actual
+    // over the same logits row (host argmax ≠ in-graph argmax). Root-cause TBD. This
+    // default-flip is a STOP-GAP; once the actual
     // backend top-k bug is fixed, the optimization can be safely re-enabled.
     // Users who want the optimization (and accept the regression risk) can pass
     // --spec-draft-backend-sampling on the CLI.

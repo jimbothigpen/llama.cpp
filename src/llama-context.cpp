@@ -2103,7 +2103,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                     static thread_local std::vector<int64_t> d2t_map;
                     if ((int64_t) d2t_map.size() != model.d2t->ne[0]) {
-                        // EAGLE3 32K-vocab + d2t loader (TODO 174): d2t is a draft->target offset
+                        // EAGLE3 32K-vocab + d2t loader: d2t is a draft->target offset
                         // table whose stored dtype varies by converter (SpecForge ships F32; others
                         // I32/I64). Read it in its native width and normalize to int64 offsets.
                         // Previously this unconditionally read sizeof(int64_t) per element, which

@@ -10791,7 +10791,7 @@ static void ggml_compute_forward_turbo_wht_f32(
     int direction;
     memcpy(&direction, dst->op_params, sizeof(int));
 
-    // InnerQ×TCQ hybrid (TODO 156): per-channel scale_inv from src[1] (NULL = identity)
+    // InnerQ×TCQ hybrid: per-channel scale_inv from src[1] (NULL = identity)
     const ggml_tensor * scale_src = dst->src[1];
     const float * scale_inv = scale_src ? (const float *) scale_src->data : nullptr;
 

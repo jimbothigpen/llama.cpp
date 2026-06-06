@@ -55,8 +55,8 @@ static void load_tcq_norm_alpha() {
 // dumps the first N groups' post-FWHT values + Viterbi output symbols to a
 // binary file at flush time (atexit). Output path defaults to "tcq_errors.bin"
 // in the current working directory; override with TURBO_TCQ_DUMP_PATH. The
-// /tmp default from buun's commit is avoided here per [[ai00-tmp-tmpfs]] —
-// /tmp is a 16G tmpfs on our hosts and large dumps would OOM the ramdisk.
+// /tmp default from buun's commit is avoided here because /tmp may be a
+// RAM-backed tmpfs and large dumps would OOM the ramdisk.
 static int       tcq_dump_n        = 0;
 static float   * tcq_dump_x_host   = nullptr;
 static uint8_t * tcq_dump_out_host = nullptr;
@@ -1177,7 +1177,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
 
-    // InnerQ×TCQ hybrid (TODO 156): per-channel prescale before FWHT rotation.
+    // InnerQ×TCQ hybrid: per-channel prescale before FWHT rotation.
     // Enabled by TURBO_INNERQ=N env var.  Inverse scale_inv is applied to Q
     // in the WHT rotation op (llama-graph.cpp ggml_turbo_wht_innerq), so that
     // dot(scale_inv*Q_rot, scale*K_rot) = dot(Q, K) by Parseval's theorem.
@@ -1238,7 +1238,7 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     __syncthreads();
 
     // Post-rotation extraction (if enabled)
-    // (yggdrasil: TURBO_EXTRACT data-collection elided — see [[obliteratus-recon-2026-05-08]] for an external sidecar path if needed)
+    // (yggdrasil: TURBO_EXTRACT data-collection elided)
 
     // Stash norm in cost[0] for post-Viterbi (will be re-zeroed by the Viterbi init below)
     if (sid == 0) cost[0] = grp_norm;
@@ -1306,10 +1306,10 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         }
     }
     __syncthreads();
-    // H1 fix (TODO 23): revert warp-shuffle parallel argmin to pre-#21 serial loop.
+    // H1 fix: revert warp-shuffle parallel argmin to pre-#21 serial loop.
     // HIP/RDNA3 wave32 __shfl_down_sync semantics produced +0.20% chunk-1 PPL drift
     // vs the pre-#21 serial reduction; intentional divergence from buun 12a648efc
-    // per [[port-fidelity-to-mainline-llamacpp]] (discussed 2026-05-17 late-evening).
+    // to preserve fidelity with mainline llama.cpp.
     if (sid == 0) {
         float best     = warp_min_cost[0];
         int   best_idx = warp_min_idx[0];
@@ -1482,7 +1482,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
 
-    // InnerQ×TCQ hybrid (TODO 156): per-channel prescale before FWHT rotation.
+    // InnerQ×TCQ hybrid: per-channel prescale before FWHT rotation.
     if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
     __syncthreads();
 
@@ -1540,7 +1540,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     __syncthreads();
 
     // Post-rotation extraction (if enabled)
-    // (yggdrasil: TURBO_EXTRACT data-collection elided — see [[obliteratus-recon-2026-05-08]] for an external sidecar path if needed)
+    // (yggdrasil: TURBO_EXTRACT data-collection elided)
 
     // Stash norm in cost[0] for post-Viterbi
     if (sid == 0) cost[0] = grp_norm;

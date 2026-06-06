@@ -160,7 +160,7 @@ Decode (`tq3_0_rht_inverse`, `:838–849`): unpack indices → centroid lookup �
 These weight quants use their **own inline Hadamard** (`tq3_0_rht_forward`/`tq3_0_rht_inverse`):
 
 - **NOT** `GGML_OP_TURBO_WHT` — that is the KV-cache-side runtime op used by `turboq*` cache quantization during attention computation.
-- **NOT** `GGML_OP_FWHT` — that standalone op was removed as dead code (no graph consumers; see TODO 142).
+- **NOT** `GGML_OP_FWHT` — that standalone op was removed as dead code (no graph consumers).
 
 The three share the same mathematical family (Walsh-Hadamard Transform) but are fully independent implementations serving different roles.
 

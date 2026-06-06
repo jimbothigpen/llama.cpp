@@ -572,7 +572,7 @@ static __constant__ float d_turboq3_tcq_codebook[512] = {
 };
 
 // TCQ GET_ROWS dequantize (for non-FA paths)
-// InnerQ×TCQ hybrid (TODO 156) §-FLAG-A — build-gate disposition (batch2 2026-06-06):
+// InnerQ×TCQ hybrid §-FLAG-A — build-gate disposition (batch2 2026-06-06):
 // When InnerQ is active, values decoded here are in the FWHT-rotated domain
 // (cb[state]*norm ≈ FWHT(scale⊙K)[t]*norm).  The per-channel InnerQ scale is applied
 // PRE-FWHT at encode (set-rows.cu: x[ch]*=d_innerq_scale[ch] before the transform), so the
@@ -582,7 +582,7 @@ static __constant__ float d_turboq3_tcq_codebook[512] = {
 //   so no per-bin multiply by scale_inv[·] can recover dot(Q,K).  A correct inverse needs a
 //   BLOCK-level decode (load all 128 states → IFWHT → multiply scale_inv per channel), which is
 //   a new block kernel / graph op OUTSIDE the turbo-quant.cuh + turbo-wht.cu scope of this gate.
-//   ESCALATED as a follow-on (see orchestrator-inbox/escalated/...-flag-a-getrows.md).
+//   Deferred as a follow-on (needs a new block-level decode kernel/graph op).
 //   §-FLAG-B was a real regression (default TCQ path corrupted: the innerq WHT variant ran
 //   unconditionally and relied on a scale_inv==1.0 buffer that is actually cleared to 0 → Q≈0 →
 //   ~2.5x PPL). FIXED in llama-graph.cpp: engage ggml_turbo_wht_innerq ONLY when TURBO_INNERQ is

@@ -90,20 +90,20 @@ conceptually but uses Viterbi-coded trellises instead of scalar codebooks. Inner
 per-channel K-cache equalization before WHT rotation; wire format identical to the corresponding
 TURBOQ_0 block structs.
 
-### 72–79: Reserved (formerly RotorQuant KV family — removed per TODO 159)
+### 72–79: Reserved (formerly RotorQuant KV family — removed)
 
 Slots 72–75 previously held the RotorQuant KV family (`RQ_PLANAR3_0`, `RQ_PLANAR4_0`,
 `RQ_ISO3_0`, `RQ_ISO4_0`) ported from carlosfundora `1-bit-turbo`. The family was
-**removed** (`55bb0d418`, TODO 159): ISO3_0 was strictly dominated (+23.5% PPL vs
+**removed** (`55bb0d418`): ISO3_0 was strictly dominated (+23.5% PPL vs
 comparable TurboQ types), and all four types were zero-rotation scalar duplicates with
 no recoverable advantage at identical or lower bpw.
 
 | Slot | Status |
 |---|---|
-| 72 | **reserved** (formerly `GGML_TYPE_RQ_PLANAR3_0`; removed TODO 159) |
-| 73 | **reserved** (formerly `GGML_TYPE_RQ_PLANAR4_0`; removed TODO 159) |
-| 74 | **reserved** (formerly `GGML_TYPE_RQ_ISO3_0`; removed TODO 159) |
-| 75 | **reserved** (formerly `GGML_TYPE_RQ_ISO4_0`; removed TODO 159) |
+| 72 | **reserved** (formerly `GGML_TYPE_RQ_PLANAR3_0`; removed) |
+| 73 | **reserved** (formerly `GGML_TYPE_RQ_PLANAR4_0`; removed) |
+| 74 | **reserved** (formerly `GGML_TYPE_RQ_ISO3_0`; removed) |
+| 75 | **reserved** (formerly `GGML_TYPE_RQ_ISO4_0`; removed) |
 | 76–79 | reserved |
 
 ### 80–85: WHT weight family (source: TheTom `feature/turboquant-kv-cache`)
@@ -246,7 +246,7 @@ invented):
   `GGML_TYPE_PLANAR3_0` unrelated to the (now-removed) RotorQuant family.
   Our policy is: rename ours, never theirs. The `TURBOQ` prefix is already
   there to absorb this. (The `RQ_` prefix was used by RotorQuant, which was
-  removed per TODO 159; those slots 72–75 are now reserved.)
+  removed; those slots 72–75 are now reserved.)
 
 - **GGUF metadata format** (the part outside the type-ID enum) may also
   need fork-specific keys (e.g., turbo-tan's WHT rotation tables, buun's

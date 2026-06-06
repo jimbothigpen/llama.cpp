@@ -60,7 +60,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
     const int64_t d_conv      = hparams.ssm_d_conv;
     // Router MLP hidden size — ZAYA1-8B's zaya_mlp_expansion. Hardcoded here
     // because the converter does not store it as a separate GGUF KV (matches
-    // Zyphra's reference loader at ~/kernel-work/zaya1-zyphra-fork/src/models/zaya.cpp:49).
+    // Zyphra's reference ZAYA1 loader).
     const int64_t n_ff_exp    = 256;
 
     for (int i = 0; i < n_layer; ++i) {

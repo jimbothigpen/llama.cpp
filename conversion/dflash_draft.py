@@ -1,4 +1,4 @@
-# Ported from Anbeeld/beellama.cpp (MIT) — TODO 122
+# Ported from Anbeeld/beellama.cpp (MIT)
 from __future__ import annotations
 
 from typing import Any, Iterable, TYPE_CHECKING

@@ -260,7 +260,7 @@ machinery (`ckpt.update_dft` / `ckpt.load_dft` / `llama_memory_seq_rm`).
 
 ### Future: EAGLE 3.1
 
-> **Future-watch (TODO 170b) — not yet in this fork.**
+> **Future-watch — not yet in this fork.**
 
 EAGLE 3.1 was released 2026-05-26 (vLLM v0.22.0; Kimi K2.6 checkpoint is the first compatible
 weight set). The 3.1 architecture changes the d1+ `g_embd` recurrence — specifically, a post-norm
@@ -273,7 +273,7 @@ depths. This is the upstream fix path for the ceiling documented in §2.
 
 **Current status in this fork:** EAGLE 3.1 is not in tree. There are no 3.1 checkpoint weights
 available for the current validated target (Qwen3.5-9B). The compact-vocab (32K-vocab + d2t)
-loader prerequisite (formerly tracked as TODO 174) is now resolved — `b2766ef47` ports PR #18039
+loader prerequisite (formerly tracked) is now resolved — `b2766ef47` ports PR #18039
 and enables loading SpecForge-style compact-vocab EAGLE3 drafters. The remaining blocker is the
 absence of 3.1 checkpoint weights. Monitor upstream vLLM and EAGLE3 repositories for releases.
 
@@ -285,6 +285,6 @@ absence of 3.1 checkpoint weights. Monitor upstream vLLM and EAGLE3 repositories
 | **Canonical upstream** | SafeAILab EAGLE + vLLM v0.22.0 (released 2026-05-26) |
 | **Architecture change** | FC-norm (prenorm) + post-norm dual-path `g_embd` at d1+ steps — signals closer approximation of `FC(target_hidden)` rather than drafter prenorm output |
 | **Impact** | Dissolves 1/*n_draft* ceiling; d1+ accept could approach d0 rate (near 100 %) at all depths |
-| **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) — compact-vocab loader (formerly TODO 174) is now RESOLVED (`b2766ef47`) |
+| **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) — compact-vocab loader (formerly tracked) is now RESOLVED (`b2766ef47`) |
 | **Cross-reference** | PR #18039 LANDED `b2766ef47` (compact-vocab, 2026-05-31); see §2 for ceiling explanation |
 | **Next step** | Monitor SafeAILab EAGLE and vLLM repositories for weight releases; import when available + validate accept on Qwen3.5-9B |

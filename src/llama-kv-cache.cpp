@@ -350,7 +350,7 @@ llama_kv_cache::llama_kv_cache(
             }
         }
 
-        // InnerQ×TCQ hybrid (TODO 156): provision scale_inv tensor for TCQ types too.
+        // InnerQ×TCQ hybrid: provision scale_inv tensor for TCQ types too.
         // TCQ encode already applies d_innerq_scale when TURBO_INNERQ is set; the scale_inv
         // tensor (initialized to 1.0) feeds the Q-rotation WHT for the Q-side inverse.
         const bool layer_is_innerq_or_tcq =
@@ -521,7 +521,7 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
-    // OScaR INT2 K-shift fix (TODO 182 §-FLAG-ATTN_ROT_KSHIFT):
+    // OScaR INT2 K-shift fix (§-FLAG-ATTN_ROT_KSHIFT):
     // attn_rot_k=false for OScaR INT2 (avoids double H^2=I rotation on fresh tokens).
     // But the K-shift / RoPE-update path needs to un-rotate before RoPE and re-rotate
     // after, because K is stored in the WHT-rotated domain.  Pre-compute the Hadamard
@@ -2332,7 +2332,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
     inp->k_rot = build_input_k_rot(ctx);
 
-    // OScaR INT2 K-shift fix (TODO 182 §-FLAG-ATTN_ROT_KSHIFT):
+    // OScaR INT2 K-shift fix (§-FLAG-ATTN_ROT_KSHIFT):
     // K is stored in WHT-rotated domain.  Build a Hadamard rot tensor so that
     // build_rope_shift can: dequant → inv-WHT → RoPE → fwd-WHT → requant.
     // Use the first OScaR INT2 layer's head_dim (all OScaR layers must have the same WHT dim).

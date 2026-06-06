@@ -24,7 +24,7 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 const uint IQ3KT_KA      = 0xCBAC1FEDu;
 const uint IQ3KT_OffsetA  = 4096u;            // codebook A (selector bit == 0)
 const uint IQ3KT_OffsetB  = 4096u + 32768u;   // codebook B (selector bit == 1) = 36864u
-// Dual-codebook (TODO 164): shb[ib] bit 24 selects the implicit codebook per sub-block.
+// Dual-codebook: shb[ib] bit 24 selects the implicit codebook per sub-block.
 // Old files have bit 24 == 0, mapping to OffsetA = 4096 (backward-compatible).
 
 void iq3kt_gen_group(uint idx, uint koff, out float result[8]) {

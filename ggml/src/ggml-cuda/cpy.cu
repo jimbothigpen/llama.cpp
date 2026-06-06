@@ -380,7 +380,7 @@ static void ggml_cpy_f32_iq4_nl_cuda(
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
 
-// OScaR INT2 K-shift re-encode (TODO 182 §-FLAG-ATTN_ROT_KSHIFT):
+// OScaR INT2 K-shift re-encode (§-FLAG-ATTN_ROT_KSHIFT):
 // Scalar min-max INT2 quantize; input is already in WHT domain (WHT applied by graph).
 static void ggml_cpy_f32_oscar_int2_cuda(
     const char * cx, char * cdst, const int64_t ne,

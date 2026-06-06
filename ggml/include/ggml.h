@@ -440,7 +440,7 @@ extern "C" {
         GGML_TYPE_TURBOQ3_INNERQ = 69, // 3-bit + InnerQ K-cache equalization; block_turboq3_0 (50 bytes, QK=128)
         // slot 70 retired/reserved — was GGML_TYPE_TURBOQ4_INNERQ (4-bit InnerQ alias of TURBOQ4_0; InnerQ equalization regresses quality at 4-bit, PPL 9.08 vs 7.47, ft2 ccfe39d675)
         GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype (arXiv:2605.19660)
-        // slots 72-75 reserved (RQ_PLANAR3_0/RQ_PLANAR4_0/RQ_ISO3_0/RQ_ISO4_0 removed — zero-rotation scalar dup, strictly dominated; TODO 159)
+        // slots 72-75 reserved (RQ_PLANAR3_0/RQ_PLANAR4_0/RQ_ISO3_0/RQ_ISO4_0 removed — zero-rotation scalar dup, strictly dominated)
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
@@ -456,15 +456,15 @@ extern "C" {
         GGML_TYPE_IQ6_K   = 141, // ik_llama IQK 6-bit imatrix-aware weight quant (6.625 bpw) — source: ikllama/ik/iq6_k
         // slots 142–143 reserved for IK compat zone extensions
         // Phase 5b-1b: row-meta KS family (requires row_meta_size infra)
-        GGML_TYPE_IQ4_KS  = 144, // ik_llama IQK 4-bit small (4.25 bpw, row_meta=4) — source: frankenturbo2 ID 61
+        GGML_TYPE_IQ4_KS  = 144, // ik_llama IQK 4-bit small (4.25 bpw, row_meta=4) — source: ik_llama.cpp
         GGML_TYPE_IQ2_KS  = 145, // ik_llama IQK 2-bit small (2.1875 bpw, row_meta=2) — source: ikllama/main iq2_ks
-        GGML_TYPE_IQ4_KSS = 146, // ik_llama IQK 4-bit super-small (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 63
+        GGML_TYPE_IQ4_KSS = 146, // ik_llama IQK 4-bit super-small (4.0 bpw, row_meta=4) — source: ik_llama.cpp
         // slots 147–151 reserved (Q8 K-block variants per TYPE_ASSIGNMENTS.md)
         GGML_TYPE_IQ5_KS  = 152, // ik_llama IQK 5-bit small (5.25 bpw, row_meta=4) — source: ikllama/main #422
         GGML_TYPE_IQ2_KT  = 153, // ik_llama IQK trellis 2-bit (2.0 bpw, row_meta=4) — source: ik/andrew_trellis
         GGML_TYPE_IQ3_KT  = 154, // ik_llama IQK trellis 3-bit (3.0 bpw, row_meta=4) — IS_ABS=false single codebook
-        GGML_TYPE_IQ4_KT  = 155, // ik_llama IQK trellis 4-bit (4.0 bpw, row_meta=4) — source: frankenturbo2 ID 64
-        GGML_TYPE_IQ3_KS  = 156, // ik_llama IQK 3-bit small (3.1875 bpw, row_meta=2) — source: frankenturbo2 ID 62
+        GGML_TYPE_IQ4_KT  = 155, // ik_llama IQK trellis 4-bit (4.0 bpw, row_meta=4) — source: ik_llama.cpp
+        GGML_TYPE_IQ3_KS  = 156, // ik_llama IQK 3-bit small (3.1875 bpw, row_meta=2) — source: ik_llama.cpp
         GGML_TYPE_IQ2_KL  = 157, // ik_llama IQK hybrid 2-bit large (2.6875 bpw, row_meta=2) — highest quality-per-bit IK type at this bpw
         GGML_TYPE_IQ1_KT  = 158, // ik_llama IQK trellis 1.75-bit (1.75 bpw, row_meta=4) — IS_ABS=false, per-sb iq4k scale
         GGML_TYPE_COUNT   = 160, // covers full IK compat zone through slot 159
@@ -2639,7 +2639,7 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   direction);
 
-    // InnerQ×TCQ hybrid (TODO 156): WHT rotation with per-channel scale_inv applied before the transform
+    // InnerQ×TCQ hybrid: WHT rotation with per-channel scale_inv applied before the transform
     // (forward) or after (inverse). scale_inv is F32[128]; pass NULL for identity (same as ggml_turbo_wht).
     // Enables Q-side compensation for TCQ K vectors pre-scaled by InnerQ equalization at encode time:
     //   encode: K[j] *= scale[j] before FWHT  →  decode: Q[j] *= scale_inv[j] before FWHT

@@ -28,7 +28,7 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader & ml) {
     }
 
     // tok_embd is full target vocab; optional so compact drafts can inherit it from the target.
-    // EAGLE3 32K-vocab + d2t loader (TODO 174): a compact-vocab draft (d2t present) may ship its
+    // EAGLE3 32K-vocab + d2t loader: a compact-vocab draft (d2t present) may ship its
     // own draft-space token_embd ({n_embd, n_draft_vocab}), but the EAGLE3 driver feeds the draft
     // *target-space* token ids (last accepted target token + sampled ids already scattered to the
     // target vocab in llama-context.cpp), which a draft-space table cannot index. Skip the draft's
