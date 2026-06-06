@@ -76,6 +76,17 @@ class LlamaEagle3Model(TextModel):
             yield ("fc.weight", data_torch)
             return
 
+        # Per-head fc norm weights (fc_norm=True models) — no llama.cpp runtime support yet; skip.
+        if name.startswith("fcs.") and name.endswith(".weight") and name[4:-7].isdigit():
+            logger.warning("EAGLE3: skipping fc_norm weight %s (fc_norm=True not yet supported in llama.cpp)", name)
+            return
+
+        # layers.N.xxx — alternative naming used by some EAGLE3 variants; normalize to midlayer.xxx.
+        if name.startswith("layers."):
+            parts = name.split(".", 2)
+            if len(parts) == 3 and parts[1].isdigit():
+                name = "midlayer." + parts[2]
+
         # Token embeddings
         if name == "embed_tokens.weight":
             yield ("token_embd.weight", data_torch)
