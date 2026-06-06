@@ -202,27 +202,16 @@ notes and the README's feature table.
 
 ## Known issues and workarounds
 
-### MTP speculative decoding hang with multi-token drafts (Vulkan, n_max ≥ 2)
+### MTP speculative decoding with multi-token drafts (Vulkan, n_max ≥ 2) — RESOLVED
 
 **Feature:** MTP (Multi-Token Prediction) speculative decoding  
-**Backends affected:** Vulkan  
-**Status:** Known issue; workaround available  
-**Symptom:** The inference process hangs indefinitely when running Vulkan MTP speculative decoding with `n_max >= 2` (multi-token draft batches). Single-token drafts (`n_max = 1`) work correctly.
+**Backends affected:** Vulkan (historical)  
+**Status:** Resolved — `n_max >= 2` now works on Vulkan; the `--spec-draft-n-max 1` constraint is no longer required.
+**Symptom (historical):** The inference process hung when running Vulkan MTP speculative decoding with `n_max >= 2` (multi-token draft batches). Single-token drafts (`n_max = 1`) were unaffected.
 
-**Root cause:** Under investigation. The hang occurs during the speculative decoding loop when Vulkan processes batched draft predictions. ROCm is unaffected.
+**Root cause:** A partial-acceptance checkpoint-restore livelock in `examples/speculative-simple`. On a partial accept the draft prefix was restored verbatim, but the MTP draft head's per-step state was not rolled back, so the resampled tail desynced the next verification trace and the restore loop never made progress (reachable only when `n_max >= 2` can leave more than one pending draft id). It presented as a GPU-consuming hang because every restore re-ran the verify decode. The equivalent fix already existed in the server speculative path; the standalone example was missing it.
 
-**Workaround:** Constrain MTP draft batch size to 1 token per iteration:
-```bash
-# CLI
-./llama-cli -m model.gguf --spec-draft-n-max 1 ...
-
-# Server
-./llama-server -m model.gguf --spec-draft-n-max 1 ...
-```
-
-With `n_max = 1`, MTP speculative decoding on Vulkan delivers correct results and maintains accept rates comparable to ROCm. Performance is reduced vs. multi-token batches, but inference completes normally.
-
-**Tracking:** TODO 200 tier-2 documentation task.
+**Fix:** Gate the checkpoint `pop_back` on MTP drafts that still have more than one pending id, so the restore loop converges. Vulkan MTP speculative decoding now completes correctly at `n_max >= 2`.
 
 ## PPL regression harness requirements
 
