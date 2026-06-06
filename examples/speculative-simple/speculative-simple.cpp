@@ -77,6 +77,16 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        // The arch may be MTP-capable while this particular GGUF carries no NextN heads
+        // (e.g. a plain Qwen3.5-9B export). ctx_type=MTP would then silently downgrade to
+        // DEFAULT (llama-context.cpp) and the combined token+embd draft batch would abort
+        // the XOR assert in llama_context::decode. Fail fast with an actionable message.
+        if (llama_model_n_nextn_layer(model_tgt) <= 0) {
+            LOG_ERR("%s", "--spec-type draft-mtp requires an MTP-bundled model: the trunk GGUF "
+                          "has no NextN heads (nextn_predict_layers=0)\n");
+            return 1;
+        }
+
         auto cparams_mtp = common_context_params_to_llama(params);
         cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 
