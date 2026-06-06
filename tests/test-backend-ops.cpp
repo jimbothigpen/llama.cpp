@@ -9358,8 +9358,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                                     // path (ggml_compute_forward_flash_attn_ext) dereferences NULL vec_dot
                                                     // for TCQ types (no CPU dequant). Vulkan FA TCQ is validated via
                                                     // model-level PPL with TCQ KV cache, not via test-backend-ops compare.
-                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0}) {
-                                                        if ((type_KV == GGML_TYPE_TURBOQ2_0 || type_KV == GGML_TYPE_TURBOQ3_0) && hsk < 128) continue;
+                                                    // TURBOQ{2,3}_INNERQ are block-identical to plain turboq{2,3}_0
+                                                    // (CPU vec_dot aliases the plain turbo functions); included here to
+                                                    // validate that the Vulkan FA path routes INNERQ KV to the plain
+                                                    // turbo struct-binding decode (supports_op + effective-type normalize).
+                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL, GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_INNERQ, GGML_TYPE_TURBOQ3_INNERQ}) {
+                                                        const bool is_turbo_kv = (type_KV == GGML_TYPE_TURBOQ2_0 || type_KV == GGML_TYPE_TURBOQ3_0 ||
+                                                                                  type_KV == GGML_TYPE_TURBOQ2_INNERQ || type_KV == GGML_TYPE_TURBOQ3_INNERQ);
+                                                        if (is_turbo_kv && hsk < 128) continue;
                                                         if (type_KV != GGML_TYPE_F16 && hsk != 64 && hsk != 72 && hsk != 128) continue;
                                                         test_cases.emplace_back(new test_flash_attn_ext(
                                                                     hsk, hsv, nh, {nr2, nr3}, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV, type_KV));

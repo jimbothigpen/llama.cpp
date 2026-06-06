@@ -4945,6 +4945,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ2_TCQ], "get_rows_turboq2_tcq_f32", get_rows_turboq2_tcq_f32_len, get_rows_turboq2_tcq_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ3_TCQ], "get_rows_turboq3_tcq_f32", get_rows_turboq3_tcq_f32_len, get_rows_turboq3_tcq_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
 
+    // TURBOQ{2,3}_INNERQ are block-identical to plain turboq{2,3}_0, so they share
+    // the same get_rows shaders. Alias the INNERQ type slots to the plain pipelines
+    // (vk_pipeline is a shared handle) instead of compiling duplicate shaders.
+    device->pipeline_get_rows[GGML_TYPE_TURBOQ2_INNERQ]     = device->pipeline_get_rows[GGML_TYPE_TURBOQ2_0];
+    device->pipeline_get_rows[GGML_TYPE_TURBOQ3_INNERQ]     = device->pipeline_get_rows[GGML_TYPE_TURBOQ3_0];
+    device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ2_INNERQ] = device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ2_0];
+    device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ3_INNERQ] = device->pipeline_get_rows_f32[GGML_TYPE_TURBOQ3_0];
+
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
@@ -5033,6 +5041,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     SET_ROWS(_i32)
     SET_ROWS(_i64)
 #undef SET_ROWS
+
+    // TURBOQ{2,3}_INNERQ encode with the plain turboq{2,3}_0 encoder, so they share
+    // the plain turbo set_rows pipelines. Alias the INNERQ type slots for both index
+    // widths (i32/i64) rather than compiling duplicate copy-to-quant shaders.
+    device->pipeline_set_rows_i32[GGML_TYPE_TURBOQ2_INNERQ] = device->pipeline_set_rows_i32[GGML_TYPE_TURBOQ2_0];
+    device->pipeline_set_rows_i32[GGML_TYPE_TURBOQ3_INNERQ] = device->pipeline_set_rows_i32[GGML_TYPE_TURBOQ3_0];
+    device->pipeline_set_rows_i64[GGML_TYPE_TURBOQ2_INNERQ] = device->pipeline_set_rows_i64[GGML_TYPE_TURBOQ2_0];
+    device->pipeline_set_rows_i64[GGML_TYPE_TURBOQ3_INNERQ] = device->pipeline_set_rows_i64[GGML_TYPE_TURBOQ3_0];
 
 
     ggml_vk_create_pipeline(device, device->pipeline_cpy_quant_f32[GGML_TYPE_Q1_0], "cpy_q1_0_f32", cpy_q1_0_f32_len, cpy_q1_0_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {(uint32_t)ggml_blck_size(GGML_TYPE_Q1_0), 1, 1}, {}, 1);
@@ -9983,8 +9999,18 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // at FaTypeK/V∈{66,67} × N≥512 × KV>2048). Pre-dequant each TCQ tensor to F16 before FA.
     const bool k_is_tcq = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
     const bool v_is_tcq = (v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ);
-    const ggml_type effective_k_type = k_is_tcq ? GGML_TYPE_F16 : k->type;
-    const ggml_type effective_v_type = v_is_tcq ? GGML_TYPE_F16 : v->type;
+    // TURBOQ{2,3}_INNERQ are block-identical to plain turboq{2,3}_0; the InnerQ
+    // per-channel pre-scaling and its compensating scale_inv Q-rotation are applied
+    // at the graph layer (TURBO_WHT op), so FA decodes the K/V cache exactly like the
+    // plain turbo types. Normalize to the plain type so the FaTypeK/V push constants
+    // (== ggml_type value) hit the existing turboq{2,3}_0 struct-binding decode path.
+    auto innerq_to_plain = [](ggml_type t) -> ggml_type {
+        if (t == GGML_TYPE_TURBOQ2_INNERQ) return GGML_TYPE_TURBOQ2_0;
+        if (t == GGML_TYPE_TURBOQ3_INNERQ) return GGML_TYPE_TURBOQ3_0;
+        return t;
+    };
+    const ggml_type effective_k_type = k_is_tcq ? GGML_TYPE_F16 : innerq_to_plain(k->type);
+    const ggml_type effective_v_type = v_is_tcq ? GGML_TYPE_F16 : innerq_to_plain(v->type);
 
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
@@ -11321,7 +11347,9 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 dst->type == GGML_TYPE_TURBOQ3_0 ||
                 dst->type == GGML_TYPE_TURBOQ4_0 ||
                 dst->type == GGML_TYPE_TURBOQ2_TCQ ||
-                dst->type == GGML_TYPE_TURBOQ3_TCQ) {
+                dst->type == GGML_TYPE_TURBOQ3_TCQ ||
+                dst->type == GGML_TYPE_TURBOQ2_INNERQ ||  // alias plain turboq{2,3}_0 encoder
+                dst->type == GGML_TYPE_TURBOQ3_INNERQ) {
                 // turbo/TCQ SET_ROWS: one workgroup per 128-element block
                 // (WHT + Viterbi encoder need full workgroup-wide reductions).
                 ne = CEIL_DIV(ne, ggml_blck_size(dst->type));
@@ -16998,10 +17026,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
+                    // TURBOQ{2,3}_INNERQ are byte-identical to plain turboq{2,3}_0
+                    // (same block layout/encoder/decoder); the InnerQ per-channel
+                    // pre-scaling and its scale_inv Q-rotation live at the graph/
+                    // kv-cache layer, not the backend. FA decodes via the plain
+                    // turbo struct bindings (type normalized in ggml_vk_flash_attn).
+                    case GGML_TYPE_TURBOQ2_INNERQ:
+                    case GGML_TYPE_TURBOQ3_INNERQ:
                         return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
-                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                     }
@@ -17057,8 +17091,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_IQ5_K:
                     case GGML_TYPE_IQ6_K:
                     case GGML_TYPE_I32:
+                    // TURBOQ{2,3}_INNERQ alias the plain turboq{2,3}_0 get_rows pipelines
+                    // (block-identical); see ggml_vk_load_shaders pipeline aliasing.
+                    case GGML_TYPE_TURBOQ2_INNERQ:
+                    case GGML_TYPE_TURBOQ3_INNERQ:
                         return true;
-                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                 }
@@ -17081,11 +17118,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ4_0:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_TURBOQ3_TCQ:
-                        // WHT4_0/WHT3_0 SET_ROWS pipelines not implemented on Vulkan
-                        // (WHT forward needed but no copy_to_quant variant exists);
-                        // returning false routes the op to CPU and silent-skips in tests.
+                    // TURBOQ{2,3}_INNERQ encode with the plain turboq{2,3}_0 encoder
+                    // (from_float_ref == quantize_row_turboq{2,3}_0_ref); they alias the
+                    // plain turbo set_rows pipelines. WHT4_0/WHT3_0 remain unimplemented.
+                    case GGML_TYPE_TURBOQ2_INNERQ:
+                    case GGML_TYPE_TURBOQ3_INNERQ:
                         return true;
-                    // TURBOQ*_INNERQ: Vulkan CPU fallback (no GLSL shaders; see KDD-5 + TYPE_ASSIGNMENTS.md)
                     default:
                         return false;
                 }

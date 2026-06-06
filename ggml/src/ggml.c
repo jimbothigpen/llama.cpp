@@ -8085,6 +8085,10 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBOQ4_0: result = quantize_turboq4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ2_TCQ: result = quantize_turboq2_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ3_TCQ: result = quantize_turboq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        // TURBOQ{2,3}_INNERQ are block-identical to plain turboq{2,3}_0 and encode with the
+        // same quantizer (the InnerQ pre-scaling + scale_inv live at the graph/KV-cache layer).
+        case GGML_TYPE_TURBOQ2_INNERQ: result = quantize_turboq2_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBOQ3_INNERQ: result = quantize_turboq3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_KV_OSCAR_INT2: result = quantize_kv_oscar_int2(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT3_0:  result = quantize_wht3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT4_0:  result = quantize_wht4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
