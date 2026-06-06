@@ -2503,7 +2503,17 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ ||
         k->type == GGML_TYPE_TURBOQ2_INNERQ || k->type == GGML_TYPE_TURBOQ3_INNERQ) {
         if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-        q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
+        // InnerQ×TCQ hybrid (TODO 156): for TCQ K types, TCQ encode pre-scales K[j] by
+        // d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by scale_inv[j]
+        // before Q's WHT rotation so that dot(Q_rot, K_rot) = dot(Q, K).
+        // scale_inv is initialized to 1.0 when TURBO_INNERQ is off → zero overhead.
+        const bool k_is_tcq = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
+        ggml_tensor * iq_scale_inv = k_is_tcq ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
+        if (iq_scale_inv) {
+            q = ggml_turbo_wht_innerq(ctx0, q, 0, iq_scale_inv);
+        } else {
+            q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
+        }
     }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);

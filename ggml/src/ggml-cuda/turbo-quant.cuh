@@ -572,6 +572,14 @@ static __constant__ float d_turboq3_tcq_codebook[512] = {
 };
 
 // TCQ GET_ROWS dequantize (for non-FA paths)
+// InnerQ×TCQ hybrid (TODO 156) §-FLAG: when InnerQ is active, values decoded here are in the
+// FWHT-rotated domain (cb[state]*norm ≈ FWHT(scale*K)[t]*corrected_norm).  The FA path is
+// corrected by ggml_turbo_wht_innerq (Q-side scale_inv in WHT); but the GET_ROWS path feeds
+// generic matrix-multiply kernels that don't apply any Q-side compensation.  This means that
+// when InnerQ + TCQ are both active the fallback (non-FA) dot products include the per-channel
+// scale bias.  The fix requires a block-level decode (load all 128 states, apply inverse FWHT,
+// apply d_innerq_scale_inv) which is impractical per-element here.  Accepted for this draft;
+// full fix is a follow-on (see §4 of the exit brief).
 #define QR_TURBOQ3_TCQ 2
 static __device__ __forceinline__
 void dequantize_turboq3_tcq(const void * vx, const int64_t ib, const int iqs, float2 & v) {
@@ -659,7 +667,7 @@ static __device__ uint8_t * d_tcq_dump_out_buf = nullptr; // [max_groups][128] V
 static __device__ int       d_tcq_dump_max     = 0;       // max groups to dump (0 = disabled)
 
 
-// 2-bit TCQ GET_ROWS dequantize
+// 2-bit TCQ GET_ROWS dequantize — see §-FLAG in dequantize_turboq3_tcq above re: InnerQ×TCQ GET_ROWS gap
 #define QR_TURBOQ2_TCQ 2
 static __device__ __forceinline__
 void dequantize_turboq2_tcq(const void * vx, const int64_t ib, const int iqs, float2 & v) {

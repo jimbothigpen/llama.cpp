@@ -1177,7 +1177,10 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
 
-    // InnerQ scaling (parallel; gated by d_innerq_active per yggdrasil convention)
+    // InnerQ×TCQ hybrid (TODO 156): per-channel prescale before FWHT rotation.
+    // Enabled by TURBO_INNERQ=N env var.  Inverse scale_inv is applied to Q
+    // in the WHT rotation op (llama-graph.cpp ggml_turbo_wht_innerq), so that
+    // dot(scale_inv*Q_rot, scale*K_rot) = dot(Q, K) by Parseval's theorem.
     if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
     __syncthreads();
 
@@ -1479,7 +1482,7 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
 
-    // InnerQ scaling (parallel; gated by d_innerq_active per yggdrasil convention)
+    // InnerQ×TCQ hybrid (TODO 156): per-channel prescale before FWHT rotation.
     if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
     __syncthreads();
 

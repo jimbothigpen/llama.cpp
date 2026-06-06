@@ -350,7 +350,14 @@ llama_kv_cache::llama_kv_cache(
             }
         }
 
-        if (!innerq_buft && (ggml_type_is_turboq_innerq(layer_type_k) || ggml_type_is_turboq_innerq(layer_type_v))) {
+        // InnerQ×TCQ hybrid (TODO 156): provision scale_inv tensor for TCQ types too.
+        // TCQ encode already applies d_innerq_scale when TURBO_INNERQ is set; the scale_inv
+        // tensor (initialized to 1.0) feeds the Q-rotation WHT for the Q-side inverse.
+        const bool layer_is_innerq_or_tcq =
+            ggml_type_is_turboq_innerq(layer_type_k) || ggml_type_is_turboq_innerq(layer_type_v) ||
+            layer_type_k == GGML_TYPE_TURBOQ2_TCQ  || layer_type_k == GGML_TYPE_TURBOQ3_TCQ  ||
+            layer_type_v == GGML_TYPE_TURBOQ2_TCQ  || layer_type_v == GGML_TYPE_TURBOQ3_TCQ;
+        if (!innerq_buft && layer_is_innerq_or_tcq) {
             innerq_buft = buft;
         }
 

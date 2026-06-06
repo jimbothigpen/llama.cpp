@@ -6582,6 +6582,20 @@ struct ggml_tensor * ggml_turbo_wht(
     return result;
 }
 
+// ggml_turbo_wht_innerq — InnerQ×TCQ hybrid (TODO 156)
+// Same as ggml_turbo_wht but wires scale_inv as src[1] so the CUDA kernel
+// can apply per-channel equalization inverse before (forward) or after (inverse) the WHT.
+
+struct ggml_tensor * ggml_turbo_wht_innerq(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   direction,
+        struct ggml_tensor  * scale_inv) {
+    struct ggml_tensor * result = ggml_turbo_wht(ctx, a, direction);
+    result->src[1] = scale_inv;  // InnerQ×TCQ hybrid (TODO 156): per-channel scale_inv for Q correction
+    return result;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ggml_hash_set ggml_hash_set_new(size_t size) {

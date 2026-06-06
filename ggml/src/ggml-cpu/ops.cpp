@@ -10791,6 +10791,10 @@ static void ggml_compute_forward_turbo_wht_f32(
     int direction;
     memcpy(&direction, dst->op_params, sizeof(int));
 
+    // InnerQ×TCQ hybrid (TODO 156): per-channel scale_inv from src[1] (NULL = identity)
+    const ggml_tensor * scale_src = dst->src[1];
+    const float * scale_inv = scale_src ? (const float *) scale_src->data : nullptr;
+
     const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2;
     const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1;
 
@@ -10807,8 +10811,15 @@ static void ggml_compute_forward_turbo_wht_f32(
         float x[128];
         const float * in = src_data + g * 128;
 
+        // InnerQ×TCQ hybrid: forward → apply scale_inv BEFORE signs+WHT
+        if (direction == 0 && scale_inv) {
+            for (int i = 0; i < 128; i++) x[i] = in[i] * scale_inv[i];
+        } else {
+            for (int i = 0; i < 128; i++) x[i] = in[i];
+        }
+
         // Apply first signs
-        for (int i = 0; i < 128; i++) x[i] = in[i] * s_first[i];
+        for (int i = 0; i < 128; i++) x[i] *= s_first[i];
 
         // WHT butterfly (7 stages)
         for (int h = 1; h < 128; h *= 2) {
@@ -10826,6 +10837,10 @@ static void ggml_compute_forward_turbo_wht_f32(
         float * out = dst_data + g * 128;
         for (int i = 0; i < 128; i++) {
             out[i] = x[i] * inv_sqrt_128 * s_second[i];
+            // InnerQ×TCQ hybrid: inverse → apply scale_inv AFTER WHT+signs
+            if (direction == 1 && scale_inv) {
+                out[i] *= scale_inv[i];
+            }
         }
     }
 }
