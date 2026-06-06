@@ -572,14 +572,25 @@ static __constant__ float d_turboq3_tcq_codebook[512] = {
 };
 
 // TCQ GET_ROWS dequantize (for non-FA paths)
-// InnerQ×TCQ hybrid (TODO 156) §-FLAG: when InnerQ is active, values decoded here are in the
-// FWHT-rotated domain (cb[state]*norm ≈ FWHT(scale*K)[t]*corrected_norm).  The FA path is
-// corrected by ggml_turbo_wht_innerq (Q-side scale_inv in WHT); but the GET_ROWS path feeds
-// generic matrix-multiply kernels that don't apply any Q-side compensation.  This means that
-// when InnerQ + TCQ are both active the fallback (non-FA) dot products include the per-channel
-// scale bias.  The fix requires a block-level decode (load all 128 states, apply inverse FWHT,
-// apply d_innerq_scale_inv) which is impractical per-element here.  Accepted for this draft;
-// full fix is a follow-on (see §4 of the exit brief).
+// InnerQ×TCQ hybrid (TODO 156) §-FLAG-A — build-gate disposition (batch2 2026-06-06):
+// When InnerQ is active, values decoded here are in the FWHT-rotated domain
+// (cb[state]*norm ≈ FWHT(scale⊙K)[t]*norm).  The per-channel InnerQ scale is applied
+// PRE-FWHT at encode (set-rows.cu: x[ch]*=d_innerq_scale[ch] before the transform), so the
+// stored states encode FWHT of an already-scaled vector.
+//   §-FLAG-A is NOT correctable per-element here: this dequant emits one FWHT bin t, but a
+//   diagonal pre-rotation scaling does not commute with the FWHT (S·F ≠ F·S' for diagonal S),
+//   so no per-bin multiply by scale_inv[·] can recover dot(Q,K).  A correct inverse needs a
+//   BLOCK-level decode (load all 128 states → IFWHT → multiply scale_inv per channel), which is
+//   a new block kernel / graph op OUTSIDE the turbo-quant.cuh + turbo-wht.cu scope of this gate.
+//   ESCALATED as a follow-on (see orchestrator-inbox/escalated/...-flag-a-getrows.md).
+//   §-FLAG-B was a real regression (default TCQ path corrupted: the innerq WHT variant ran
+//   unconditionally and relied on a scale_inv==1.0 buffer that is actually cleared to 0 → Q≈0 →
+//   ~2.5x PPL). FIXED in llama-graph.cpp: engage ggml_turbo_wht_innerq ONLY when TURBO_INNERQ is
+//   active; otherwise plain ggml_turbo_wht → byte-identical to baseline (PPL 6.4741, no regression).
+//   §-FLAG-C (src->data cast) is correct as drafted: turbo-wht.cu reads src[1]->data (device ptr).
+// Impact bound: TURBO_INNERQ off (default) → no encode scale, scale_inv=1.0 → byte-identical
+//   to TCQ-only (this path correct).  TURBO_INNERQ on + FA (-fa) → Q-rotation compensation makes
+//   it correct (GET_ROWS bypassed).  Only TURBO_INNERQ on + non-FA hits the uncorrected path.
 #define QR_TURBOQ3_TCQ 2
 static __device__ __forceinline__
 void dequantize_turboq3_tcq(const void * vx, const int64_t ib, const int iqs, float2 & v) {

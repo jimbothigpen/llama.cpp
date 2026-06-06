@@ -2503,12 +2503,19 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ ||
         k->type == GGML_TYPE_TURBOQ2_INNERQ || k->type == GGML_TYPE_TURBOQ3_INNERQ) {
         if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-        // InnerQ×TCQ hybrid (TODO 156): for TCQ K types, TCQ encode pre-scales K[j] by
-        // d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by scale_inv[j]
-        // before Q's WHT rotation so that dot(Q_rot, K_rot) = dot(Q, K).
-        // scale_inv is initialized to 1.0 when TURBO_INNERQ is off → zero overhead.
-        const bool k_is_tcq = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
-        ggml_tensor * iq_scale_inv = k_is_tcq ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
+        // InnerQ×TCQ hybrid (TODO 156): for TCQ K types, when InnerQ is ACTIVE the TCQ encode
+        // pre-scales K[j] by d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by
+        // scale_inv[j] before Q's WHT rotation so that dot(Q_rot, K_rot) = dot(Q, K).
+        // §-FLAG-B (batch2 2026-06-06): the innerq WHT variant must be engaged ONLY when InnerQ
+        // is actually active. Relying on a "scale_inv == 1.0" tensor for the default path is
+        // fragile (the buffer is cleared to 0 by ggml_backend_buffer_clear; if the 1.0 init does
+        // not land on the exact graph tensor, Q is zeroed → ~2x PPL). Gating on TURBO_INNERQ (the
+        // same env that arms the encode-side d_innerq_scale) makes the default path call plain
+        // ggml_turbo_wht — byte-identical to the non-hybrid baseline (verified: no regression).
+        const char * iq_env   = getenv("TURBO_INNERQ");
+        const bool   innerq_on = iq_env && atoi(iq_env) != 0;
+        const bool   k_is_tcq  = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
+        ggml_tensor * iq_scale_inv = (k_is_tcq && innerq_on) ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
         if (iq_scale_inv) {
             q = ggml_turbo_wht_innerq(ctx0, q, 0, iq_scale_inv);
         } else {
