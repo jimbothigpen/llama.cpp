@@ -162,8 +162,10 @@ tps_cell() {
     -ctk "$kk" -ctv "$kv" -p 512 -n 128 -d "$TPS_CTX" -r 5
   local rc=$?
   local pp tg
-  pp=$(awk '/pp512/ { for(i=1;i<=NF;i++) if($i~/^[0-9]+\.[0-9]+$/){print $i; exit} }' "$log")
-  tg=$(awk '/tg128/ { for(i=1;i<=NF;i++) if($i~/^[0-9]+\.[0-9]+$/){print $i; exit} }' "$log")
+  # t/s = field immediately BEFORE '±'. (The first decimal on the row is the model's GiB size; the old
+  # first-decimal grab silently wrote GiB into the tps columns. Fixed 2026-06-06: anchor on '±'.)
+  pp=$(awk '/pp512 @/ { for(i=1;i<=NF;i++) if($i=="±"){print $(i-1); exit} }' "$log")
+  tg=$(awk '/tg128 @/ { for(i=1;i<=NF;i++) if($i=="±"){print $(i-1); exit} }' "$log")
   local note="rc=$rc"
   [ "$rc" -ne 0 ] && note="FAIL rc=$rc $(grep -iE 'error|abort|assert' "$log" | tail -1 | cut -c1-60)"
   echo "$kk,$kv,$mlabel,pp512_tps,$TPS_CTX,${LABEL},$SHA,${pp:-},$note" >> "$CSV"
