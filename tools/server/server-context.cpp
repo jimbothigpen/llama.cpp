@@ -852,7 +852,7 @@ private:
 
                 bool skip_measure = false;
                 //TODO: remove this
-                if (spec_mtp && has_draft) {
+                if (has_draft) {
                     struct gguf_init_params meta_params = {
                         /* .no_alloc = */ true,
                         /* .ctx      = */ nullptr,
@@ -865,6 +865,13 @@ private:
                             SRV_WRN("[spec] skipping --fit memory measurement for Gemma 4 assistant draft model '%s'\n",
                                     params_dft.model.path.c_str());
                         }
+                    }
+                    // Compact-vocab EAGLE3 (d2t present): tok_embd is null until inherited from target —
+                    // common_get_device_memory_data would segfault before that can happen.
+                    if (!skip_measure && meta && gguf_find_tensor(meta.get(), "d2t.weight") >= 0) {
+                        skip_measure = true;
+                        SRV_WRN("[spec] skipping --fit memory measurement for compact-vocab EAGLE3 draft '%s'\n",
+                                params_dft.model.path.c_str());
                     }
                 }
 
