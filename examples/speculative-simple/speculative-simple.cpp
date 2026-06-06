@@ -349,6 +349,24 @@ int main(int argc, char ** argv) {
         if (use_ckpt_tgt && ids.size() - 1 < draft.size()) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, draft.size());
 
+            // MTP progress guarantee (mirror of server fix 13d638b2f). `ids` holds the
+            // validated draft prefix plus one resampled tail token. For MTP-driven
+            // speculation the MTP head's per-step state is NOT captured by ckpt.load_dft,
+            // so reusing `ids` verbatim — including the resampled tail — desyncs the next
+            // accept_n trace from the original sampler trace and locks this partial-accept
+            // restore loop indefinitely (observed as endless "partial acceptance: N < M,
+            // restoring checkpoint" with n_predict frozen, GPU busy on redundant re-verifies).
+            // Dropping the resampled tail forces the next iteration to re-verify only the
+            // validated drafts, which strictly shrinks the draft each restore and converges.
+            // Gate on ids.size() > 1: when only the resample survives (zero drafts accepted),
+            // keep ids[0] so the loop re-verifies the target's own prediction (always
+            // re-accepted), which is what breaks the full-rejection loop — popping there
+            // would empty the draft and is actively harmful. The hang only manifests at
+            // n_max >= 2, where a partial accept can leave ids.size() > 1.
+            if (want_mtp && ids.size() > 1) {
+                ids.pop_back();
+            }
+
             draft = std::move(ids);
 
             {
