@@ -970,6 +970,9 @@ private:
                 return false;
             }
 
+            // Compact-vocab EAGLE3 drafts need target's tok_embd before context creation
+            common_speculative_setup_draft_model(model_dft.get(), model_tgt);
+
             auto cparams = common_context_params_to_llama(params_dft);
 
             if (spec_mtp) {
