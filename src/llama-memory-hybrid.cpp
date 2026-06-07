@@ -58,7 +58,10 @@ llama_memory_hybrid::llama_memory_hybrid(
         offload,
         rs_size,
         n_seq_max,
-        0, // n_rs_seq: hybrid models don't use MTP draft rollback
+        n_rs_seq, // forward MTP draft-rollback snapshot planes; widens the recurrent
+                  // (conv/ssm) state buffer to (1 + n_rs_seq) groups so build_conv_state's
+                  // rollback-splits view stays in bounds. Inert (0) for non-MTP contexts.
+                  // Arch eligibility is gated upstream by llm_arch_supports_rs_rollback().
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
