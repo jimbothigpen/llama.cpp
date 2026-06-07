@@ -10,7 +10,13 @@ void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_kv_from_start = hparams.n_layer() - (int32_t) n_kv_shared_layers;
     hparams.f_attention_scale     = 1.0f;
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,         hparams.n_layer_nextn, false);
+    // NOTE: do NOT read nextn_predict_layers here. The gemma4-assistant is a standalone
+    // external drafter whose `block_count` layers are ALL real attention layers — none are
+    // appended "next-n" prediction layers. Under the b9547 hparams refactor
+    // (n_layer() == n_layer_all - n_layer_nextn) the checkpoint's nextn_predict_layers == block_count
+    // would drive n_layer() to 0, which segfaults llama_model::print_info() and mis-routes the
+    // MTP context-type gate (llama-context.cpp checks n_layer_nextn == 0). Leave n_layer_nextn = 0.
+    // (am17an gemma4-mtp, upstream PR #23398 — "adjust to hparams changes")
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,           hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,     hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,  hparams.f_norm_rms_eps);

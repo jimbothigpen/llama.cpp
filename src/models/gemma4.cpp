@@ -270,6 +270,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
+        // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
@@ -398,15 +399,21 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     }
     cur = inpL;
 
+    cur = build_norm(cur,
+            model.output_norm, nullptr,
+            LLM_NORM_RMS, -1);
+
+    // Expose the post-output-norm hidden state (the LM-head input feature) so that
+    // MTP draft contexts can read it via llama_get_embeddings_nextn_ith() as the
+    // recurrent h input. This matches the reference (transformers/vLLM/SGLang) and
+    // the working qwen35moe MTP path, which feed the drafter the target's
+    // post-final-norm hidden state. (am17an gemma4-mtp, upstream PR #23398)
+    cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
     if (!cparams.embeddings_nextn_masked && inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
-
-    cur = build_norm(cur,
-            model.output_norm, nullptr,
-            LLM_NORM_RMS, -1);
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;

@@ -3757,7 +3757,10 @@ llama_context * llama_init_from_model(
     }
 
     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-        model->hparams.n_layer_nextn == 0) {
+        model->hparams.n_layer_nextn == 0 &&
+        model->arch != LLM_ARCH_GEMMA4_ASSISTANT) {
+        // Gemma4-assistant is an external MTP drafter: all its layers are real, so n_layer_nextn == 0.
+        // Mirror the same exception already applied when resolving cparams.ctx_type above (~L258).
         LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
         return nullptr;
     }
