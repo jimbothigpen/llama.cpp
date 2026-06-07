@@ -3734,6 +3734,11 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (params.type_k == GGML_TYPE_IQ4_NL || params.type_v == GGML_TYPE_IQ4_NL) {
+        LLAMA_LOG_ERROR("%s: iq4_nl KV cache has no FlashAttention kernel; use q4_0/q4_1 (4-bit) or turboq* (sub-4-bit)\n", __func__);
+        return nullptr;
+    }
+
     if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
         params.pooling_type != model->hparams.pooling_type) {
         //user-specified pooling-type is different from the model default
