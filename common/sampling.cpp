@@ -302,7 +302,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     const bool need_rbudget_for_grammar =
         params.grammar_lazy ||
         (grmr && params.grammar.type == COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT);
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (need_rbudget_for_grammar || params.reasoning_budget_tokens >= 0)) {
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (need_rbudget_for_grammar || params.reasoning_budget_tokens >= 0 || params.reasoning_control)) {
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,

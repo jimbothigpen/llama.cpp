@@ -3,7 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
-#include "../src/llama-ext.h"
+#include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -204,7 +204,7 @@ struct common_speculative_impl {
     virtual bool need_embd() const { return false; }
 
     // true if this implementation requires the target context to extract pre-norm embeddings
-    virtual bool need_embd_pre_norm() const { return false; }
+    virtual bool need_embd_nextn() const { return false; }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -665,7 +665,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
         GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
-                "MTP input row width must match the target h_pre_norm width");
+                "MTP input row width must match the target h_nextn width");
 
         LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -720,8 +720,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
-        llama_set_embeddings_pre_norm(ctx_tgt, true, /*masked*/ false);
-        llama_set_embeddings_pre_norm(ctx_dft, true, /*masked*/ true);
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
         llama_set_mtp_source(ctx_dft, ctx_tgt);
 
         kv_shared_with_target = llama_model_n_layer_kv(llama_get_model(ctx_dft)) == 0;
@@ -813,7 +813,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // single bulk GPU→CPU sync: one call forces host sync for all tgt embeddings;
         // subsequent rows read from this pointer with offset arithmetic (no extra sync per row).
-        const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
+        const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
 
         // If kv is shared with target (e.g Gemma4) there is no catch-up at all.
         // Otherwise (Qwen NextN/MTP, own KV) C1 Path C DEFERS the catch-up decode: instead of
@@ -886,7 +886,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // C1: batch index of each seq's lead token in the FIRST decode. Because we prepend the
         // deferred catch-up span (KV-only, logits off) before each lead, the lead is no longer at
         // batch index 0/1/2…; the chain-sampling logits/embd reads index by BATCH position
-        // (get_logits_ith / get_embeddings_pre_norm_ith resolve via output_ids), so the first pass
+        // (get_logits_ith / get_embeddings_nextn_ith resolve via output_ids), so the first pass
         // must read at the lead's true batch index, not the sequential per-seq counter.
         std::vector<int32_t> lead_ibatch(n_seq, -1);
 
@@ -952,11 +952,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 // First pass reads the lead's logits/embd at its TRUE batch index (the KV-only
                 // deferred prefix shifts the lead off the sequential position; get_logits_ith /
-                // get_embeddings_pre_norm_ith index by batch position via output_ids). Later passes
+                // get_embeddings_nextn_ith index by batch position via output_ids). Later passes
                 // rebuild a prefix-free batch, so the sequential counter equals the batch index.
                 const int32_t s_idx = first_pass ? lead_ibatch[seq_id] : i_batch;
                 common_sampler_sample(smpl, ctx_dft, s_idx, true);
-                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, s_idx);
+                h_row = llama_get_embeddings_nextn_ith(ctx_dft, s_idx);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -1051,7 +1051,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         return false;
     }
 
-    bool need_embd_pre_norm() const override {
+    bool need_embd_nextn() const override {
         return true;
     }
 };
@@ -1143,8 +1143,8 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             }
         }
 
-        llama_set_embeddings_pre_norm(ctx_tgt, true, /*masked=*/ false);
-        llama_set_embeddings_pre_norm(ctx_dft, true, /*masked=*/ true);
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked=*/ false);
+        llama_set_embeddings_nextn(ctx_dft, true, /*masked=*/ true);
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -1235,7 +1235,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         // subsequent rows read from this pointer with offset arithmetic (no extra sync per row).
         // shift the tgt embeddings to the right by one position
         // assumes that the tokens in the batch are sequential for each sequence
-        const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
+        const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
         std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
 
         auto set_h = [&](int idx, const float * h_row) {
@@ -1336,7 +1336,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
                 auto * smpl = smpls[seq_id].get();
 
                 common_sampler_sample(smpl, ctx_dft, i_batch, true);
-                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, i_batch);
+                h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -1433,7 +1433,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         return false;
     }
 
-    bool need_embd_pre_norm() const override {
+    bool need_embd_nextn() const override {
         return true;
     }
 };
@@ -2337,6 +2337,40 @@ static uint32_t common_get_enabled_speculative_configs(const std::vector<common_
     return result;
 }
 
+int32_t common_speculative_n_max(const common_params_speculative * spec) {
+    int32_t n_max = 0;
+
+    for (const auto type : spec->types) {
+        switch (type) {
+            case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+                n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+                break;
+            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
+                n_max = std::max(n_max, (int32_t) spec->ngram_simple.size_m);
+                break;
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
+                n_max = std::max(n_max, (int32_t) spec->ngram_map_k.size_m);
+                break;
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
+                n_max = std::max(n_max, (int32_t) spec->ngram_map_k4v.size_m);
+                break;
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
+                n_max = std::max(n_max, std::max(0, spec->ngram_mod.n_max));
+                break;
+            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
+                n_max = std::max(n_max, (int32_t) 8);
+                break;
+            case COMMON_SPECULATIVE_TYPE_NONE:
+            case COMMON_SPECULATIVE_TYPE_COUNT:
+                break;
+        }
+    }
+
+    return n_max;
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
@@ -2344,8 +2378,6 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
         uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
-
-        bool has_draft_model_path = !params.draft.mparams.path.empty();
 
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_mtp          = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
@@ -2589,13 +2621,13 @@ bool common_speculative_need_embd(common_speculative * spec) {
     return false;
 }
 
-bool common_speculative_need_embd_pre_norm(common_speculative * spec) {
+bool common_speculative_need_embd_nextn(common_speculative * spec) {
     if (spec == nullptr) {
         return false;
     }
 
     for (auto & impl : spec->impls) {
-        if (impl->need_embd_pre_norm()) {
+        if (impl->need_embd_nextn()) {
             return true;
         }
     }

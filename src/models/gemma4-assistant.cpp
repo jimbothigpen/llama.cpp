@@ -10,7 +10,7 @@ void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_kv_from_start = hparams.n_layer - (int32_t) n_kv_shared_layers;
     hparams.f_attention_scale     = 1.0f;
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,         hparams.nextn_predict_layers, false);
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,         hparams.n_layer_nextn, false);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,           hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,     hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,  hparams.f_norm_rms_eps);
@@ -200,8 +200,8 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     res->t_logits = logits;
 
     ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_post_proj, cur);
-    cb(h_next, "result_h_pre_norm", -1);
-    res->t_h_pre_norm = h_next;
+    cb(h_next, "result_h_nextn", -1);
+    res->t_h_nextn = h_next;
 
     ggml_build_forward_expand(gf, logits);
     ggml_build_forward_expand(gf, h_next);

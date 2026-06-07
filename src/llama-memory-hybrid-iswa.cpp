@@ -51,7 +51,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         n_pad,
         oscar_res_window,
         filter_attn == nullptr ?
-            [&](int32_t il) { return !hparams.is_recurrent(il); }
+            [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
         nullptr
     )),
@@ -64,7 +64,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         n_seq_max,
         0, // n_rs_seq: hybrid models don't use MTP draft rollback
         filter_recr == nullptr ?
-            [&](int32_t il) { return hparams.is_recurrent(il); }
+            [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
     )) {}
 

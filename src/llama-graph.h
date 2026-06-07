@@ -38,7 +38,8 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
-enum llm_ffn_op_type {
+enum llm_ffn_op_type : int {
+    LLM_FFN_NONE = 0,           // sentinel: unset; archs must assign before use
     LLM_FFN_SILU,
     LLM_FFN_GELU,
     LLM_FFN_RELU,
@@ -808,7 +809,7 @@ public:
     ggml_tensor * get_logits()      const { return t_logits; }
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
-    ggml_tensor * get_h_pre_norm()  const { return t_h_pre_norm; }
+    ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
     ggml_tensor * get_mtp_out()     const { return t_mtp_out; }
     ggml_tensor * get_mtp_states()  const { return t_mtp_states; }
 
@@ -839,7 +840,7 @@ public:
     ggml_tensor * t_logits      = nullptr;
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
-    ggml_tensor * t_h_pre_norm  = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+    ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
     ggml_tensor * t_mtp_out     = nullptr; // MTP post-FFN tensor — graph OUTPUT, set by the gemma4-assistant graph
 
     // MTP driver-layer (upstream-style): graph INPUT tensor the MTP-tail graph builder creates;

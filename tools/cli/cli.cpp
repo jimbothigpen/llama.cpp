@@ -417,6 +417,8 @@ int llama_cli(int argc, char ** argv) {
         return 1;
     }
 
+    ctx_cli.defaults.sampling = params.sampling;
+
     console::spinner::stop();
     console::log("\n");
 
