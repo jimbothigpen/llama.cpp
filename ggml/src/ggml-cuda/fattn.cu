@@ -346,6 +346,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q1_0, GGML_TYPE_Q1_0)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
+    // IQ4_NL KV cache types (4-bit codebook quant). Always available, incl. asymmetric vs f16.
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_IQ4_NL, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,    GGML_TYPE_IQ4_NL)
+
     // BF16 K × TURBOQ V asymmetric KV cache pairs
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_BF16, GGML_TYPE_TURBOQ4_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_BF16, GGML_TYPE_TURBOQ3_0)
@@ -591,7 +596,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
                 || t == GGML_TYPE_KV_OSCAR_INT2
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
-                || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1;
+                || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1
+                || t == GGML_TYPE_IQ4_NL;
         };
         if (!is_kv_compat(K->type) || !is_kv_compat(V->type)) {
             return BEST_FATTN_KERNEL_NONE;
@@ -607,6 +613,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q1_0:
         case GGML_TYPE_BF16:
