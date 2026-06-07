@@ -27,11 +27,9 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     hparams.ssm_n_group = 0;
 
     // Even layers carry CCA recurrent state; odd layers are pure MoE FFN.
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.recurrent_layer_arr[i] = (i % 2) == 0;
-    }
+    hparams.set_recr_pattern(2);  // even=recurrent (dense_first=false → is_recr_impl[il]=(il%2==0))
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 80: type = LLM_TYPE_8B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

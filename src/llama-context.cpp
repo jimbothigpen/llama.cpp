@@ -64,8 +64,8 @@ static void llama_assert_gemma4_mtp_source_placement(
     const auto & hparams_dft = model_dft.hparams;
     const auto & hparams_tgt = model_tgt.hparams;
 
-    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer - 1;
-    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer - 2;
+    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer() - 1;
+    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer() - 2;
 
     ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!dev_cpu) {
@@ -74,7 +74,7 @@ static void llama_assert_gemma4_mtp_source_placement(
 
     const bool kv_offload = src->get_cparams().offload_kqv;
 
-    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer; ++il_dft) {
+    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer(); ++il_dft) {
         const int32_t il_tgt = hparams_dft.is_swa(il_dft) ? il_tgt_swa : il_tgt_full;
 
         ggml_backend_dev_t dev_dft = model_dft.dev_layer(il_dft);
@@ -415,7 +415,7 @@ llama_context::llama_context(
             }
             if (kv) {
                 llama_tria_capture_alloc(
-                    kv, kv_swa, backend_cpu, (int) model.hparams.n_layer,
+                    kv, kv_swa, backend_cpu, (int) model.hparams.n_layer(),
                     tria_capture, &tria_capture_ctx, &tria_capture_buf);
                 if (!tria_capture.empty()) {
                     g_tria_capture   = tria_capture.data();
@@ -2018,6 +2018,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     };
 
     int64_t n_outputs_prev = 0;
+    int64_t n_tokens_prev  = 0;
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -2242,6 +2243,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         n_outputs_prev += n_outputs;
+        n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
@@ -2316,6 +2318,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
     const auto n_embd_out = hparams.n_embd_out();
+    const auto n_embd     = hparams.n_embd;
 
     bool has_logits     = true;
     bool has_embd       = cparams.embeddings;
