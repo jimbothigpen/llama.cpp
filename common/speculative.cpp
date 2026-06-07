@@ -2362,6 +2362,12 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
                 n_max = std::max(n_max, (int32_t) 8);
                 break;
+            case COMMON_SPECULATIVE_TYPE_PHANTOM:
+                n_max = std::max(n_max, std::max(0, spec->ngram_mod.n_max));
+                break;
+            case COMMON_SPECULATIVE_TYPE_DFLASH:
+                n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+                break;
             case COMMON_SPECULATIVE_TYPE_NONE:
             case COMMON_SPECULATIVE_TYPE_COUNT:
                 break;
