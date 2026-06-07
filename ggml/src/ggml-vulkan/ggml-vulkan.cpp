@@ -4801,6 +4801,15 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_IQ4_KT],  "mul_mat_vec_id_iq4_kt_f32",  arr_dmmv_id_iq4_kt_f32_f32_len[reduc16],  arr_dmmv_id_iq4_kt_f32_f32_data[reduc16],  "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq}, 1, true, use_subgroups16, force_subgroup_size16);
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_IQ3_KT],  "mul_mat_vec_id_iq3_kt_f32",  arr_dmmv_id_iq3_kt_f32_f32_len[reduc16],  arr_dmmv_id_iq3_kt_f32_f32_data[reduc16],  "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq}, 1, true, use_subgroups16, force_subgroup_size16);
         ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_IQ2_KL],  "mul_mat_vec_id_iq2_kl_f32",  arr_dmmv_id_iq2_kl_f32_f32_len[reduc16],  arr_dmmv_id_iq2_kl_f32_f32_data[reduc16],  "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq}, 1, true, use_subgroups16, force_subgroup_size16);
+        // WHT4_0 / WHT3_0 id-vec (MoE expert) matvecs.  Same fixed 32-thread,
+        // shared-memory-butterfly, shared-memory-reduction contract as the non-id
+        // WHT pipelines above (see wht4_0_* constants): the Walsh-Hadamard butterfly
+        // is one element per thread over a 32-element block, so the workgroup is
+        // always 32 threads with NUM_ROWS=8 (NUM_COLS defaults to 1 for the id path).
+        // The id SPV (mul_mat_vec_id_wht{3,4}_0_f32_f32) is generated from the same
+        // mul_mat_vec_wht{3,4}_0.comp via the base-glsl MUL_MAT_ID get_offsets/reduce_result.
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_WHT4_0],  "mul_mat_vec_id_wht4_0_f32",  arr_dmmv_id_wht4_0_f32_f32_len[wht4_0_reduc],  arr_dmmv_id_wht4_0_f32_f32_data[wht4_0_reduc],  "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_f32[w][GGML_TYPE_WHT3_0],  "mul_mat_vec_id_wht3_0_f32",  arr_dmmv_id_wht3_0_f32_f32_len[wht4_0_reduc],  arr_dmmv_id_wht3_0_f32_f32_data[wht4_0_reduc],  "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         if (device->integer_dot_product) {
@@ -7294,12 +7303,15 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
         // getter (ggml_vk_get_dequantize_mul_mat_vec) lists these; omitting them here made this getter
         // return nullptr -> GGML_ASSERT(dmmv != nullptr) abort in ggml_vk_mul_mat_vec_id_q_f16 for an MoE
         // expert of one of these types. Completes the 194 set. TODO 217.
-        // NOTE: WHT3_0/WHT4_0 are intentionally NOT added here -- they have non-id mul_mat_vec shaders
-        // only; no mul_mat_vec_id_wht* shader or id-vec pipeline is registered, so a dispatch label alone
-        // would return an unregistered (null) pipeline. WHT id-vec needs its own shader (separate task).
         case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ1_KT:
+        // WHT3_0/WHT4_0: id-vec pipelines are now registered (~:4804-4811) reusing the existing
+        // mul_mat_vec_wht{3,4}_0.comp via MUL_MAT_ID. Without these cases this getter returned
+        // nullptr -> GGML_ASSERT(dmmv != nullptr) abort in ggml_vk_mul_mat_vec_id_q_f16 for WHT3_0/
+        // WHT4_0 MoE expert tensors. (Vulkan-only; CUDA/HIP WHT id path is separate.)
+        case GGML_TYPE_WHT4_0:
+        case GGML_TYPE_WHT3_0:
             break;
         default:
             return nullptr;
@@ -7315,6 +7327,10 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
             if (m < 4096 && k >= 1024) {
                 dmmv_wg = DMMV_WG_SIZE_LARGE;
             }
+        } else if (a_type == GGML_TYPE_WHT4_0 || a_type == GGML_TYPE_WHT3_0) {
+            // WHT4_0 / WHT3_0 need exactly 32 threads (one subgroup) to cooperate on the
+            // 32-element WHT butterfly in shared memory. Force SUBGROUP-sized wg.
+            dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
         } else {
             if (m <= 8192 && k >= 1024) {
                 dmmv_wg = DMMV_WG_SIZE_LARGE;
