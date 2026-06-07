@@ -143,6 +143,17 @@ int main(int argc, char ** argv) {
             // construction-time sched_reserve (gemma4-assistant.cpp:84).
             cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
         }
+
+        // ctx_other wires the Gemma4 external assistant to its target (mainline #23398/#24267).
+        // After the #24267 kv-cache init reorder, llama-context validates params.ctx_other at
+        // construction time for LLM_ARCH_GEMMA4_ASSISTANT ("requires ctx_other to be set") — so it
+        // MUST be set before llama_init_from_model, not deferred to llama_set_mtp_source. The
+        // assistant graph then reads the target via ctx_other. It is a no-op for other draft archs
+        // (qwen external MTP / eagle3 / draft-simple), which read the target via the src_mctx path.
+        // Mirrors tools/server (server-context.cpp ctx_other/n_rs_seq wiring).
+        cparams.n_rs_seq  = 0;
+        cparams.ctx_other = ctx_tgt;
+
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
@@ -157,6 +168,13 @@ int main(int argc, char ** argv) {
     // source is wired first.  Its only prerequisites are params.speculative.draft.ctx_tgt/ctx_dft,
     // both set just above.  common_speculative_begin stays below — it needs prompt_tgt.
     struct common_speculative * spec = common_speculative_init(params.speculative, 1);
+    if (spec == nullptr) {
+        // No speculative implementation could be constructed (e.g. a requested draft-context
+        // speculator whose context failed to initialize, with the draft-simple fallback
+        // correctly suppressed). Fail loudly rather than dereferencing a null spec later.
+        LOG_ERR("%s: failed to initialize speculative decoding (no usable speculator)\n", __func__);
+        return 1;
+    }
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);

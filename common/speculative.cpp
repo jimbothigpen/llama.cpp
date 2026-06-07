@@ -222,6 +222,17 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         auto * ctx_tgt = this->params.ctx_tgt;
 
+        // Defense-in-depth: draft-simple dereferences ctx_dft immediately (llama_n_batch below,
+        // and again every draft step). A null draft context here means the draft model's context
+        // failed to initialize (e.g. the gemma4-assistant guard threw because ctx_other was not
+        // wired). Fail loudly with an actionable message instead of segfaulting in n_batch().
+        if (ctx_dft == nullptr) {
+            throw std::runtime_error(
+                "draft-simple speculator requires a draft context, but ctx_dft is null "
+                "(the draft model's context failed to initialize — check that the draft "
+                "context was created successfully and, for external MTP, that ctx_other was wired)");
+        }
+
         LOG_INF("%s: adding speculative implementation 'draft-simple'\n", __func__);
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
         LOG_INF("%s: - gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n", __func__,
@@ -2015,6 +2026,15 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                                 params.draft.ctx_dft != nullptr &&
                                 llama_model_eagle3_n_aux_layers(llama_get_model(params.draft.ctx_dft)) > 0;
 
+        // Whether a draft-context speculator was *explicitly requested* (regardless of whether its
+        // context actually built). has_mtp/has_draft_eagle3/has_dflash above gate on ctx_dft != null,
+        // so a draft type whose context failed to initialize collapses them to false. We must not let
+        // that silently downgrade to the draft-simple fallback below (which also needs ctx_dft and
+        // would then segfault on a null draft ctx) — keep the user's explicit intent visible here.
+        bool requested_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP));
+        bool requested_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3));
+        bool requested_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DFLASH));
+
         bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
         bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));
@@ -2058,13 +2078,25 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
                 has_draft_simple = false;
             }
-        } else if (has_draft_model_path && !(has_dflash || has_mtp || has_draft_eagle3)) {
+        } else if (has_draft_model_path && !(has_dflash || has_mtp || has_draft_eagle3) &&
+                   !(requested_mtp || requested_eagle3 || requested_dflash)) {
+            // Only auto-enable draft-simple when the user did NOT explicitly request a
+            // draft-context speculator. If they requested mtp/eagle3/dflash but its context
+            // failed to build (has_* collapsed to false), do NOT silently fall back to
+            // draft-simple — fall through and fail loudly rather than running the wrong speculator.
             LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
             has_draft_simple = true;
         }
 
         if (has_draft_simple) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));
+            if (params.draft.ctx_dft == nullptr) {
+                // draft-simple cannot run without a draft context; selecting it here would
+                // segfault in its ctor (llama_n_batch on a null ctx). Refuse loudly.
+                LOG_ERR("%s: 'draft-simple' was selected but the draft context is null - "
+                        "the draft model's context failed to initialize; not enabling draft-simple\n", __func__);
+            } else {
+                configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));
+            }
         }
         if (has_mtp) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
