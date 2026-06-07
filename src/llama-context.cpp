@@ -137,8 +137,10 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
-    cparams.pooling_type            = params.pooling_type;
     cparams.warmup                  = false;
+
+    cparams.ctx_type     = params.ctx_type;
+    cparams.pooling_type = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
@@ -150,6 +152,18 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+
+    cparams.ctx_other = nullptr;
+
+    // TODO: more generic
+    if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        if (params.ctx_other == nullptr) {
+            // TODO: change from runtime_error to llama_exception to avoid printing error message
+            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this is normal during memory fitting)");
+        }
+
+        cparams.ctx_other = params.ctx_other;
+    }
 
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
@@ -391,6 +405,7 @@ llama_context::llama_context(
             /*.swa_full   =*/ swa_full_eff,
             /*.ctx_type   =*/ params.ctx_type,
             /*.oscar_residual_window =*/ params.oscar_residual_window,
+            /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -1059,7 +1074,7 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
             throw std::runtime_error("no nextn embeddings");
         }
 
-        const uint32_t n_embd = model.hparams.n_embd;
+        const uint32_t n_embd = model.hparams.n_embd_out();
 
         if (!cparams.embeddings_nextn_masked) {
             // unmasked: nextn rows are stored densely, indexed by raw token position.
@@ -1697,7 +1712,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
         ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
         GGML_ASSERT(backend_h != nullptr);
 
-        const uint32_t n_embd = hparams.n_embd;
+        const uint32_t n_embd = hparams.n_embd_out();
         GGML_ASSERT(n_tokens*n_embd <= (int64_t) embd_nextn.size);
         ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn.data, 0, n_tokens*n_embd*sizeof(float));
     }
@@ -2221,7 +2236,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
                 GGML_ASSERT(backend_h != nullptr);
 
-                const uint32_t n_embd  = hparams.n_embd;
+                const uint32_t n_embd  = hparams.n_embd_out();
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
@@ -2336,12 +2351,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits.size     = has_logits     ? n_vocab*n_outputs_max     : 0;
     embd.size       = has_embd       ? n_embd_out*n_outputs_max  : 0;
-    embd_nextn.size = has_embd_nextn ? n_embd*n_outputs_max      : 0;
+    embd_nextn.size = has_embd_nextn ? n_embd_out*n_outputs_max  : 0;
 
     if (has_embd_nextn && !cparams.embeddings_nextn_masked) {
         // unmasked: nextn row exists for every token in the batch, not just
         // those flagged via batch.logits[i] -> size by token count instead.
-        embd_nextn.size = (size_t) n_embd * n_batch;
+        embd_nextn.size = (size_t) n_embd_out * n_batch;
     }
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
@@ -3683,6 +3698,7 @@ llama_context_params llama_context_default_params() {
         /*.ctx_type                     =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.ctx_other                   =*/ nullptr,
     };
 
     return result;
@@ -3940,6 +3956,14 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
 }
 
+llama_memory_t llama_get_memory(const struct llama_context * ctx) {
+    if (!ctx) {
+        return nullptr;
+    }
+
+    return ctx->get_memory();
+}
+
 float * llama_get_embeddings_nextn(llama_context * ctx) {
     ctx->synchronize();
 
@@ -4038,7 +4062,7 @@ struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_tokens,
         uint32_t n_seqs,
         uint32_t n_outputs) {
-    auto * memory = ctx->get_memory();
+    auto memory = ctx->get_memory();
     llama_memory_context_ptr mctx;
     if (memory) {
         mctx = memory->init_full();
@@ -4077,10 +4101,6 @@ int32_t llama_set_adapter_cvec(
 //
 // memory
 //
-
-llama_memory_t llama_get_memory(const struct llama_context * ctx) {
-    return ctx->get_memory();
-}
 
 void llama_memory_clear(llama_memory_t mem, bool data) {
     if (!mem) {
@@ -4756,4 +4776,8 @@ float * llama_get_logits_argmax_probs(struct llama_context * ctx) {
 
 int32_t llama_get_logits_argmax_k(struct llama_context * /*ctx*/) {
     return 1; // top-1 argmax
+}
+
+llama_context * llama_get_ctx_other(struct llama_context * ctx) {
+    return ctx->get_cparams().ctx_other;
 }

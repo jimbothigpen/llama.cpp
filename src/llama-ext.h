@@ -117,3 +117,5 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 // mirrors:
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+
+LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);

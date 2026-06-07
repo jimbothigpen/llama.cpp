@@ -46,9 +46,11 @@ llama_memory_hybrid::llama_memory_hybrid(
         n_swa,
         swa_type,
         oscar_res_window,
+        nullptr, // mem_other
         filter_attn == nullptr ?
             [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
+        nullptr,
         nullptr
     )),
     mem_recr(new llama_memory_recurrent(

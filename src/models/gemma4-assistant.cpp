@@ -1,31 +1,24 @@
 #include "models.h"
 
 void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
+    hparams.n_embd_inp_impl = hparams.n_embd_out();
+
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);
 
-    hparams.n_layer_kv_from_start = hparams.n_layer() - (int32_t) n_kv_shared_layers;
-    hparams.f_attention_scale     = 1.0f;
+    hparams.f_attention_scale = 1.0f;
 
-    // NOTE: do NOT read nextn_predict_layers here. The gemma4-assistant is a standalone
-    // external drafter whose `block_count` layers are ALL real attention layers — none are
-    // appended "next-n" prediction layers. Under the b9547 hparams refactor
-    // (n_layer() == n_layer_all - n_layer_nextn) the checkpoint's nextn_predict_layers == block_count
-    // would drive n_layer() to 0, which segfaults llama_model::print_info() and mis-routes the
-    // MTP context-type gate (llama-context.cpp checks n_layer_nextn == 0). Leave n_layer_nextn = 0.
-    // (am17an gemma4-mtp, upstream PR #23398 — "adjust to hparams changes")
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
+    GGML_ASSERT(hparams.n_layer_nextn == hparams.n_layer_all && "n_layer_nextn must be == n_layer_impl");
+
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,           hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,     hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,  hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,     hparams.n_embd_head_k_swa);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,   hparams.n_embd_head_v_swa);
-
-    if (hparams.n_layer() == 4) {
-        type = LLM_TYPE_31B;
-    }
 }
 
 void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
@@ -46,18 +39,21 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
 
-    const int64_t n_embd_backbone = hparams.n_embd_out();
-    nextn_pre_proj  = create_tensor(tn(LLM_TENSOR_NEXTN_PRE_PROJ,  "weight"), { 2*n_embd_backbone, n_embd }, 0);
-    nextn_post_proj = create_tensor(tn(LLM_TENSOR_NEXTN_POST_PROJ, "weight"), { n_embd, n_embd_backbone }, 0);
+    const int64_t n_embd_backbone = hparams.n_embd_inp();
+    nextn_proj_post = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_POST, "weight"), { n_embd, n_embd_backbone }, 0);
 
     int rope_freqs_flag = 0;
 
-    for (int i = 0; i < n_layer; ++i) {
+    for (int i = 0; i < n_layer_nextn; ++i) {
         auto & layer = layers[i];
 
         const int64_t n_head      = hparams.n_head(i);
         const int64_t n_embd_head = hparams.n_embd_head_k(i);
         const int64_t n_ff        = hparams.n_ff(i);
+
+        if (i == 0) {
+            nextn_proj_pre = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
+        }
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
         layer.wq        = create_tensor(tn(LLM_TENSOR_ATTN_Q,    "weight", i), { n_embd, n_embd_head*n_head }, 0);
@@ -87,19 +83,7 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4_assistant::build_arch_grap
 
 llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params) {
-    GGML_ASSERT(src_mctx  && "Gemma 4 assistant graph requires an MTP source (llama_set_mtp_source)");
-    GGML_ASSERT(src_model && "Gemma 4 assistant graph requires a source model");
-    GGML_ASSERT(src_model->tok_embd && "source model missing tok_embd");
-
-    const auto & src_hparams = src_model->hparams;
-
-    // By convention the MTP draft reads from the trunk's final SWA and full layers.
-    const int32_t src_layer_full = (int32_t) src_hparams.n_layer() - 1;
-    const int32_t src_layer_swa  = (int32_t) src_hparams.n_layer() - 2;
-    GGML_ASSERT(!src_hparams.is_swa(src_layer_full) && "trunk's last layer must be full attention");
-    GGML_ASSERT( src_hparams.is_swa(src_layer_swa)  && "trunk's penultimate layer must be SWA");
-
-    const int64_t n_embd_backbone = hparams.n_embd_out();
+    const int64_t n_embd_backbone = hparams.n_embd_inp();
 
     ggml_tensor * inp_tokens;
     ggml_tensor * inp_h;
@@ -121,25 +105,27 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         res->add_input(std::move(inp));
     }
 
-    ggml_tensor * x = ggml_get_rows(ctx0, src_model->tok_embd, inp_tokens);
+    GGML_ASSERT(cparams.ctx_other != nullptr);
+    const auto * model_other = llama_get_model(cparams.ctx_other);
+
+    ggml_tensor * x = ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens);
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 
     ggml_tensor * xh = ggml_concat(ctx0, x, inp_h, 0);
     cb(xh, "inp_xh", -1);
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_pre_proj, xh);
+    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_proj_pre, xh);
     cb(cur, "pre_proj", -1);
 
-    auto *        inp_attn    = build_attn_inp_src_kv_iswa();
+    auto *        inp_attn    = build_attn_inp_kv_iswa();
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     ggml_tensor * inpL = cur;
 
-    for (int il = 0; il < n_layer; ++il) {
-        const bool    is_swa = hparams.is_swa(il);
-        const int32_t il_src = is_swa ? src_layer_swa : src_layer_full;
+    for (int il = 0; il < n_layer_nextn; ++il) {
+        const bool is_swa = hparams.is_swa(il);
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head      = hparams.n_head(il);
@@ -162,9 +148,9 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cb(Qcur, "Qcur_pos", il);
 
         cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
-                Qcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il, il_src);
+                Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
 
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == n_layer_nextn - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0, cur,  inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -205,8 +191,8 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     cb(logits, "result_output", -1);
     res->t_logits = logits;
 
-    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_post_proj, cur);
-    cb(h_next, "result_h_nextn", -1);
+    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_proj_post, cur);
+    cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 
     ggml_build_forward_expand(gf, logits);

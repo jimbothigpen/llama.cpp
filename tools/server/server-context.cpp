@@ -1,4 +1,3 @@
-
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -18,6 +17,11 @@
 #include "pflash.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+
+#include "ggml-cpp.h"
+
+// TODO: tmp until the mtmd draft processing is refactored [TAG_MTMD_DRAFT_PROCESSING]
+#include "../../src/llama-ext.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -937,7 +941,7 @@ private:
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
-                    SRV_ERR("[spec] failed to measure %s memory: %s\n",
+                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
                             has_draft ? "draft model" : "MTP context", e.what());
                 }
             }
@@ -1009,10 +1013,19 @@ private:
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
+            // note: for small models maybe we can set this to the maximum possible draft from all speculative types
+            //       the extra memory for small models is likely negligible?
+            // ctx_other wires the Gemma4 external assistant to its target (mainline #23398);
+            // llama-context only stores it for LLM_ARCH_GEMMA4_ASSISTANT, so it is a no-op for
+            // other draft archs (e.g. qwen external MTP), which fall back to the src_mctx path below.
+            cparams.n_rs_seq  = 0;
+            cparams.ctx_other = ctx_tgt;
+
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
             if (spec_mtp) {
-                // MTP draft must know its target before the first decode
+                // MTP draft must know its target before the first decode (qwen src_mctx path;
+                // harmless for Gemma4, whose graph reads the target via ctx_other instead).
                 llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
             }
 
@@ -1051,6 +1064,7 @@ private:
             cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq      = 0;
             cparams_mtp.n_outputs_max = params_base.n_parallel;
+            cparams_mtp.ctx_other     = ctx_tgt;
 
             SRV_INF("%s", "creating MTP draft context (ctx_type=MTP, same model as target)\n");
 
@@ -1061,7 +1075,7 @@ private:
             }
 
             // wire the source before any decode (the seq-rm probe below
-            // triggers sched_reserve which needs src for Gemma4-style MTP)
+            // triggers sched_reserve which needs src for qwen-style bundled MTP)
             llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
@@ -1151,6 +1165,10 @@ private:
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
+        }
+
+        if (ctx_dft) {
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
         }
 
         if (spec) {
@@ -3232,10 +3250,11 @@ private:
                             continue;
                         }
 
-                        if (ctx_dft) {
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
                             // TODO: in the future, figure out how to infuse target embeddings to the images
                             //       for now, we skip this for simplicity
                             //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
                             res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                             if (res != 0) {
                                 GGML_ABORT("failed to process multi-modal data on draft context\n");

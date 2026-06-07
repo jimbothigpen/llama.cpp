@@ -348,7 +348,7 @@ private:
     std::vector<int32_t> dflash_argmax;       // top-1 token index per output position
     std::vector<float>   dflash_argmax_probs; // log-prob of top-1 token per output position
 
-    std::unique_ptr<llama_memory_i> memory;
+    llama_memory_ptr memory;
 
     // external KV source used by MTP draft contexts. src_ctx is the target
     // context whose memory we read; src_mctx_for_decode is a per-decode

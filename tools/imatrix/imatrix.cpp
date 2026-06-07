@@ -772,7 +772,7 @@ static void process_logits(
 
 // Run a forward pass through the MTP/NextN draft head so its weights
 // (blk.<n_layer>.nextn.eh_proj etc.) receive activations and get recorded by
-// the imatrix collector. Mirrors common_speculative_state_draft_mtp::process():
+// the imatrix collector. Mirrors common_speculative_impl_draft_mtp::process():
 // the MTP head at position p is fed the next-token id (tokens[p+1]) paired
 // with the trunk's pre-norm hidden state h[p]. The last position of the
 // chunk has no next-token target and is dropped.

@@ -316,7 +316,7 @@ int main(int argc, char ** argv) {
 
             // update the draft model with the target's hidden states (required for MTP).
             // Mirrors the server's main loop (tools/server/server-context.cpp). Without this
-            // call, common_speculative_state_draft_mtp::process() never runs → pending_h stays
+            // call, common_speculative_impl_draft_mtp::process() never runs → pending_h stays
             // zero across iterations, the MTP head reads garbage h_input, and draft acceptance
             // collapses by ~33pp on Qwen3.5 (38% vs 71% mainline anchor).
             if (!common_speculative_process(spec, batch_tgt)) {
