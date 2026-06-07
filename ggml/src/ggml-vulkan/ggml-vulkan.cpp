@@ -7290,6 +7290,16 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
         case GGML_TYPE_IQ4_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ2_KL:
+        // Remaining KS/KT row-meta types: id-vec pipelines are registered (~:4795-4799) and the non-id
+        // getter (ggml_vk_get_dequantize_mul_mat_vec) lists these; omitting them here made this getter
+        // return nullptr -> GGML_ASSERT(dmmv != nullptr) abort in ggml_vk_mul_mat_vec_id_q_f16 for an MoE
+        // expert of one of these types. Completes the 194 set. TODO 217.
+        // NOTE: WHT3_0/WHT4_0 are intentionally NOT added here -- they have non-id mul_mat_vec shaders
+        // only; no mul_mat_vec_id_wht* shader or id-vec pipeline is registered, so a dispatch label alone
+        // would return an unregistered (null) pipeline. WHT id-vec needs its own shader (separate task).
+        case GGML_TYPE_IQ5_KS:
+        case GGML_TYPE_IQ2_KS:
+        case GGML_TYPE_IQ1_KT:
             break;
         default:
             return nullptr;
