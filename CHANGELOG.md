@@ -9,9 +9,81 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256; `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed. /opt: b944 shipped 2026-06-05.
+HEAD: `81ca6b749` (2026-06-07 — WHT3_0/WHT4_0 Vulkan MoE expert dispatch). Prior: `d8393c386` (2026-06-07 — iq4_nl FA-vec KV CUDA/HIP kernel; Kaggle-T4 PPL 7.3941 ≈ f16 7.4047). Prior: `4f39662dd` (2026-06-06 — TODO 217: Vulkan mul_mat_vec_id adds IQ5_KS/IQ2_KS/IQ1_KT). Prior: `ae6bc152c` (2026-06-06 — TODO 207 scrub: private infra purged). Prior: `031e87b57` (2026-06-06 — TODO 212: Vulkan TURBOQ{2,3}_INNERQ KV alias support). Prior: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256; `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed. /opt: b998 shipped 2026-06-07.
 
-In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT) port; IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes (#23280-like rebase conflicts); PFlash non-Qwen live-scorer validation (§-FLAG). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified. RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT weight quant port); IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes; PFlash non-Qwen live-scorer validation (§-FLAG). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified. Known-issue TODO 213: gfx1103 ROCm PPL rc=134 (transient; no-repro; no code fix). Vulkan TURBOQ INNERQ KV DONE (`031e87b57`); 207 scrub DONE (`ae6bc152c`); 217 Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT DONE (`4f39662dd`); iq4_nl FA-vec KV DONE (`d8393c386`); WHT3_0/WHT4_0 mul_mat_vec_id DONE (`81ca6b749`); RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+
+### Added — WHT3_0/WHT4_0 Vulkan MoE expert dispatch (mul_mat_vec_id) (2026-06-07)
+
+`81ca6b749`. WHT3_0/WHT4_0 weights used as MoE expert tensors aborted on the Vulkan backend:
+`ggml_vk_get_dequantize_mul_mat_vec_id()` returned `nullptr` for these types, triggering
+`GGML_ASSERT(dmmv != nullptr)` in `ggml_vk_mul_mat_vec_id_q_f16`. No new GLSL shaders are needed
+— the generator already emits `mul_mat_vec_id_wht{3,4}_0_f32_f32` and the aggregation arrays from
+the existing `mul_mat_vec_wht{3,4}_0.comp` via the `MUL_MAT_ID` define. The fix is purely C++
+wiring: register the id-vec pipeline slots for WHT4_0/WHT3_0 and add both types to the id getter
+with the correct `DMMV_WG_SIZE_SUBGROUP` butterfly contract. Vulkan-only; CUDA/HIP WHT id path
+is separate.
+
+**Verified on ai00 gfx1150 (RADV):** test-backend-ops MUL_MAT_ID 764/764 OK (no regression);
+Qwen3.6-35B-A3B-WHT4_0 and -WHT3_0 MoE decode at **12.3 / 9.9 t/s** on Vulkan (`-ngl 999`),
+coherent output, no abort.
+
+Changed: `ggml/src/ggml-vulkan/ggml-vulkan.cpp` (+19/−3).
+
+### Added — CUDA/HIP iq4_nl FlashAttention-vec KV kernel (2026-06-07)
+
+`d8393c386`. Implements `vec_dot_fattn_vec_KQ_iq4_nl`: routes 4-bit indices through the
+`kvalues_iq4nl` codebook via `get_int_from_table_16` (no Q8 offset — codebook encodes signed
+values), plus V-dequant and dispatch wiring with `f16/iq4_nl` K×V template instances. Allows
+`iq4_nl` to be used as a CUDA/HIP KV-cache type without falling back to CPU for FlashAttention.
+
+Background: `iq4_nl` as a KV type previously triggered CPU offload on CUDA/HIP (the cause of a
+Kaggle T4 PPL timeout). A temporary `de-advertise iq4_nl` workaround (`479655495`) was reverted
+(`e5bfb95d5`) once this kernel landed.
+
+**PPL gate (Qwen3.5-9B, Kaggle T4, wikitext-2, iq4_nl K×V):**
+- iq4_nl/iq4_nl: **7.3941** ≈ f16 reference **7.4047** — quality preserved at GPU speed.
+
+Changed: `ggml/src/ggml-cuda/fattn-common.cuh` (+85), `fattn.cu` (+9/−1), 3 template-instance
+files (+7 each), `CMakeLists.txt` (+3), `generate_cu_files.py` (+1/−1) (7 files, +118/−2).
+
+### Fixed — Vulkan mul_mat_vec_id: add IQ5_KS/IQ2_KS/IQ1_KT to id-vec getter (TODO 217) (2026-06-06)
+
+`4f39662dd`. `ggml_vk_get_dequantize_mul_mat_vec_id()` was missing three IK row-meta types —
+IQ5_KS, IQ2_KS, IQ1_KT — whose id-vec pipelines are already registered (~ggml-vulkan.cpp:4795),
+shaders already generated, and types already handled by the non-id getter and `supports_op`. For
+an MoE expert tensor of one of these types the id getter returned `nullptr`, triggering
+`GGML_ASSERT(dmmv != nullptr)` and aborting model load. This completes the KS/KT/KL set begun by
+TODO 194 (`e95ecbecf`). WHT3_0/WHT4_0 (also named in TODO 217) required separate treatment due
+to a different shader structure and are handled in `81ca6b749` above.
+
+Changed: `ggml/src/ggml-vulkan/ggml-vulkan.cpp` (+10).
+
+### Chore — purge private/internal info from public fork (TODO 207) (2026-06-06)
+
+`ae6bc152c`. Removes host names, private project references, internal tracker IDs, and internal
+matrix/quant tooling scripts from shipped source, comments, and docs so nothing on GitHub
+references private infrastructure. Comment/string/docs/script-move only — no logic changes.
+
+### Added — Vulkan TURBOQ{2,3}_INNERQ KV-cache quant support (TODO 212) (2026-06-06)
+
+`031e87b57`. `TURBOQ2_INNERQ` (type 68) and `TURBOQ3_INNERQ` (type 69) are byte-identical to
+plain `turboq2_0`/`turboq3_0` — same block layout and dequant. The InnerQ per-channel
+pre-scaling lives at the graph/KV-cache layer (the `TURBO_WHT` op), not the backend, so the
+Vulkan backend treats them as plain-turbo aliases. No new GLSL shaders.
+
+Changes: accept INNERQ in the three KDD-5 `supports_op` gates (FA/GET_ROWS/SET_ROWS); normalize
+INNERQ→plain in `ggml_vk_flash_attn` effective K/V type; alias INNERQ get_rows / set_rows
+pipeline slots to the existing plain-turbo handles; route INNERQ through
+`quantize_turboq{2,3}_0` in `ggml.c`.
+
+**PPL gate (ai01 Vulkan / RADV PHOENIX gfx1103, Qwen3.5-9B-Q4_K_M, wikitext-2, 24 chunks):**
+- `turboq2_innerq`: **7.9298** = `turboq2_0` 7.9298 (bit-identical)
+- `turboq3_innerq`: **7.6050** = `turboq3_0` 7.6050 (bit-identical)
+
+Also: test-backend-ops FLASH_ATTN_EXT: turboq2_innerq 528/528 OK, turboq3_innerq 528/528 OK.
+
+Changed: `ggml-vulkan.cpp` (+59/−11), `ggml.c` (+3), `tests/test-backend-ops.cpp` (+10/−2).
 
 ### Optimized — WHT3_0/WHT4_0: `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12 (2026-06-05)
 
