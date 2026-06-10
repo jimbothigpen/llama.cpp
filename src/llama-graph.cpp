@@ -658,8 +658,14 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 }
 
 void llm_graph_input_attn_src_kv_iswa::set_input(const llama_ubatch * ubatch) {
-    src_mctx->get_base()->set_input_kq_mask(self_kq_mask,     ubatch, cparams.causal_attn);
-    src_mctx->get_swa() ->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    // guard each mask on its own buffer (cf. #24294): a SWA-only draft head (MTP/spec shared-cell)
+    // leaves the base sub-cache empty, so its kq_mask buffer stays null and would assert at load
+    if (self_kq_mask && self_kq_mask->buffer) {
+        src_mctx->get_base()->set_input_kq_mask(self_kq_mask,     ubatch, cparams.causal_attn);
+    }
+    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
+        src_mctx->get_swa() ->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    }
 
     if (self_k_rot) {
         src_mctx->get_base()->set_input_k_rot(self_k_rot);
@@ -681,8 +687,12 @@ bool llm_graph_input_attn_src_kv_iswa::can_reuse(const llm_graph_params & params
     this->src_mctx = mctx;
 
     bool res = true;
-    res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams);
-    res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
+    if (self_kq_mask && self_kq_mask->buffer) {
+        res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams);
+    }
+    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
+        res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
+    }
     return res;
 }
 
