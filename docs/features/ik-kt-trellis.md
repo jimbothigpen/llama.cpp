@@ -175,7 +175,7 @@ IQ4_KT at 6.54 PPL matches IQ4_K within rounding noise. The trellis encoding ove
 - **IQ2_KT is defective — blanket DO NOT USE.** See §3.
 - **IQ3_KT carries a +23.5% PPL overhead** vs IQ3_K due to the single global codebook. If that gap matters for your use case, prefer `IQ3_KS` (3.1875 bpw) or `IQ3_K` (3.4375 bpw).
 - **Vulkan prefill (prompt ingestion) slower than mainline K-quants.** Like all IK types, the KT family has no native Vulkan GEMM tiles. Long-prompt batches on Vulkan pay a transient dequant→fp16 pass before the GEMM. Decode (token generation) is **not affected** — only batched prefill. See the [IK family primer](concepts/ik-quantization-family.md#vulkan-dispatch-decode-vs-prefill) for the full explanation.
-- **IQ3_KT cross-backend PPL parity not yet formally verified.** The Vulkan shaders are code-complete and wired, but an explicit PPL cross-backend gate (Vulkan vs. CPU/ROCm) has not been run for IQ3_KT.
+- **IQ3_KT cross-backend PPL parity: RESOLVED.** Cross-backend gate PASS (Vulkan 8.4299 vs IQ3_K 6.8348, 9B 20ch); ROCm gfx1150 GPU confirmed (`c809225f6`). All three backends (CPU/ROCm/Vulkan) verified. See `BACKEND_PARITY.md`.
 
 ### Benchmark matrix
 

@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `62e9b6e29`** on
-`main` (post-mainline-rebase to `b745`). Recent ships (2026-05-30): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `2ef6c9d3a`** on
+`main` (post-mainline-rebase to `b1144`). Recent ships (2026-06-10): **Mainline sync-38** — b1144 integrated (0/519 behind; GitHub behind-banner cleared; `e65fe2ae6`); **tria-gen qwen35 hybrid arch** — Qcur_full de-interleave + linear-layer zero-fill for Qwen3.5/3.6 TriAttention calibration (`d964e3a2f`); **MTP output_reorder fix** (TODO 221, embd/embd_nextn stride via n_embd_out(), `abe20ebea`); **iswa kq_mask guard** for MTP draft path (`ea5f6c658`). Prior (2026-06-07): **WHT3_0/WHT4_0 Vulkan MoE dispatch** (`81ca6b749`); **iq4_nl CUDA/HIP FA-vec KV kernel** — Kaggle T4 PPL 7.3941 (`d8393c386`). Prior (2026-06-06): **Private infra purge** (TODO 207, `ae6bc152c`); **Vulkan TURBOQ{2,3}_INNERQ KV** (TODO 212, `031e87b57`); **Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT** (TODO 217, `4f39662dd`). Prior (2026-06-05): **WHT small-batch +290%** + **ne1=1 fused decode** (`3abe1c048`, `6fcd17fce`). Prior (2026-06-02): **RotorQuant iso/planar removal** (`55bb0d418`). Prior (2026-05-30): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -102,7 +102,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `62e9b6e29`**, the following features are on `main`.
+As of **HEAD `2ef6c9d3a`**, the following features are on `main`.
 
 ---
 
@@ -780,9 +780,9 @@ conditionals.
 
 - Single long-lived downstream fork.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
-  mainline `b745` (`751ebd17a`); rebased 2026-05-28 (68 new mainline commits
-  since `b9310`; PPL 6.5453 GREEN (gfx1103 RDNA3). Next sync ~2026-06-11.
-- Trunk: `main` (HEAD `62e9b6e29`).
+  mainline `b1144` (`e95dae18d`); sync-38 merged 2026-06-10 (0/519 behind;
+  GitHub behind-banner cleared).
+- Trunk: `main` (HEAD `2ef6c9d3a`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
