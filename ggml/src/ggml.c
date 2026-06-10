@@ -1297,7 +1297,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TURBO_WHT",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1410,7 +1410,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "turbo_wht(a)",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
