@@ -70,12 +70,14 @@ struct tria_cb_ctx {
     std::vector<float> buf;   /* scratch for GPU→CPU copy */
 };
 
-/* Parse layer index from tensor name "Qcur-N". Returns -1 if not a match. */
-static int parse_qcur_layer(const char * name) {
-    if (strncmp(name, "Qcur-", 5) != 0) return -1;
+/* Parse the layer index from a tensor name of the form "<prefix>N" (e.g. "Qcur-3").
+ * Returns -1 if the name does not match the prefix or lacks a clean integer suffix. */
+static int parse_layer_suffix(const char * name, const char * prefix) {
+    const size_t pl = strlen(prefix);
+    if (strncmp(name, prefix, pl) != 0) return -1;
     char * end;
-    long il = strtol(name + 5, &end, 10);
-    if (end == name + 5 || *end != '\0' || il < 0) return -1;
+    long il = strtol(name + pl, &end, 10);
+    if (end == name + pl || *end != '\0' || il < 0) return -1;
     return (int)il;
 }
 
@@ -85,7 +87,18 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
 
     if (!acc->initialized) return false;
 
-    int il = parse_qcur_layer(t->name);
+    /* Standard Llama/Qwen3 arch exposes the 2D pre-RoPE query MUL_MAT as "Qcur-N".
+     * The qwen35 arch (Qwen3.5 / Qwen3.6) fuses Q with an attention gate: its 2D
+     * pre-RoPE MUL_MAT is named "Qcur_full-N" and is 2*head_dim wide per head — Q in
+     * the first half of each head block, gate in the second. De-interleave the Q half
+     * below (head_stride accounts for the gate). The only plain "Qcur-N" qwen35 emits
+     * is post-RoPE + 3D, which the ne[2]==1 filter rejects. */
+    bool fused_qgate = false;
+    int il = parse_layer_suffix(t->name, "Qcur-");
+    if (il < 0) {
+        il = parse_layer_suffix(t->name, "Qcur_full-");
+        fused_qgate = (il >= 0);
+    }
     if (il < 0 || il >= acc->n_layers) return false;
 
     /*
@@ -104,7 +117,9 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
     int64_t n_tokens = t->ne[1];
     if (n_tokens <= 0) return false;
     if (acc->n_heads <= 0 || t->ne[0] % acc->n_heads != 0) return false;
-    int hd_l = (int)(t->ne[0] / acc->n_heads);
+    int head_stride = (int)(t->ne[0] / acc->n_heads);   /* per-head width in THIS tensor (incl. gate if fused) */
+    if (fused_qgate && (head_stride % 2 != 0)) return false;
+    int hd_l = fused_qgate ? head_stride / 2 : head_stride;  /* actual Q head_dim (gate half stripped) */
     if (hd_l != acc->hd_a && hd_l != acc->hd_b) return false;   /* reject unexpected widths */
 
     if (ask) return true;
@@ -132,7 +147,7 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
     for (int64_t tok = 0; tok < n_tokens; tok++) {
         const float * row = cbctx->buf.data() + tok * n_embd;
         for (int h = 0; h < nh; h++) {
-            const float * q = row + h * hd_l;
+            const float * q = row + h * head_stride;   /* Q occupies the first hd_l of each head block */
             int base = (il * nh + h) * stride;
             if (acc->rope_neox) {
                 for (int f = 0; f < fc_l; f++) {
@@ -154,12 +169,8 @@ static bool tria_collect_cb(struct ggml_tensor * t, bool ask, void * user_data) 
         }
     }
 
-    /* Count tokens from layer 0 only (each batch fires once per layer; all layers see
-     * every token, so a single per-chunk count is the correct denominator for all). */
-    if (il == 0) {
-        acc->token_count += n_tokens;
-    }
-
+    /* (token_count is accumulated once per chunk in the decode loop — arch-independent.
+     * The old layer-0 count broke on hybrid models whose layer 0 is linear-attention.) */
     return true;
 }
 
@@ -189,17 +200,33 @@ static bool write_tria_v4(
     int nkv = acc->n_kv_heads;
     int stride = acc->max_freq_count;   /* in-memory per-head stride */
 
-    /* Every layer must have been seen (its Qcur captured) — else its stats are zero. */
+    /* Hybrid models (e.g. Qwen3.5/3.6 gated-delta-net + sparse full attention) only have a
+     * KV cache — and thus captured Qcur — on their full-attention layers. The remaining
+     * linear-attention layers have no queries and are never scored at runtime (the scorer
+     * skips any layer whose K capture is NULL). Take the header scalar from the first
+     * CAPTURED layer (NOT layer 0, which may be linear), then zero-fill the uncaptured
+     * layers with that head_dim so the file is loader-valid and the per-head offset math
+     * stays uniform. For a pure full-attention model every layer is captured → identical
+     * to the prior behaviour (header == layer 0). */
+    int hd0 = 0, fc0 = 0, n_attn = 0;
     for (int l = 0; l < nl; l++) {
-        if (acc->layer_head_dim[l] <= 0) {
-            fprintf(stderr, "tria-gen: ERROR layer %d never captured (head_dim unknown) — "
-                    "cannot emit complete v4\n", l);
-            return false;
+        if (acc->layer_head_dim[l] > 0) {
+            if (hd0 == 0) { hd0 = acc->layer_head_dim[l]; fc0 = acc->layer_freq_count[l]; }
+            n_attn++;
         }
     }
-    /* Header scalar head_dim/fc = layer 0 (matches the runtime's layer-0 K-row check). */
-    int hd0 = acc->layer_head_dim[0];
-    int fc0 = acc->layer_freq_count[0];
+    if (hd0 == 0) {
+        fprintf(stderr, "tria-gen: ERROR no attention layer captured (no Qcur / Qcur_full seen)\n");
+        return false;
+    }
+    for (int l = 0; l < nl; l++) {
+        if (acc->layer_head_dim[l] <= 0) {   /* linear-attention layer: dummy entry, never scored */
+            acc->layer_head_dim[l]   = hd0;
+            acc->layer_freq_count[l] = fc0;
+        }
+    }
+    fprintf(stderr, "tria-gen: %d/%d layers full-attention (calibrated); %d linear "
+            "(zero-filled, runtime-skipped)\n", n_attn, nl, nl - n_attn);
 
     FILE * fp = fopen(out_path, "wb");
     if (!fp) { perror(out_path); return false; }
@@ -465,6 +492,10 @@ int main(int argc, char ** argv) {
             llama_batch_free(batch);
             return 1;
         }
+
+        /* All layers see every token, so count once per chunk here (arch-independent —
+         * replaces the old layer-0 callback count which was 0 for hybrid models). */
+        acc.token_count += n_ctx;
 
         if ((ci + 1) % 20 == 0 || ci == n_chunks - 1) {
             fprintf(stderr,
