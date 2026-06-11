@@ -1199,3 +1199,105 @@ size_t quantize_wht4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
     }
     return nrows * row_size;
 }
+
+/* ---------- WHT4_0_UNIFORM quantization (TODO 227 A/B) ----------
+ *
+ * Wire-compatible sibling of WHT4_0: identical RHT, identical 32-element block,
+ * identical 20-byte block_wht4_0 layout (two fp16 + 16 nibble bytes), same 5.0 bpw.
+ * The ONLY difference is the per-block scalar codec used on the rotated coefficients:
+ *
+ *   WHT4_0          : 16 *Lloyd-Max* non-uniform centroids (TQ4_0_CENTROIDS), TWO
+ *                     per-half scales (d0,d1), symmetric decode  val = centroid[idx]*d.
+ *   WHT4_0_UNIFORM  : 16 *uniform* grid levels, ONE per-block scale + ONE per-block
+ *                     bias (affine, min-max), decode  val = idx*scale + bias
+ *                     (mirrors the turbo8 / KV_OSCAR_INT2 uniform+affine codec).
+ *
+ * Both spend the same 2×fp16 of metadata, so this isolates "how to spend it":
+ * two half-scales + a tuned non-uniform codebook (Lloyd-Max) vs one scale + one
+ * bias + a plain uniform grid (affine). No imatrix is used (codec is unweighted),
+ * matching WHT4_0. */
+
+static void quantize_block_wht4_0_uniform(const float * GGML_RESTRICT src_blk,
+                                          block_wht4_0 * GGML_RESTRICT blk,
+                                          const float * iw) {
+    /* Unweighted, exactly like WHT4_0: the imatrix importance is in the original
+     * column basis and does not align with post-RHT coefficients. */
+    (void) iw;
+
+    /* 1. Forward RHT (identical to WHT4_0). */
+    float buf[TQ_BLOCK_SIZE];
+    memcpy(buf, src_blk, TQ_BLOCK_SIZE * sizeof(float));
+    tq3_0_rht_forward(buf);
+
+    /* 2. Per-block min/max over all 32 rotated coefficients (affine, uniform). */
+    float mn = buf[0], mx = buf[0];
+    for (int j = 1; j < TQ_BLOCK_SIZE; j++) {
+        if (buf[j] < mn) mn = buf[j];
+        if (buf[j] > mx) mx = buf[j];
+    }
+
+    /* 16 uniform levels => 15 intervals.  d = step, m = offset (bias). */
+    const float range = mx - mn;
+    const float d   = (range > 1e-10f) ? (range / 15.0f) : 0.0f;
+    const float inv = (d > 1e-10f) ? (1.0f / d) : 0.0f;
+
+    /* d0 holds the uniform step (scale), d1 holds the bias (min). */
+    blk->d0 = GGML_FP32_TO_FP16(d);
+    blk->d1 = GGML_FP32_TO_FP16(mn);
+    memset(blk->qs, 0, QK_WHT4_0 / 2);
+
+    /* 3. Quantize: idx = round((val - mn) / d), clamp [0,15]; pack nibbles. */
+    for (int j = 0; j < QK_WHT4_0; j++) {
+        int idx = (int)lroundf((buf[j] - mn) * inv);
+        if (idx < 0)  idx = 0;
+        if (idx > 15) idx = 15;
+        blk->qs[j / 2] |= (uint8_t)((idx & 0xF) << ((j & 1) * 4));
+    }
+}
+
+/* Public ref entry — unweighted (no imatrix). */
+void quantize_row_wht4_0_uniform_ref(const float * GGML_RESTRICT x, block_wht4_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT4_0 == 0);
+    const int nb = k / QK_WHT4_0;
+    for (int block = 0; block < nb; block++) {
+        quantize_block_wht4_0_uniform(x + block * QK_WHT4_0, &y[block], NULL);
+    }
+}
+
+void dequantize_row_wht4_0_uniform(const block_wht4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT4_0 == 0);
+    const int nb = k / QK_WHT4_0;
+
+    for (int blk_i = 0; blk_i < nb; blk_i++) {
+        const float d = GGML_FP16_TO_FP32(x[blk_i].d0); /* uniform step */
+        const float m = GGML_FP16_TO_FP32(x[blk_i].d1); /* bias (min)  */
+
+        float buf[32];
+        for (int j = 0; j < 32; j++) {
+            uint8_t idx = (x[blk_i].qs[j / 2] >> ((j & 1) * 4)) & 0xF;
+            buf[j] = idx * d + m; /* affine decode: val = idx*scale + bias */
+        }
+
+        /* Inverse RHT (identical to WHT4_0). */
+        tq3_0_rht_inverse(buf);
+
+        memcpy(y + blk_i * QK_WHT4_0, buf, QK_WHT4_0 * sizeof(float));
+    }
+}
+
+size_t quantize_wht4_0_uniform(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                               int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_WHT4_0 == 0);
+
+    const int64_t nb_per_row = n_per_row / QK_WHT4_0;
+    size_t row_size = nb_per_row * sizeof(block_wht4_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        block_wht4_0 * y_row = (block_wht4_0 *)((char *)dst + row * row_size);
+        const float * x_row = src + row * n_per_row;
+        for (int64_t b = 0; b < nb_per_row; b++) {
+            const float * iw = imatrix ? (imatrix + b * QK_WHT4_0) : NULL;
+            quantize_block_wht4_0_uniform(x_row + b * QK_WHT4_0, &y_row[b], iw);
+        }
+    }
+    return nrows * row_size;
+}

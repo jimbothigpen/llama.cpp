@@ -114,7 +114,8 @@ Originally drafted against `pr/tq4-weight-compression`; that branch is fully sub
 |---|---|---|---|
 | 80 | `GGML_TYPE_WHT3_0` | `TQ3_1S` (45) | WHT-rotated 8-level Lloyd-Max, block_size=32 |
 | 81 | `GGML_TYPE_WHT4_0` | `TQ4_1S` (46) | WHT-rotated 16-level Lloyd-Max, block_size=32 |
-| 82–85 | reserved | | future WHT variants |
+| 82 | `GGML_TYPE_WHT4_0_UNIFORM` | — | WHT-rotated 16-level uniform grid + per-block affine (idx*scale+bias), block_size=32 (TODO 227 A/B vs Lloyd-Max; CPU-only) |
+| 83–85 | reserved | | future WHT variants |
 
 Symbol prefix: `wht_`. The `TQ` prefix in TheTom's naming collided with
 turbo-tan's RaBitQ TQ3 family; renaming to `WHT` reflects the actual

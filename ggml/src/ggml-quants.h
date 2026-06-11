@@ -137,6 +137,10 @@ GGML_API void quantize_row_wht4_0_ref(const float * GGML_RESTRICT x, block_wht4_
 GGML_API void dequantize_row_wht4_0(const block_wht4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_wht4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+GGML_API void quantize_row_wht4_0_uniform_ref(const float * GGML_RESTRICT x, block_wht4_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_wht4_0_uniform(const block_wht4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_wht4_0_uniform(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 // IQ4_K: ik_llama 4-bit imatrix-aware weight quant (4.50 bpw) — source: ik_llama
 GGML_API void quantize_row_iq4_k_ref(const float * GGML_RESTRICT x, block_iq4_k * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_k    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);

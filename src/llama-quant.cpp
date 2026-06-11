@@ -778,6 +778,7 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
             return true;
         case GGML_TYPE_WHT3_0:
         case GGML_TYPE_WHT4_0:
+        case GGML_TYPE_WHT4_0_UNIFORM:
             // WHT imatrix audit (2026-06-04): ADR-016 marked these imatrix-required
             // on the assumption that per-element importance weighting helped. It does
             // NOT: the RHT rotates the 32-column block, so original-basis importance
@@ -846,6 +847,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
         case LLAMA_FTYPE_MOSTLY_WHT3_0:  return GGML_TYPE_WHT3_0;
         case LLAMA_FTYPE_MOSTLY_WHT4_0:  return GGML_TYPE_WHT4_0;
+        case LLAMA_FTYPE_MOSTLY_WHT4_0_UNIFORM:  return GGML_TYPE_WHT4_0_UNIFORM;
         case LLAMA_FTYPE_MOSTLY_IQ4_K:   return GGML_TYPE_IQ4_K;
         case LLAMA_FTYPE_MOSTLY_IQ3_K:   return GGML_TYPE_IQ3_K;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   return GGML_TYPE_IQ2_K;

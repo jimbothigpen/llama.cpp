@@ -444,7 +444,8 @@ extern "C" {
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
-        // slots 82–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_WHT4_0_UNIFORM = 82, // WHT-rotated 4-bit quant: uniform grid + per-block affine (idx*scale+bias), block_size=32 (TODO 227 A/B vs Lloyd-Max)
+        // slots 83–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)
         // IDs match ik_llama's enum order (ascending) to preserve existing ik_llama GGUF compat.

@@ -58,6 +58,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_TQ2_0:    return "TQ2_0 - 2.06 bpw ternary";
         case LLAMA_FTYPE_MOSTLY_WHT3_0:   return "WHT3_0 - 4.0 bpw WHT-rotated 3-bit";
         case LLAMA_FTYPE_MOSTLY_WHT4_0:   return "WHT4_0 - 5.0 bpw WHT-rotated 4-bit";
+        case LLAMA_FTYPE_MOSTLY_WHT4_0_UNIFORM:   return "WHT4_0_UNIFORM - 5.0 bpw WHT-rotated 4-bit uniform+affine";
         case LLAMA_FTYPE_MOSTLY_IQ4_K:    return "IQ4_K - 4.50 bpw ik_llama imatrix 4-bit";
         case LLAMA_FTYPE_MOSTLY_IQ3_K:    return "IQ3_K - 3.4375 bpw ik_llama imatrix 3-bit";
         case LLAMA_FTYPE_MOSTLY_IQ2_K:    return "IQ2_K - 2.375 bpw ik_llama imatrix 2-bit";
@@ -771,6 +772,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_TQ2_0:   ftype = LLAMA_FTYPE_MOSTLY_TQ2_0;   break;
             case GGML_TYPE_WHT3_0:  ftype = LLAMA_FTYPE_MOSTLY_WHT3_0;  break;
             case GGML_TYPE_WHT4_0:  ftype = LLAMA_FTYPE_MOSTLY_WHT4_0;  break;
+            case GGML_TYPE_WHT4_0_UNIFORM:  ftype = LLAMA_FTYPE_MOSTLY_WHT4_0_UNIFORM;  break;
             case GGML_TYPE_IQ4_K:   ftype = LLAMA_FTYPE_MOSTLY_IQ4_K;   break;
             case GGML_TYPE_IQ3_K:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_K;   break;
             case GGML_TYPE_IQ2_K:   ftype = LLAMA_FTYPE_MOSTLY_IQ2_K;   break;
