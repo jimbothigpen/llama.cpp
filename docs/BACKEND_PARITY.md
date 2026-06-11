@@ -232,10 +232,12 @@ Every weight quantization type that lands in this fork must support the
 imatrix (importance-matrix) mechanism. Adding a weight quant without
 imatrix support is a layer-landing failure.
 
-**Scope:** Applies to ALL weight quants (`WHT3_0/4_0`, `RBQ3_1S/4S`,
+**Scope:** Applies to ALL weight quants (`RBQ3_1S/4S`,
 `IQ*_K`, `IQ*_KS`, `IQ*_KSS`, BitNet `IQ1_BN/IQ2_BN/I2_S`,
 trellis `IQ*_KT` if revived, and any future weight quant). Does NOT
 apply to KV-cache quants (`TURBOQ*_0`, `TURBOQ*_TCQ`, `RQ_*`).
+
+**Exception — WHT3_0/WHT4_0:** imatrix is intentionally **disabled** (quantizer audit `a6ccf0bfa`). The Walsh-Hadamard rotation mixes all 32 block columns, so post-rotation coefficient `buf[j]` no longer corresponds to original column `j`. Weighting the rotated residual by original-basis importance `iw[j]` misaligns importance and measurably degrades quality (−15.5 % PPL penalty). Both types quantize unweighted by design; `tensor_requires_imatrix()` returns `false`.
 
 **Per-type integration requires:**
 
