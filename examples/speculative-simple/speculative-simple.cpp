@@ -4,6 +4,7 @@
 #include "speculative.h"
 #include "log.h"
 #include "llama.h"
+#include "pflash.h"
 
 #include <algorithm>
 #include <clocale>
@@ -187,6 +188,20 @@ int main(int argc, char ** argv) {
     // Tokenize the prompt
     std::vector<llama_token> inp;
     inp = common_tokenize(ctx_tgt, params.prompt, true, true);
+
+    // PFlash both-shared gate: compress the long prompt ONCE before seeding either context.
+    // The same compressed token sequence (inp) then feeds BOTH the target prompt eval and the
+    // draft prompt eval below, so draft/target stay position-aligned and acceptance is preserved.
+    // Mirrors the CLI gate (tools/cli/cli.cpp:94-104). No-op below --pflash-min-tokens.
+    {
+        const auto & sp = params.speculative;
+        if (!sp.pflash_scorer_path.empty() && (int) inp.size() >= sp.pflash_min_tokens) {
+            const int orig_len = (int) inp.size();
+            inp = pflash_compress(inp, pflash_config::from_params(sp));
+            LOG_INF("pflash: %d -> %d tokens (%.1f%% kept)\n",
+                orig_len, (int) inp.size(), 100.0f * inp.size() / orig_len);
+        }
+    }
 
     if (llama_n_ctx(ctx_tgt) < (uint32_t) inp.size()) {
         LOG_ERR("%s: the prompt exceeds the context size (%d tokens, ctx %d)\n", __func__, (int) inp.size(), llama_n_ctx(ctx_tgt));
