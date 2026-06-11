@@ -2,7 +2,7 @@
 
 > **IQ4_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL excellent (6.54 on Qwen3.5-9B).
 >
-> **IQ3_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL healthy (9.05 on Qwen3.5-9B, +23.5% vs IQ3_K — inherent to single-codebook design; cross-backend PPL parity confirmed: RESOLVED Vulkan / CLOSED ROCm gfx1150).
+> **IQ3_KT — Status: Stable** — CPU, CUDA/HIP, and Vulkan backends; PPL healthy (9.05 on Qwen3.5-9B, +23.5% vs IQ3_K — inherent to GROUP_SIZE=8 trellis design (dual implicit codebooks, OffsetA/OffsetB); cross-backend PPL parity confirmed: RESOLVED Vulkan / CLOSED ROCm gfx1150).
 >
 > **IQ2_KT — Status: Known limitation — DO NOT USE** — blanket DO-NOT-USE at any scale. General codebook defect confirmed: PPL 99.58 (0.8B brute-force baseline) / 107.87 (0.8B shipped k=60) / 33.96 (9B Vulkan, Qwen3.5-9B) — all catastrophic vs IQ2_KL (26.12 at 2.6875 bpw). Use `IQ2_KL` instead.
 
@@ -133,7 +133,7 @@ No inference-time flags are specific to the KT types. Standard recommendations:
 | Type | PPL | vs. mainline | Verdict |
 |---|---|---|---|
 | `IQ4_KT` | **6.54** | ≈ IQ4_K (6.57) — near-identical | 🟢 Excellent — use freely |
-| `IQ3_KT` | **9.05** | +23.5% vs IQ3_K (7.32) | 🟢 Healthy — inherent to single-codebook design; still workable |
+| `IQ3_KT` | **9.05** | +23.5% vs IQ3_K (7.32) | 🟢 Healthy — inherent to GROUP_SIZE=8 trellis design (dual implicit codebooks); still workable |
 | `IQ2_KT` | **33.96** (9B) / **107.87** (0.8B shipped) | vs IQ2_KL 26.12 — catastrophic at all scales | 🔴 DO NOT USE |
 
 ### IQ2_KT — blanket DO NOT USE
@@ -152,7 +152,7 @@ Root cause: the IQ2_KT codebook algorithm has a fundamental quality defect at th
 
 ### IQ3_KT — healthy, with a note
 
-IQ3_KT's PPL of 9.05 is +23.5% above IQ3_K (7.32). This gap is **inherent to the single-codebook trellis design** at 3-bit: unlike IQ3_K which uses per-sub-block nonlinear value tables, IQ3_KT regenerates the codebook from a global LCG hash (GROUP_SIZE=8, 6561 bins, k=60 cluster-accel). The fixed codebook limits per-block adaptation. For workloads where 3 bpw is the target and the PPL overhead is acceptable, IQ3_KT is usable. If you need better quality at ~3 bpw, consider `IQ3_KS` (3.1875 bpw, verified PPL near IQ3_K).
+IQ3_KT's PPL of 9.05 is +23.5% above IQ3_K (7.32). This gap is **inherent to the GROUP_SIZE=8 trellis design**: unlike IQ3_K which uses per-sub-block nonlinear value tables, IQ3_KT uses a global LCG-generated implicit dual codebook (OffsetA=4096, OffsetB=36864; GROUP_SIZE=8, 6561 bins, k=60 cluster-accel). Even with dual codebooks, the global implicit approach cannot adapt to individual block distributions the way per-block value tables can. For workloads where 3 bpw is the target and the PPL overhead is acceptable, IQ3_KT is usable. If you need better quality at ~3 bpw, consider `IQ3_KS` (3.1875 bpw, verified PPL near IQ3_K).
 
 ### IQ4_KT — excellent
 
@@ -173,7 +173,7 @@ IQ4_KT at 6.54 PPL matches IQ4_K within rounding noise. The trellis encoding ove
 
 - **Imatrix required** — a calibration corpus and GPU pass to generate the imatrix. One-time cost per model; cannot be skipped.
 - **IQ2_KT is defective — blanket DO NOT USE.** See §3.
-- **IQ3_KT carries a +23.5% PPL overhead** vs IQ3_K due to the single global codebook. If that gap matters for your use case, prefer `IQ3_KS` (3.1875 bpw) or `IQ3_K` (3.4375 bpw).
+- **IQ3_KT carries a +23.5% PPL overhead** vs IQ3_K due to the global implicit codebook (GROUP_SIZE=8) — less adaptive than per-block value tables. If that gap matters for your use case, prefer `IQ3_KS` (3.1875 bpw) or `IQ3_K` (3.4375 bpw).
 - **Vulkan prefill (prompt ingestion) slower than mainline K-quants.** Like all IK types, the KT family has no native Vulkan GEMM tiles. Long-prompt batches on Vulkan pay a transient dequant→fp16 pass before the GEMM. Decode (token generation) is **not affected** — only batched prefill. See the [IK family primer](concepts/ik-quantization-family.md#vulkan-dispatch-decode-vs-prefill) for the full explanation.
 - **IQ3_KT cross-backend PPL parity: RESOLVED.** Cross-backend gate PASS (Vulkan 8.4299 vs IQ3_K 6.8348, 9B 20ch); ROCm gfx1150 GPU confirmed (`c809225f6`). All three backends (CPU/ROCm/Vulkan) verified. See `BACKEND_PARITY.md`.
 
@@ -224,9 +224,11 @@ identical on every backend and never needs to be stored. The source is
 `iqkt_gen_group_int<GROUP_SIZE,IS_ABS>()` (`ggml/src/ggml-iqk-kt-family.hpp:58–72`).
 
 IQ4_KT uses a **dual codebook** (offsets A=4096 and B=4096+32768): each sub-block selects
-either codebook A or B based on a stored bit, doubling effective range. IQ3_KT and IQ2_KT
-use a **single codebook** each (offsets 4096 and 0 respectively), which is the structural
-source of the 3-bit quality gap — less adaptive than a dual design.
+either codebook A or B based on a stored bit, doubling effective range. **IQ3_KT also uses
+a dual codebook** (OffsetA=4096, OffsetB=36864; per-sub-block selector in `shb[ib]` bit 24).
+IQ2_KT uses a **single codebook** (offset 0). The quality gap in IQ3_KT vs IQ3_K is not
+from codebook count but from the global implicit codebook approach — a fixed global codebook
+(even dual) cannot match per-block nonlinear value tables.
 
 ### Cluster-accelerated nearest-neighbour search (quantize time)
 
@@ -273,7 +275,7 @@ qs[24]: 96B total (24 uint32_t)
   qs[16..19] (16B) — 4 mid bits per group, 2 groups per nibble
   qs[20..23] (16B) — padding
 ```
-3.0 bpw = 96 × 8 / 256; GROUP_SIZE=8, single codebook, k=60.
+3.0 bpw = 96 × 8 / 256; GROUP_SIZE=8, dual codebook (OffsetA/OffsetB, bit-24 selector), k=60.
 16-bit index (ql_byte | qh_nibble<<8 | sh_4bits<<12) → 65,536-entry codebook.
 
 **`block_iq2_kt`** — 64 bytes (`ggml-common.h:553–555`):

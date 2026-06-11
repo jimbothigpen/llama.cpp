@@ -50,7 +50,7 @@ Offline quantization — produce a smaller GGUF from an F16/BF16 source with
 | [IK High-Bit-K weight quants](ik-high-bit-k.md) | Stable | `IQ5_K`, `IQ6_K` | 5.5–6.625 bpw; imatrix required; near-lossless quality below Q8_0's footprint |
 | [IK Row-Meta weight quants](ik-ks-row-meta.md) | Stable | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL` | 2.6875–4.25 bpw; per-row scale prefix; imatrix required; near-twin IQ4_KS/IQ4_KSS differ by 0.25 bpw |
 | [IK KT/Trellis weight quants](ik-kt-trellis.md) | IQ4_KT/IQ3_KT: Stable; IQ2_KT: **§-FLAG DO NOT USE** | `IQ4_KT` (4.0 bpw), `IQ3_KT` (3.0 bpw), `IQ2_KT` (2.0 bpw §-FLAG) | No stored codebook — LCG hash regenerates 65,536-entry implicit codebook; cluster-accel NN search at quantize time; imatrix required; IQ2_KT has general codebook defect (PPL 33.96 at 9B) — use `IQ2_KL` instead |
-| [WHT weight quants](wht-weight-quants.md) | Stable | `WHT3_0` (~4.0 bpw), `WHT4_0` (~5.0 bpw) | TurboQuant weight family (TheTom); WHT rotation → Lloyd-Max codebook; imatrix required; WHT4_0 peers Q5_K_M, WHT3_0 peers Q4_0/IQ4_XS |
+| [WHT weight quants](wht-weight-quants.md) | Stable | `WHT3_0` (~4.0 bpw), `WHT4_0` (~5.0 bpw) | TurboQuant weight family (TheTom); WHT rotation → Lloyd-Max codebook; calibration-free (imatrix not used); WHT4_0 peers Q5_K_M, WHT3_0 peers Q4_0/IQ4_XS |
 
 More IK sub-family docs are in progress — see the
 [IK quantization family primer](concepts/ik-quantization-family.md) for the full
