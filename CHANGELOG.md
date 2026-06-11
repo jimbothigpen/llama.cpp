@@ -116,7 +116,7 @@ wiring: register the id-vec pipeline slots for WHT4_0/WHT3_0 and add both types 
 with the correct `DMMV_WG_SIZE_SUBGROUP` butterfly contract. Vulkan-only; CUDA/HIP WHT id path
 is separate.
 
-**Verified on ai00 gfx1150 (RADV):** test-backend-ops MUL_MAT_ID 764/764 OK (no regression);
+**Verified on gfx1150 (RADV):** test-backend-ops MUL_MAT_ID 764/764 OK (no regression);
 Qwen3.6-35B-A3B-WHT4_0 and -WHT3_0 MoE decode at **12.3 / 9.9 t/s** on Vulkan (`-ngl 999`),
 coherent output, no abort.
 
@@ -169,7 +169,7 @@ INNERQ→plain in `ggml_vk_flash_attn` effective K/V type; alias INNERQ get_rows
 pipeline slots to the existing plain-turbo handles; route INNERQ through
 `quantize_turboq{2,3}_0` in `ggml.c`.
 
-**PPL gate (ai01 Vulkan / RADV PHOENIX gfx1103, Qwen3.5-9B-Q4_K_M, wikitext-2, 24 chunks):**
+**PPL gate (Vulkan / RADV PHOENIX gfx1103, Qwen3.5-9B-Q4_K_M, wikitext-2, 24 chunks):**
 - `turboq2_innerq`: **7.9298** = `turboq2_0` 7.9298 (bit-identical)
 - `turboq3_innerq`: **7.6050** = `turboq3_0` 7.6050 (bit-identical)
 
