@@ -13,6 +13,98 @@ HEAD: `2ef6c9d3a` (2026-06-10 — fix(merge): GGML_OP_COUNT static_assert 98→9
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT weight quant port); IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes; PFlash non-Qwen live-scorer validation (§-FLAG). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified. Known-issue TODO 213: gfx1103 ROCm PPL rc=134 (transient; no-repro; no code fix). Vulkan TURBOQ INNERQ KV DONE (`031e87b57`); 207 scrub DONE (`ae6bc152c`); 217 Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT DONE (`4f39662dd`); iq4_nl FA-vec KV DONE (`d8393c386`); WHT3_0/WHT4_0 mul_mat_vec_id DONE (`81ca6b749`); RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
 
+### Fixed — GGML_OP_COUNT static_assert updated for sync-38 merged op set (2026-06-10)
+
+`2ef6c9d3a`. After the mainline-38 merge the GGML op count grew by one
+(upstream added `GGML_OP_COL2IM_1D`). The fork already carries two
+fork-specific ops (`GGML_OP_FLASH_ATTN_SPARSE`, `GGML_OP_TURBO_WHT`), so
+the total is now 99; the static assert guarding the `ggml_op_name` /
+`ggml_op_symbol` arrays was left at the pre-merge value 98. The
+`GGML_OP_NAME` / `GGML_OP_SYMBOL` arrays already had 99 entries; only
+the assert needed updating. Caught at build verification.
+
+Changed: `ggml/src/ggml.c` (+2/−2).
+
+### Fixed — cuda: guard mul_mat_id fast path on Pascal/SM61 (TODO 221c) (2026-06-10)
+
+`0d08feeaf`. Cherry-pick of turbotan `af0d9d7bc`. The `ggml_cuda_mul_mat_id`
+fast path (F32 src1 / F32 dst branch in `ggml-cuda.cu`) was unconditionally
+enabled on all NVIDIA devices. On Pascal-class GPUs (compute capability
+SM61, e.g. Kaggle P100) this triggers an illegal-memory-access error for
+MoE models because the path relies on Volta+ memory-access semantics.
+Adds a `cc >= GGML_CUDA_CC_VOLTA` guard so Pascal routes through the
+existing conservative fallback; Volta and above are unaffected.
+
+Changed: `ggml/src/ggml-cuda/ggml-cuda.cu` (+6/−1).
+
+### Fixed — graph: extend iswa kq_mask null-buffer guard to fork-local MTP draft path (TODO 221b) (2026-06-10)
+
+`ea5f6c658`. Follow-on to upstream commit `a66d50588` (#24294). The fork
+carries a parallel `llm_graph_input_attn_src_kv_iswa` class used for the
+MTP / spec-decode shared-cell draft path; it performs the same unguarded
+`get_base()->get_swa()->set_input_kq_mask` + `can_reuse_kq_mask` calls
+that the upstream commit fixed in the main attention class. A SWA-only
+draft head (non-MTP or external assistant GGUF) leaves the base sub-cache
+empty, so its `kq_mask` buffer stays null and would assert at graph load.
+Applies the identical `mask->buffer` guard. Defensive — no behaviour
+change when the base buffer is populated.
+
+Changed: `src/llama-graph.cpp` (+14/−4).
+
+### Fixed — context: output_reorder() use n_embd_out() stride (TODO 221) (2026-06-10)
+
+`abe20ebea`. Hand-port of the `output_reorder()` hunk from turbotan
+`b061b5b46`. The embedding-swap loops that reorder multi-token output
+slices used `n_embd` as the per-row byte stride. When `n_embd !=
+n_embd_out` (e.g. Gemma4 MTP heads, where the assistant output width
+differs from the model embedding width) this caused a silent stride
+mismatch that corrupted the reordered embeddings. Both `embd` and
+`embd_nextn` swap loops are updated to use `n_embd_out()`. The
+speculative.cpp and `llama-graph.h` changes from the same upstream commit
+do not apply cleanly to the fork's diverged tree and are intentionally
+excluded.
+
+Changed: `src/llama-context.cpp` (+7/−6).
+
+### Changed — Merge upstream ggml-org/llama.cpp mainline-38 (b1144) (2026-06-10)
+
+`e65fe2ae6`. True merge of upstream HEAD `e95dae18d` (mainline
+`ggml-org/llama.cpp` b1144-equivalent) into fork `main`. The fork was
+519 commits ahead and 38 behind; after this merge the "behind" count is
+cleared. Conflicts resolved in `ggml-vulkan.cpp` (FWHT-hint enum),
+`ggml.c` (op-count), `llama-arch.cpp` and `llama-arch.h` (Gemma4
+unified-vision enum), `llama-kv-cache.cpp` (SWA guard). Notable upstream
+entries in this wave include Gemma 4 E2B/E4B MTP inference (#24282),
+KV-cache improvements (#24267), spec-vocab fix (#24256), and the iSWA
+`kq_mask` null-buffer guard (#24294 — `a66d50588`).
+
+### Added — tria-gen: support Qwen3.5/3.6 hybrid-attention architecture (2026-06-09)
+
+`d964e3a2f`. Qwen3.5 and Qwen3.6 use a gated-delta-net +
+sparse-full-attention hybrid: only every 4th layer is full softmax
+attention. In these models the pre-RoPE query MUL_MAT is named
+`Qcur_full` (fused Q + gate, 2×head_dim per head), not `Qcur`. The
+existing collector matched only `Qcur-N`, so it captured 0 tokens on
+Qwen3.5 / Qwen3.6.
+
+Fixes:
+- Match `Qcur_full-N` and de-interleave the Q half (first `head_dim`
+  columns of each 2×`head_dim` block; gate half discarded).
+- Count tokens per chunk in the decode loop, not on layer 0 (layer 0 is
+  a linear layer in hybrid models → token_count stayed 0).
+- `write_tria_v4`: take the header scalar from the first captured full-
+  attention layer and zero-fill uncaptured linear-attention layers. The
+  runtime scorer skips them (their K-capture buffer is null), so they
+  are never consulted; the file stays loader-valid. Pure full-attention
+  models are unaffected (every layer captured → header == layer 0 as
+  before).
+
+Validated: Qwen3.5-0.8B emits a v4 `.tria`; 6/24 layers full-attention
+(layers 3, 7, 11, 15, 19, 23) with finite nonzero statistics; 18 linear
+layers zeroed; header passes the `triattention.c` loader validation.
+
+Changed: `tools/tria-gen/tria-gen.cpp` (+53/−22).
+
 ### Added — WHT3_0/WHT4_0 Vulkan MoE expert dispatch (mul_mat_vec_id) (2026-06-07)
 
 `81ca6b749`. WHT3_0/WHT4_0 weights used as MoE expert tensors aborted on the Vulkan backend:

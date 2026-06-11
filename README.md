@@ -690,19 +690,17 @@ Active feature branches / queued workers; not yet merged to `main`.
 |---|---|---|
 | Trellis IQ3_KT (Phase P3b) | `main` | **Complete** — CPU/ROCm/Vulkan shipped 2026-05-29 (`623835cc9`); ROCm GPU confirmed `c809225f6` (CLOSED, gfx1150 99% util); PPL +23.5% vs IQ3_K inherent to single-codebook design; cluster-accel k=60; imatrix required |
 | Trellis IQ1_KT (Phase P3c) | — | Queued behind P3b; IQKTParams<8,13,false> |
-| MTP Gemma4 §-FLAG-B fix | `main` | Fix validated (`96b487c1c`) — move "mtp." tensor rename AFTER load_all_data to fix accept 0%→33.9–61.8%; land pending on convergence bridge |
+| MTP Gemma4 §-FLAG-B fix | `main` | Fix validated (`96b487c1c`) — move "mtp." tensor rename AFTER load_all_data to fix accept 0%→33.9–61.8%; convergence bridge cleared (sync-38 `e65fe2ae6` 2026-06-10); land unblocked |
 | IQ2_KT cluster-accel PPL retune (k=80–100) | — | Late-stage-polish queue; current ship at k=60 has §-FLAG PPL +8.3% above ≤+5% clean threshold |
-| Full spec-decode validation matrix | — | 40-cell matrix (4 backends × 2 main models × 5 mechanisms); gated on EAGLE3 + DFlash + PHANTOM-X all landed (they are) + clean MTP V-J reverify (queued) |
-| MTP V-J clean re-measurement | — | Post-mrope-fix throughput re-measure on a quiet host (`e8e767347` shipped fix but smoke measurement was concurrent with peer builds; current ratio 0.737× below 0.78-0.85× projection — clean number pending) |
+| Full spec-decode validation matrix | — | 40-cell matrix (4 backends × 2 main models × 5 mechanisms); prerequisite gates cleared (EAGLE3 + DFlash + PHANTOM-X all landed; MTP V-J study done: TODO 230 — Gemma4-26B-A4B +28.7%, Qwen3.5-9B −15.3%); matrix bench in-progress 2026-06-10 |
 | TriAttention Phase C GPU GQA kernel + SWA capture | `main` | **SHIPPED** — HIP `51a64b43c` + Vulkan `0d13ac92b` + SWA-layer capture `086c8508f`; all phases complete |
 | RBQ3 imatrix retrofit + port | — | turbo-tan RBQ3 family is sole pending weight quant needing imatrix retrofit (~6h); port follows |
-| Vulkan MTP UPDATE_ACCEPTED SIGSEGV diagnostic | — | Opus-class diagnostic queued (`gf_res_prev` shared-pointer use-after-free hypothesis) |
 
 ## Blocked / awaiting decision
 
 | Item | Blocked on |
 |---|---|
-| Full spec-decode matrix (40 cells) | Sequencing: needs clean MTP V-J reverify + opportunistic GPU-time window (~16-24h walltime) |
+| Full spec-decode matrix (40 cells) | Sequencing: opportunistic GPU-time window (~16-24h walltime); MTP V-J reverify gate cleared (TODO 230 done) |
 | PFlash 1b (real scorer) | Quality validation smoke on existing 1a branch; user decision on 1b scope |
 | PolarQuant v2 evaluation | arXiv 2603.29078 withdrawn 2026-04-20 for errors; awaiting v2 repost or independent audit |
 
