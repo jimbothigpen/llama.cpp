@@ -266,6 +266,12 @@ int main(int argc, char ** argv) {
     llama_tokens draft;
     common_prompt_checkpoint ckpt;
 
+    // Livelock guard state for the MTP partial-accept restore loop (TODO 233). Tracks the
+    // checkpoint position and kept-draft size of the previous restore, so a non-converging
+    // (deterministic re-verify) loop can be detected and forced to make progress.
+    llama_pos mtp_restore_pos  = -1;
+    size_t    mtp_restore_size = 0;
+
     const auto t_enc_end = ggml_time_us();
 
     const auto t_dec_start = ggml_time_us();
@@ -382,23 +388,25 @@ int main(int argc, char ** argv) {
         if (use_ckpt_tgt && ids.size() - 1 < draft.size()) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, draft.size());
 
-            // MTP progress guarantee (mirror of server fix 13d638b2f). `ids` holds the
-            // validated draft prefix plus one resampled tail token. For MTP-driven
-            // speculation the MTP head's per-step state is NOT captured by ckpt.load_dft,
-            // so reusing `ids` verbatim — including the resampled tail — desyncs the next
-            // accept_n trace from the original sampler trace and locks this partial-accept
-            // restore loop indefinitely (observed as endless "partial acceptance: N < M,
-            // restoring checkpoint" with n_predict frozen, GPU busy on redundant re-verifies).
-            // Dropping the resampled tail forces the next iteration to re-verify only the
-            // validated drafts, which strictly shrinks the draft each restore and converges.
-            // Gate on ids.size() > 1: when only the resample survives (zero drafts accepted),
-            // keep ids[0] so the loop re-verifies the target's own prediction (always
-            // re-accepted), which is what breaks the full-rejection loop — popping there
-            // would empty the draft and is actively harmful. The hang only manifests at
-            // n_max >= 2, where a partial accept can leave ids.size() > 1.
-            if (want_mtp && ids.size() > 1) {
+            // MTP livelock guard (TODO 233; supersedes the unconditional pop_back from TODO 200).
+            // `ids` holds the validated draft prefix plus one resampled tail token. Reusing it
+            // verbatim re-verifies the same draft; on a backend whose checkpoint-restore + re-verify
+            // is deterministic (RADV gfx1103 Vulkan) the accept count never changes and this restore
+            // loop spins forever ("partial acceptance: N < M" with n_predict frozen, GPU pegged on
+            // redundant re-verifies). The previous fix dropped the resampled tail on EVERY restore,
+            // but that resampled token is the target's own validated prediction — discarding it each
+            // time cost ~19pp accept / ~1.7x throughput on the checkpoint path. Instead, only
+            // force-shrink when the loop is NOT converging: a repeat restore at the same checkpoint
+            // position whose draft did not get smaller. Converging backends (CPU/ROCm) keep the full
+            // validated prefix and pay nothing; a deterministic backend strictly shrinks the draft
+            // by one each repeat and provably terminates. Gate on ids.size() > 1 so the final
+            // single-token draft (the target's own re-accepted prediction) is never emptied.
+            if (want_mtp && ids.size() > 1 &&
+                mtp_restore_pos == ckpt.pos_max && ids.size() >= mtp_restore_size) {
                 ids.pop_back();
             }
+            mtp_restore_pos  = ckpt.pos_max;
+            mtp_restore_size = ids.size();
 
             draft = std::move(ids);
 
@@ -421,6 +429,9 @@ int main(int argc, char ** argv) {
 
             continue;
         }
+
+        // full acceptance reached for this draft position — reset the livelock tracker
+        mtp_restore_pos = -1;
 
         if (n_draft > 0) {
             common_speculative_accept(spec, seq_id, ids.size() - 1);

@@ -383,11 +383,20 @@ struct common_params_speculative {
     }
 
     uint32_t need_n_rs_seq() const {
-        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
-        });
-
-        return needs_rs_seq ? draft.n_max : 0u;
+        // MTP self-speculation rolls the target/draft contexts back to a checkpoint on every
+        // partial accept and re-verifies the validated prefix (the partial-accept reuse loop in
+        // speculative-simple.cpp). On recurrent/hybrid models the recurrent state cannot be rolled
+        // back with llama_memory_seq_rm / RS snapshots — only full-state checkpoints restore it
+        // correctly — so the context must report FULL seq-rm, i.e. n_rs_seq == 0 (use_ckpt_tgt).
+        // Requesting RS snapshots here instead made common_context_can_seq_rm() report RS, which
+        // silently disabled the reuse loop (it is gated on use_ckpt_tgt) and made MTP re-draft from
+        // scratch after every partial accept: accept collapsed ~50%->27% and throughput ~1.7x on
+        // the bundled self-spec path (TODO 233). Attempting RS-snapshot rollback for the reuse loop
+        // produces inconsistent-position decode failures and garbage output on recurrent models.
+        // The server and imatrix already force n_rs_seq=0 for their MTP contexts; returning 0 here
+        // keeps the bundled speculative-simple path consistent with them. (If/when RS-snapshot
+        // rollback is taught to restore recurrent state, this can return draft.n_max again.)
+        return 0u;
     }
 
     // PFlash (Phase 7) — scorer model and compression parameters
