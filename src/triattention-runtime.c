@@ -189,9 +189,11 @@ int tria_maybe_score(
     const uint32_t * layer_hd = rt->stats->layer_head_dim;
     const uint32_t * layer_fc = rt->stats->layer_freq_count;
     int max_hd = hd, max_fc = fc;
+    int hybrid_hd = 0;   /* any layer whose head_dim/freq_count differs from the scalar */
     for (int l = 0; l < nl; l++) {
         if ((int)layer_hd[l] > max_hd) max_hd = (int)layer_hd[l];
         if ((int)layer_fc[l] > max_fc) max_fc = (int)layer_fc[l];
+        if ((int)layer_hd[l] != hd || (int)layer_fc[l] != fc) hybrid_hd = 1;
     }
 
     /* A/B toggle (spec §5): reproduce SWA-only (pre-Part-3) behavior by skipping the
@@ -367,7 +369,13 @@ int tria_maybe_score(
     int use_gpu_scoring = 0;
     if (getenv("TRIA_NO_GPU_SCORE")) use_gpu_scoring = -1; /* force CPU */
     {
-        struct ggml_tensor * k0 = tria_get_k_capture(0);
+        /* Sample the first CAPTURED layer, not hardcoded layer 0: in iSWA models
+         * (Qwen3.5/3.6, Gemma-4) the sliding-window layers are not captured, so
+         * layer 0 is typically NULL and only the global-attention layers carry a
+         * capture. Keying is_q8_0 off layer 0 would wrongly disable GPU scoring
+         * for the entire model. All captured layers share the base K cache type. */
+        struct ggml_tensor * k0 = NULL;
+        for (int l = 0; l < nl; l++) { k0 = tria_get_k_capture(l); if (k0) break; }
         int is_q8_0 = k0 && k0->type == GGML_TYPE_Q8_0;
         const char * sls = getenv("TRIA_SCORE_LAYER_STRIDE");
         if (sls) score_stride = atoi(sls);
@@ -387,14 +395,15 @@ int tria_maybe_score(
                 if (use_gpu_scoring < 0)            reason = "disabled by TRIA_NO_GPU_SCORE";
                 else if (!is_q8_0)                  reason = "K cache not Q8_0 (need --cache-type-k q8_0)";
                 else if (nkv == 0 || nh % nkv != 0) reason = "nh not a multiple of nkv";
-                else if (hd > 128 || hd % 32 != 0)  reason = "head_dim ineligible";
+                else if (hd > 256 || hd % 32 != 0)  reason = "head_dim ineligible";
+                else if (hybrid_hd)                 reason = "hybrid per-layer head_dim (uniform-fc GPU stats layout) — CPU only";
                 else if (ndr != 0)                  reason = "nonrot_dim>0 (GPU lacks content term) — CPU only";
-                fprintf(stderr, "tria: gpu gate — is_q8_0=%d nh=%d nkv=%d hd=%d nonrot=%d -> %s\n",
-                        is_q8_0, nh, nkv, hd, ndr, reason);
+                fprintf(stderr, "tria: gpu gate — is_q8_0=%d nh=%d nkv=%d hd=%d hybrid=%d nonrot=%d -> %s\n",
+                        is_q8_0, nh, nkv, hd, hybrid_hd, ndr, reason);
                 s_logged_gate = 1;
             }
         }
-        if (is_q8_0 && nkv > 0 && nh % nkv == 0 && hd <= 128 && hd % 32 == 0 && ndr == 0 && use_gpu_scoring >= 0) {
+        if (is_q8_0 && nkv > 0 && nh % nkv == 0 && hd <= 256 && hd % 32 == 0 && !hybrid_hd && ndr == 0 && use_gpu_scoring >= 0) {
             /* Lazy upload GPU stats on first use. q_mean and q_abs_mean cover
              * ALL query heads [nl * nh * fc] so the kernel can do GQA aggregation. */
             if (!rt->gpu_omega || rt->gpu_q_mean_layers != nl || rt->gpu_q_mean_kv_heads != nh) {
@@ -554,8 +563,13 @@ int tria_maybe_score(
             if (tria_no_fullattn && hd_l != hd) continue;
         }
 
-        /* GPU scoring path for q8_0: score directly on GPU, no CPU transfer */
-        if (use_gpu_scoring && k_tensor->type == GGML_TYPE_Q8_0 && rt->gpu_omega) {
+        /* GPU scoring path for q8_0: score directly on GPU, no CPU transfer.
+         * Requires this layer to match the scalar hd/fc: the GPU omega/q_mean
+         * buffers use a uniform-fc layout (offset li*nh*fc), so a layer whose
+         * head_dim differs (hybrid models) must take the CPU path. The
+         * !hybrid_hd gate on use_gpu_scoring already guarantees this; the
+         * explicit hd_l==hd check is defensive insurance. */
+        if (use_gpu_scoring && hd_l == hd && k_tensor->type == GGML_TYPE_Q8_0 && rt->gpu_omega) {
             float layer_weight = rt->stats->layer_budget_scales[li] / layer_weight_mean;
             if (layer_weight < 0.25f) layer_weight = 0.25f;
             if (layer_weight > 4.0f)  layer_weight = 4.0f;

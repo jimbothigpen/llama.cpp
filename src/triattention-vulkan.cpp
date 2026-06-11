@@ -458,7 +458,7 @@ extern "C" int tria_vk_score_q8_0(
 
     if (!k_data_host || n_tokens <= 0 || n_kv_heads <= 0) return 0;
     if (n_heads < n_kv_heads || (n_heads % n_kv_heads) != 0) return -1;
-    if (freq_count > 64 || head_dim > 128 || (head_dim % QK8) != 0) return -1;
+    if (freq_count > 128 || head_dim > 256 || (head_dim % QK8) != 0) return -1;
     if (!omega_dev || !q_mean_real_dev || !q_mean_imag_dev || !global_scores_dev) return -1;
 
     std::lock_guard<std::mutex> lk(g_vk_mutex);

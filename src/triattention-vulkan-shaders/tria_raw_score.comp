@@ -76,7 +76,7 @@ void main() {
     const int head_block_start  = pc.kvi * (pc.head_dim / QK8);
     const uint row_base         = uint(s) * uint(row_bytes);
 
-    float k_f32[128];
+    float k_f32[256];
     for (int b = 0; b < n_head_blocks; b++) {
         const uint blk = row_base + uint(head_block_start + b) * uint(BLK_BYTES);
         const uint lo = getByte(blk);
@@ -90,8 +90,8 @@ void main() {
     }
 
     const int fc = pc.freq_count;
-    float rel_r[64];
-    float rel_i[64];
+    float rel_r[128];
+    float rel_i[128];
     float extra = 0.0;
     for (int f = 0; f < fc; f++) {
         float kr, ki;

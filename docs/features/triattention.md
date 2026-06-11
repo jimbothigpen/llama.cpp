@@ -23,8 +23,8 @@
 | **What it is** | Trajectory-adaptive KV-cache eviction: score tokens by calibrated RoPE-direction importance, evict low-value entries beyond a budget |
 | **Calibration** | Per-model `.tria` file required; generate with `llama-tria-gen` |
 | **Core flags** | `--triattention <.tria>`, `--tri-budget <pct>`, `--tri-window <N>`, `--tri-interval <N>`, `--tri-sink <N>` |
-| **Backend: scoring** | CPU (all GQA architectures) + HIP/Vulkan GPU (GQA, hd ≤ 128, `--cache-type-k q8_0`) |
-| **GPU models** | Qwen3-8B/9B/35B, Llama-3.1, MistralNeMo, most NEOX-RoPE GQA; **not** Gemma-4 (hd > 128) |
+| **Backend: scoring** | CPU (all GQA architectures) + HIP/Vulkan GPU (GQA, hd ≤ 256, uniform head_dim, `--cache-type-k q8_0`) |
+| **GPU models** | Qwen3-8B/9B/35B (hd 128) and Qwen3.5/3.6 (uniform hd 256), Llama-3.1, MistralNeMo, most NEOX-RoPE GQA; **not** Gemma-4 (hybrid hd 256/512 — CPU only) |
 | **Retrieval quality (Qwen3-8B, passkey)** | **100 %** at budgets 25 / 50 / 75 % vs random 15 / 45 % — +55–85 pp delta |
 | **Retrieval quality (Gemma-4, passkey)** | **70 %** @25 % budget (CPU scoring, all layers including SWA) |
 | **Eviction fires** | Decode mode only, every `--tri-interval` steps; PPL runs do not fire the evictor |
@@ -245,10 +245,16 @@ per-query-head z-normalization with aggregation across the GQA query-head group:
   tokens. Peak KV savings only appear when the sequence is long enough to fill the budget.
 - **GPU scoring requires `--cache-type-k q8_0`.** Without it the scorer falls back to CPU,
   which is functionally identical but slower on long sequences.
-- **Gemma-4 GPU scoring is CPU-only (follow-on).** The GPU kernel supports hd ≤ 128. Gemma-4
-  full-attention layers use hd=256/512; those score on CPU. Gemma-4 SWA layers (hd=64) are
-  eligible for the GPU path but the current tria-gen v1 does not separately flag them.
-  The hd > 128 GPU extension is a tracked perf follow-on, not a correctness blocker.
+- **Large heads (hd ≤ 256) are GPU-eligible for *uniform* head_dim models.** The GPU kernel
+  now supports head_dim up to 256 (freq_count ≤ 128) — e.g. Qwen3.5/3.6 (uniform hd=256, iSWA;
+  the global-attention layers score on the GPU). The capture-layer gate samples the first
+  *captured* layer (not hardcoded layer 0), so iSWA models whose layer 0 is a sliding-window
+  (uncaptured) layer are correctly recognized as Q8_0-eligible.
+- **Hybrid head_dim models are CPU-only (follow-on).** Gemma-4 mixes hd=256 (SWA) and hd=512
+  (full-attention) layers. The GPU omega/q_mean stats buffers use a uniform-`fc` layout
+  (offset `li·nh·fc`), so a model whose per-layer head_dim varies must score on CPU. A
+  per-layer stats offset table (to GPU-accelerate the eligible hd≤256 layers of hybrid models)
+  is a tracked perf follow-on, not a correctness blocker.
 - **Non-rotary models.** Models with a non-rotary (content) attention term (`nonrot_dim > 0`)
   fall back to CPU scoring — the GPU kernel implements only the RoPE-direction term.
 - **MLA (DeepSeek) not supported.** Multi-head Latent Attention fuses Q/K/V projections;

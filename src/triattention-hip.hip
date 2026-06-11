@@ -98,7 +98,8 @@ extern "C" int tria_hip_compact_rows(
 
 #define TRIA_QK8_0 32
 #define TRIA_Q8_0_BLOCK_SIZE (2 + TRIA_QK8_0)  /* fp16 scale + 32 int8 */
-#define TRIA_MAX_FC 64                          /* head_dim <= 128 => fc <= 64 */
+#define TRIA_MAX_HD 256                         /* max supported head_dim (large-head: hd=256) */
+#define TRIA_MAX_FC (TRIA_MAX_HD / 2)           /* head_dim <= 256 => fc <= 128 */
 #define TRIA_REDUCE_BLOCK 256
 
 static __device__ __forceinline__ float tria_fp16_to_fp32(uint16_t d_bits) {
@@ -149,7 +150,7 @@ static __global__ void tria_raw_score_kernel(
     const int head_block_start = kvi * (head_dim / TRIA_QK8_0);
     const int n_head_blocks = head_dim / TRIA_QK8_0;
 
-    float k_f32[128];
+    float k_f32[TRIA_MAX_HD];
     for (int b = 0; b < n_head_blocks; b++) {
         const uint8_t * blk = row + (head_block_start + b) * TRIA_Q8_0_BLOCK_SIZE;
         uint16_t d_bits;
@@ -365,7 +366,7 @@ extern "C" int tria_hip_score_q8_0(
 
     if (!k_data_host || n_tokens <= 0 || n_kv_heads <= 0) return 0;
     if (n_heads < n_kv_heads || (n_heads % n_kv_heads) != 0) return (int)hipErrorInvalidValue;
-    if (freq_count > TRIA_MAX_FC || head_dim > 128 || (head_dim % TRIA_QK8_0) != 0) {
+    if (freq_count > TRIA_MAX_FC || head_dim > TRIA_MAX_HD || (head_dim % TRIA_QK8_0) != 0) {
         return (int)hipErrorInvalidValue;
     }
     const int gqa = n_heads / n_kv_heads;

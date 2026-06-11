@@ -39,7 +39,7 @@ int tria_hip_compact_rows(
  * n_embd_k_gqa : total K embedding dim (n_kv_heads * head_dim)
  * n_kv_heads   : number of KV heads
  * n_heads      : number of query heads (>= n_kv_heads, multiple of it)
- * head_dim     : per-head dimension (<= 128, multiple of 32)
+ * head_dim     : per-head dimension (<= 256, multiple of 32)
  * freq_count   : head_dim / 2 (number of rotary frequency pairs)
  * rope_neox    : 1 = NEOX/IMROPE split-half layout, 0 = NORMAL interleaved
  * key_pos      : HOST array of token positions [n_tokens]
