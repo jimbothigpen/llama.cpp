@@ -3082,7 +3082,16 @@ llama_kv_cache_context::llama_kv_cache_context(
         llama_context * lctx,
         bool do_shift,
         stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
-    if (!do_shift && this->sc_info.empty()) {
+    // §-FLAG-B: a pending InnerQ scale_inv sync ALSO requires running update() (see
+    // llama_kv_cache::update()), otherwise the decode-side Q compensation tensor stays at
+    // its 1.0 identity init while the encode side scales K — a ~2.5x PPL regression. Plain
+    // decode is !do_shift && sc_info.empty(), which would otherwise short-circuit to
+    // NO_UPDATE and never refresh the tensor.
+    bool innerq_pending = false;
+#ifdef GGML_USE_CUDA
+    innerq_pending = (kv && kv->get_turbo_innerq_scale_inv() && turbo_innerq_needs_tensor_update());
+#endif
+    if (!do_shift && this->sc_info.empty() && !innerq_pending) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
 }
