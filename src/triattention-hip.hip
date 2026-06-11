@@ -98,8 +98,24 @@ extern "C" int tria_hip_compact_rows(
 
 #define TRIA_QK8_0 32
 #define TRIA_Q8_0_BLOCK_SIZE (2 + TRIA_QK8_0)  /* fp16 scale + 32 int8 */
+
+/*
+ * Per-thread on-stack arrays (k_f32/rel_r/rel_i) below are sized by TRIA_MAX_HD.
+ * gfx1102/1103 (RDNA3 32-CU, 256 VGPR/thread) cannot afford a 256-float (1 KiB)
+ * stack array — it blows the register budget and the device module fails to load,
+ * crashing EVERY HIP dispatch (TODO-238 regression). Size the DEVICE arrays at 128
+ * there. This macro is evaluated PER COMPILATION PASS: in the gfx1102/1103 device
+ * passes it is 128; in the gfx1150 device pass and the HOST pass it is 256. The host
+ * dispatch gate (tria_hip_score_q8_0) therefore CANNOT rely on this macro to reject
+ * hd>128 on gfx1102/1103 — __gfx1102__ is undefined in the host pass — so it does a
+ * RUNTIME gcnArchName check instead (see tria_hip_effective_max_hd).
+ */
+#if defined(__gfx1102__) || defined(__gfx1103__)
+#define TRIA_MAX_HD 128                         /* gfx1102/1103 register budget: 256-float stack array fails module load */
+#else
 #define TRIA_MAX_HD 256                         /* max supported head_dim (large-head: hd=256) */
-#define TRIA_MAX_FC (TRIA_MAX_HD / 2)           /* head_dim <= 256 => fc <= 128 */
+#endif
+#define TRIA_MAX_FC (TRIA_MAX_HD / 2)           /* head_dim <= TRIA_MAX_HD => fc <= TRIA_MAX_HD/2 */
 #define TRIA_REDUCE_BLOCK 256
 
 static __device__ __forceinline__ float tria_fp16_to_fp32(uint16_t d_bits) {
@@ -342,6 +358,34 @@ extern "C" int tria_hip_scores_download(float * scores, const float * scores_dev
     return (int)hipMemcpy(scores, scores_dev, (size_t)n_scores * sizeof(float), hipMemcpyDeviceToHost);
 }
 
+/*
+ * Runtime per-device head_dim ceiling. The DEVICE kernel arrays (k_f32/rel_r/rel_i)
+ * are sized by TRIA_MAX_HD evaluated in the device pass: 128 on gfx1102/1103, 256
+ * elsewhere. The HOST pass always sees TRIA_MAX_HD=256 (__gfx1102__ is undefined
+ * there), so it must query the ACTUAL device arch at runtime — otherwise it would
+ * accept an hd=256 model and launch it against a 128-wide gfx1102/1103 kernel,
+ * causing an out-of-bounds write (TODO-238 regression). Returns the effective max
+ * head_dim for the current HIP device; the freq_count ceiling is half that.
+ */
+static int tria_hip_effective_max_hd() {
+    /* Cached after first query — the device arch does not change at runtime and this
+       gate is hit on every scoring dispatch. -1 = uncached. */
+    static int cached = -1;
+    if (cached > 0) {
+        return cached;
+    }
+    int eff = TRIA_MAX_HD; /* host pass default: 256 */
+    int dev = 0;
+    hipDeviceProp_t prop;
+    if (hipGetDevice(&dev) == hipSuccess && hipGetDeviceProperties(&prop, dev) == hipSuccess) {
+        if (strstr(prop.gcnArchName, "gfx1102") || strstr(prop.gcnArchName, "gfx1103")) {
+            eff = 128; /* device arrays were sized at 128 on these archs */
+        }
+    }
+    cached = eff;
+    return cached;
+}
+
 extern "C" int tria_hip_score_q8_0(
         const void * k_data_host,
         int n_tokens,
@@ -366,7 +410,11 @@ extern "C" int tria_hip_score_q8_0(
 
     if (!k_data_host || n_tokens <= 0 || n_kv_heads <= 0) return 0;
     if (n_heads < n_kv_heads || (n_heads % n_kv_heads) != 0) return (int)hipErrorInvalidValue;
-    if (freq_count > TRIA_MAX_FC || head_dim > TRIA_MAX_HD || (head_dim % TRIA_QK8_0) != 0) {
+    /* Runtime arch gate: on gfx1102/1103 the device kernel arrays are 128-wide, so
+       reject hd>128 here (caller falls back to CPU scoring). gfx1150 keeps hd=256. */
+    const int eff_max_hd = tria_hip_effective_max_hd();
+    const int eff_max_fc = eff_max_hd / 2;
+    if (freq_count > eff_max_fc || head_dim > eff_max_hd || (head_dim % TRIA_QK8_0) != 0) {
         return (int)hipErrorInvalidValue;
     }
     const int gqa = n_heads / n_kv_heads;
