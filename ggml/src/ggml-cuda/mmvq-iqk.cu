@@ -666,7 +666,7 @@ static void launch_mul_mat_vec_iq4_k_q8_1(
 // per-sub-block magnitude (4-bit, *2+1 odd-only, signed via scales_h bit).
 // ============================================================================
 
-extern __constant__ int8_t iq3nl_values_dev[];
+extern __device__ int8_t iq3nl_values_dev[];
 
 static __global__ void mul_mat_vec_iq3_k_q8_1_kernel(
         const void * __restrict__ vx,
@@ -1034,7 +1034,7 @@ static __device__ __forceinline__ uint32_t iq2k_lookup4(uint32_t idx_packed, uin
 #endif
 }
 
-extern __constant__ int8_t iq2nl_values_dev[];
+extern __device__ int8_t iq2nl_values_dev[];
 
 // ============================================================================
 // IQ2_KS MMVQ kernel.
@@ -1228,7 +1228,7 @@ static void launch_mul_mat_vec_iq2_k_q8_1(
 // Scale format identical to IQ4_K (6-bit: 2h+4l, offset -32).
 // ============================================================================
 
-extern __constant__ int8_t iq5nl_values_dev[];
+extern __device__ int8_t iq5nl_values_dev[];
 
 static __global__ void mul_mat_vec_iq5_k_q8_1_kernel(
         const void * __restrict__ vx,
@@ -1420,7 +1420,7 @@ static void launch_mul_mat_vec_iq5_ks_q8_1(
 //   packed 4 per byte at (elem%4)*2 within qh[elem/4]).
 // ============================================================================
 
-extern __constant__ int8_t iq6nl_values_dev[];
+extern __device__ int8_t iq6nl_values_dev[];
 
 static __global__ void mul_mat_vec_iq6_k_q8_1_kernel(
         const void * __restrict__ vx,
