@@ -612,6 +612,7 @@ struct llama_model {
 
     // EAGLE3 speculative decode
     struct ggml_tensor * fc               = nullptr; // encoder fc projection [hidden, 3*hidden]
+    struct ggml_tensor * eagle3_fc_norm   = nullptr; // optional packed [n_embd, n_aux] per-aux RMSNorm before fc (fc_norm=true drafts)
     struct ggml_tensor * target_tok_embd  = nullptr; // target model's token embeddings (if different)
     struct ggml_tensor * d2t              = nullptr; // draft-to-target vocab mapping [vocab]
 

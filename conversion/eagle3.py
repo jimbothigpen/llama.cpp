@@ -76,9 +76,19 @@ class LlamaEagle3Model(TextModel):
             yield ("fc.weight", data_torch)
             return
 
-        # Per-head fc norm weights (fc_norm=True models) — no llama.cpp runtime support yet; skip.
+        # Per-aux fc_norm RMSNorm weights (fc_norm=True drafts). SpecForge/SGLang store one
+        # RMSNorm per extracted aux layer as fcs.{i}.weight, applied to each target-feature
+        # segment before the fc combiner (chunk → per-aux RMSNorm → concat → fc). We stash the
+        # per-index [n_embd] vectors and emit them in prepare_tensors() as ONE packed tensor
+        # fc_norm.weight of shape (n_aux, n_embd). A single (un-indexed) input-level tensor is
+        # required: the loader rejects an input/output-class tensor that carries a layer index
+        # (llama-model-loader.cpp create_tensor sanity check), so per-index fc_norm.{i} names
+        # cannot be loaded as input tensors. The EAGLE3 driver slices row i per aux segment.
         if name.startswith("fcs.") and name.endswith(".weight") and name[4:-7].isdigit():
-            logger.warning("EAGLE3: skipping fc_norm weight %s (fc_norm=True not yet supported in llama.cpp)", name)
+            idx = int(name[4:-7])
+            if not hasattr(self, "_eagle3_fc_norm"):
+                self._eagle3_fc_norm = {}
+            self._eagle3_fc_norm[idx] = data_torch
             return
 
         # layers.N.xxx — alternative naming used by some EAGLE3 variants; normalize to midlayer.xxx.
@@ -164,3 +174,15 @@ class LlamaEagle3Model(TextModel):
             shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
             logger.info(f"{tensor_name + ',':<24} I64, shape = {shape_str}")
             self.gguf_writer.add_tensor(tensor_name, data, raw_dtype=gguf.GGMLQuantizationType.I64)
+
+        # Pack per-aux fc_norm RMSNorm weights into ONE tensor fc_norm.weight of shape
+        # (n_aux, n_embd) → ggml ne = [n_embd, n_aux], i.e. n_aux contiguous rows of n_embd.
+        # F32 (norm weights stay full precision). Emitted only when the draft has fcs.* weights.
+        fc_norm_map = getattr(self, "_eagle3_fc_norm", {})
+        if fc_norm_map:
+            rows = [LazyTorchTensor.to_eager(fc_norm_map[i]).to(torch.float32)
+                    for i in sorted(fc_norm_map)]
+            data = torch.stack(rows, dim=0).numpy()
+            shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+            logger.info(f"{'fc_norm.weight,':<24} F32, shape = {shape_str}")
+            self.gguf_writer.add_tensor("fc_norm.weight", data, raw_dtype=gguf.GGMLQuantizationType.F32)

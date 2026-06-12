@@ -1070,6 +1070,17 @@ extern "C" {
                                float * buf,
                              int64_t   buf_size);
 
+    // EAGLE3 model info: copy optional per-aux fc_norm RMSNorm weights to host F32 buffer.
+    // buf must hold n_aux_layers * n_embd floats. Returns the number of fc_norm tensors written
+    // (0 if the draft has no fc_norm — caller then applies a bare fc matmul).
+    LLAMA_API int32_t llama_model_eagle3_get_fc_norm(
+            const struct llama_model * model,
+                               float * buf,
+                             int64_t   buf_size);
+
+    // EAGLE3 model info: RMSNorm epsilon for fc_norm (defaults to 1e-6 when unavailable).
+    LLAMA_API float llama_model_eagle3_get_norm_eps(const struct llama_model * model);
+
     // EAGLE3 model info: copy d2t (draft-to-target vocab remap) to host int32 buffer.
     // buf must hold n_vocab int32 entries. Returns n_vocab on success, 0 if tensor absent or wrong type.
     LLAMA_API int64_t llama_model_eagle3_get_d2t(

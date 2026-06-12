@@ -46,6 +46,20 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader & ml) {
     // encoder: fc projection [n_embd_fc_in → n_embd]
     fc  = create_tensor(tn(LLM_TENSOR_EAGLE3_FC,  "weight"), {n_embd_fc_in, n_embd}, 0);
 
+    // Optional per-aux fc_norm (fc_norm=true drafts): one RMSNorm per extracted target-feature
+    // segment, applied to each [n_embd] chunk before the fc combiner (mirrors SpecForge/SGLang
+    // self.fc_norm). Absent on older GGUFs / fc_norm=false drafts → all-null, projection stays a
+    // bare fc matmul (no-op-default discipline).
+    int n_aux = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (hparams.eagle3_extract_layers[i] >= 0) n_aux++;
+    }
+    if (n_aux == 0) n_aux = 3;
+    // fc_norm: ONE packed input-level tensor [n_embd, n_aux] (one RMSNorm row per aux segment),
+    // un-indexed so the loader's input/output-class check (which forbids a layer index on
+    // input tensors) accepts it. Optional — absent on fc_norm=false drafts → nullptr → bare fc.
+    eagle3_fc_norm = create_tensor(tn(LLM_TENSOR_EAGLE3_FC_NORM, "weight"), {n_embd, n_aux}, TENSOR_NOT_REQUIRED);
+
     // draft-to-target vocab mapping (compact-vocab only; absent for full-vocab drafts)
     d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T, "weight"), {n_draft_vocab}, TENSOR_NOT_REQUIRED);
 
@@ -94,7 +108,25 @@ llama_model_eagle3::graph_encode::graph_encode(const llama_model & model, const 
     ggml_set_input(inp);
     ggml_set_name(inp, "inp_eagle3_features");
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.fc, inp);
+    ggml_tensor * cur;
+    if (model.eagle3_fc_norm) {
+        // fc_norm=true: RMSNorm each [n_embd] aux segment before concat + fc combiner
+        // (mirrors SGLang self.fc_norm and the host CPU path in common/speculative.cpp).
+        // fc_norm is packed [n_embd, n_aux]; row i (a [n_embd] view) is segment i's weight.
+        ggml_tensor * fused = nullptr;
+        const size_t fcn_es = ggml_element_size(model.eagle3_fc_norm);
+        for (int64_t i = 0; i < n_extract; ++i) {
+            ggml_tensor * chunk = ggml_view_2d(ctx0, inp, n_embd, n_tokens,
+                    inp->nb[1], i * n_embd * ggml_element_size(inp));
+            chunk = ggml_cont(ctx0, chunk);
+            ggml_tensor * w_i = ggml_view_1d(ctx0, model.eagle3_fc_norm, n_embd, i * n_embd * fcn_es);
+            chunk = build_norm(chunk, w_i, nullptr, LLM_NORM_RMS, -1);
+            fused = fused ? ggml_concat(ctx0, fused, chunk, 0) : chunk;
+        }
+        cur = ggml_mul_mat(ctx0, model.fc, fused);
+    } else {
+        cur = ggml_mul_mat(ctx0, model.fc, inp);
+    }
     cb(cur, "eagle3_fc_out", -1);
 
     res->t_embd = cur;

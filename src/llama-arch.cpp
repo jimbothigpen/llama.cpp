@@ -603,6 +603,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ZAYA_ROUTER_BIASES,                     "blk.%d.zaya_router_biases" },
     { LLM_TENSOR_ZAYA_ROUTER_EDA_SCALE,                  "blk.%d.zaya_router_eda" },
     { LLM_TENSOR_EAGLE3_FC,                              "fc" },
+    { LLM_TENSOR_EAGLE3_FC_NORM,                         "fc_norm" },
     { LLM_TENSOR_EAGLE3_HIDDEN_NORM,                     "blk.%d.hidden_norm" },
     { LLM_TENSOR_EAGLE3_D2T,                             "d2t" },
     { LLM_TENSOR_DFLASH_FC,                              "dflash_fc" },
@@ -864,6 +865,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_ZAYA_ROUTER_EDA_SCALE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     // EAGLE3 speculative decode tensors
     {LLM_TENSOR_EAGLE3_FC,                  {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_EAGLE3_FC_NORM,             {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL}},
     {LLM_TENSOR_EAGLE3_HIDDEN_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_EAGLE3_D2T,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
     // DFlash speculative decode tensors
