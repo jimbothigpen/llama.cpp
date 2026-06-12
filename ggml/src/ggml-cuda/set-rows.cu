@@ -1174,8 +1174,11 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     if (sid < 128) x[sid] = grp_src[sid];
     __syncthreads();
 
-    // InnerQ calibration accum (each of threads 0-127 owns one channel — no contention)
-    if (d_innerq_calibrating && sid < 128) {
+    // InnerQ calibration accum (each of threads 0-127 owns one channel — no contention).
+    // 236-L2: K ONLY. InnerQ equalizes K channels for the Q·K dot product; the decode-side
+    // compensation (ggml_turbo_wht_innerq on Q) exists only for K. Accumulating V here would
+    // pollute the per-channel RMS with V statistics (suboptimal for K).
+    if (d_innerq_calibrating && innerq_is_k && sid < 128) {
         atomicAdd(&d_innerq_sq_accum[sid], x[sid] * x[sid]);
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
@@ -1184,7 +1187,11 @@ static __global__ void __launch_bounds__(512, 1) k_set_rows_turboq3_tcq(
     // Enabled by TURBO_INNERQ=N env var.  Inverse scale_inv is applied to Q
     // in the WHT rotation op (llama-graph.cpp ggml_turbo_wht_innerq), so that
     // dot(scale_inv*Q_rot, scale*K_rot) = dot(Q, K) by Parseval's theorem.
-    if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
+    // 236-L2 FIX: scale K ONLY. Scaling V here stored FWHT(s·V); the attention-output
+    // un-rotation (llama-graph.cpp:2228) is a PLAIN inverse WHT with no scale_inv, so the
+    // output came back as s·O — per-channel corrupted (s∈[0.5,2]) → ~17 PPL. V has no
+    // decode-side descale, so it must not be scaled at encode.
+    if (d_innerq_active && innerq_is_k && sid < 128) x[sid] *= d_innerq_scale[sid];
     __syncthreads();
 
     // Parallel norm reduction: tree-reduce x[i]^2 via cost[0..511] → cost[0]
@@ -1479,14 +1486,17 @@ static __global__ void __launch_bounds__(256, 1) k_set_rows_turboq2_tcq(
     if (sid < 128) x[sid] = grp_src[sid];
     __syncthreads();
 
-    // InnerQ calibration accum (each of threads 0-127 owns one channel — no contention)
-    if (d_innerq_calibrating && sid < 128) {
+    // InnerQ calibration accum (each of threads 0-127 owns one channel — no contention).
+    // 236-L2: K ONLY (see k_set_rows_turboq3_tcq for rationale).
+    if (d_innerq_calibrating && iq_is_k && sid < 128) {
         atomicAdd(&d_innerq_sq_accum[sid], x[sid] * x[sid]);
         if (sid == 0) atomicAdd(&d_innerq_count, 1);
     }
 
     // InnerQ×TCQ hybrid: per-channel prescale before FWHT rotation.
-    if (d_innerq_active && sid < 128) x[sid] *= d_innerq_scale[sid];
+    // 236-L2 FIX: scale K ONLY — V has no decode-side descale (plain inverse WHT at
+    // llama-graph.cpp:2228), so scaling V corrupted the attention output by per-channel s.
+    if (d_innerq_active && iq_is_k && sid < 128) x[sid] *= d_innerq_scale[sid];
     __syncthreads();
 
     // Parallel norm reduction: tree-reduce x[i]^2 via cost[0..255] → cost[0]
