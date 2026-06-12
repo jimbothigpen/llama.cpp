@@ -2812,18 +2812,28 @@ int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float
         return 0;
     }
     const ggml_type fc_type = model->fc->type;
+    const int64_t nbytes = ggml_nbytes(model->fc);
     if (fc_type == GGML_TYPE_F32) {
         ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
     } else if (fc_type == GGML_TYPE_F16) {
         std::vector<ggml_fp16_t> tmp(n_elements);
-        ggml_backend_tensor_get(model->fc, tmp.data(), 0, ggml_nbytes(model->fc));
+        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
         ggml_fp16_to_fp32_row(tmp.data(), buf, n_elements);
     } else if (fc_type == GGML_TYPE_BF16) {
         std::vector<ggml_bf16_t> tmp(n_elements);
-        ggml_backend_tensor_get(model->fc, tmp.data(), 0, ggml_nbytes(model->fc));
+        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
         ggml_bf16_to_fp32_row(tmp.data(), buf, n_elements);
     } else {
-        return 0; // unsupported fc dtype
+        // Quantized type (Q4_K, Q8_0, IQ3_S, …) — dequantize via ggml type traits.
+        // Quantized eagle3 drafts reach this path; the previous hard-return-0 caused
+        // fc_in==0 → assert failure in speculative.cpp:493.
+        const struct ggml_type_traits * traits = ggml_get_type_traits(fc_type);
+        if (!traits || !traits->to_float) {
+            return 0; // truly unsupported type
+        }
+        std::vector<uint8_t> tmp(nbytes);
+        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
+        traits->to_float(tmp.data(), buf, n_elements);
     }
     return fc_input_size;
 }
@@ -2844,18 +2854,25 @@ int32_t llama_model_eagle3_get_fc_norm(const struct llama_model * model, float *
         return 0; // caller buffer too small
     }
     const ggml_type ty = t->type;
+    const int64_t tybytes = ggml_nbytes(t);
     if (ty == GGML_TYPE_F32) {
         ggml_backend_tensor_get(t, buf, 0, ne * sizeof(float));
     } else if (ty == GGML_TYPE_F16) {
         std::vector<ggml_fp16_t> tmp(ne);
-        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
         ggml_fp16_to_fp32_row(tmp.data(), buf, ne);
     } else if (ty == GGML_TYPE_BF16) {
         std::vector<ggml_bf16_t> tmp(ne);
-        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
         ggml_bf16_to_fp32_row(tmp.data(), buf, ne);
     } else {
-        return 0; // unsupported fc_norm dtype
+        const struct ggml_type_traits * traits = ggml_get_type_traits(ty);
+        if (!traits || !traits->to_float) {
+            return 0; // unsupported fc_norm dtype
+        }
+        std::vector<uint8_t> tmp(tybytes);
+        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
+        traits->to_float(tmp.data(), buf, ne);
     }
     return (int32_t) n_aux;
 }
