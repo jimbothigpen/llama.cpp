@@ -24,6 +24,22 @@ int tria_backend_init(void) {
     return 1;
 }
 
+#elif defined(TRIA_CUDA_BACKEND)
+/* Phase C GPU scoring on CUDA (T4 / sm_75) — requires triattention-cuda.cu +
+   TRIA_CUDA_BACKEND define. Same g_tria_backend table as HIP; the raw-score
+   kernel is register-frugal so it does not spill on sm_75. Falls back to CPU
+   only if device ops fail at runtime. */
+#include "triattention-cuda.h"
+
+int tria_backend_init(void) {
+    g_tria_backend.stats_upload    = tria_cuda_stats_upload;
+    g_tria_backend.stats_free      = tria_cuda_stats_free;
+    g_tria_backend.score_q8_0      = tria_cuda_score_q8_0;
+    g_tria_backend.scores_download = tria_cuda_scores_download;
+    g_tria_backend.compact_rows    = tria_cuda_compact_rows;
+    return 1;
+}
+
 #elif defined(TRIA_VULKAN_BACKEND)
 /* Phase C GPU scoring on Vulkan — requires triattention-vulkan.cpp +
    TRIA_VULKAN_BACKEND define. Self-contained Vulkan compute context (its own

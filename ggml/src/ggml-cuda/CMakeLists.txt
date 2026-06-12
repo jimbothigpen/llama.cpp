@@ -307,6 +307,23 @@ if (CUDAToolkit_FOUND)
         target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
     endif()
 
+    # CUDA_SEPARABLE_COMPILATION (set above) emits a device-link object into the
+    # ggml-cuda static archive that registers the CUDA device runtime fatbin
+    # (__fatbinwrap_..._cuda_device_runtime_cu...). That symbol lives in
+    # libcudadevrt.a; without it the final executable link fails with an
+    # "undefined reference to __fatbinwrap_..._cuda_device_runtime" error.
+    # find_package(CUDAToolkit) runs in THIS directory scope, so its CUDA::cudadevrt
+    # imported target is not visible to sibling consumer scopes (app/, tools/...)
+    # that pick up ggml-cuda's transitive PRIVATE deps — referencing it there fails
+    # at generate time. Link the static lib by its resolved absolute path instead:
+    # it propagates as a plain link item (no target lookup downstream), lands after
+    # libggml-cuda.a so the registration resolves, and is ignored when unreferenced.
+    if (EXISTS "${CUDAToolkit_LIBRARY_DIR}/libcudadevrt.a")
+        target_link_libraries(ggml-cuda PRIVATE "${CUDAToolkit_LIBRARY_DIR}/libcudadevrt.a")
+    elseif (TARGET CUDA::cudadevrt)
+        target_link_libraries(ggml-cuda PRIVATE CUDA::cudadevrt)
+    endif()
+
     if (GGML_CUDA_NO_VMM)
         # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
     else()

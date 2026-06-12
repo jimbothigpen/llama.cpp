@@ -94,6 +94,35 @@ if (GGML_HIP)
     set_target_properties(llama PROPERTIES HIP_ARCHITECTURES "${CMAKE_HIP_ARCHITECTURES}")
 endif()
 
+# TriAttention Phase C: GPU GQA scoring kernel (CUDA / NVIDIA, incl. T4 sm_75).
+# Compiled only for CUDA builds; enables the TRIA_CUDA_BACKEND path in
+# triattention-backend.c so g_tria_backend resolves to the real GPU kernels.
+# The raw-score kernel is register-frugal (loop-interchanged freq/offset, K
+# dequantized on the fly) so it does not spill on sm_75 — bit-identical to the
+# HIP path. See worker-scratch/triattn-cuda-scorer-2026-06-11/design.md.
+if (GGML_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    # Inherit ggml-cuda's architecture selection; default to sm_75 (T4) if unset.
+    if (NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 75)
+    endif()
+    # Compile the scoring kernel as a CUDA-ONLY static library so the CUDA
+    # architecture flags stay isolated from the host C++ compilation of the
+    # rest of the llama target (mirrors the tria-hip isolation above).
+    add_library(tria-cuda STATIC triattention-cuda.cu)
+    set_source_files_properties(triattention-cuda.cu PROPERTIES LANGUAGE CUDA)
+    set_target_properties(tria-cuda PROPERTIES
+        CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+        POSITION_INDEPENDENT_CODE ON)
+    # Whole-program (non-separable) compilation: the fatbin is self-contained in
+    # tria-cuda, so llama needs no CUDA device-link step — only the host runtime.
+    # PRIVATE on a STATIC lib still propagates CUDA::cudart to llama's link line.
+    target_link_libraries(tria-cuda PRIVATE CUDA::cudart)
+    target_link_libraries(llama PRIVATE tria-cuda)
+    target_compile_definitions(llama PRIVATE TRIA_CUDA_BACKEND)
+endif()
+
 # TriAttention Phase C: GPU GQA scoring kernel (Vulkan).
 # Compiled only for Vulkan builds; enables the TRIA_VULKAN_BACKEND path in
 # triattention-backend.c. Built as an isolated static library (its own Vulkan
