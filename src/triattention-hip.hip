@@ -100,22 +100,25 @@ extern "C" int tria_hip_compact_rows(
 #define TRIA_Q8_0_BLOCK_SIZE (2 + TRIA_QK8_0)  /* fp16 scale + 32 int8 */
 
 /*
- * Per-thread on-stack arrays (k_f32/rel_r/rel_i) below are sized by TRIA_MAX_HD.
- * gfx1102/1103 (RDNA3 32-CU, 256 VGPR/thread) cannot afford a 256-float (1 KiB)
- * stack array — it blows the register budget and the device module fails to load,
- * crashing EVERY HIP dispatch (TODO-238 regression). Size the DEVICE arrays at 128
- * there. This macro is evaluated PER COMPILATION PASS: in the gfx1102/1103 device
- * passes it is 128; in the gfx1150 device pass and the HOST pass it is 256. The host
- * dispatch gate (tria_hip_score_q8_0) therefore CANNOT rely on this macro to reject
- * hd>128 on gfx1102/1103 — __gfx1102__ is undefined in the host pass — so it does a
- * RUNTIME gcnArchName check instead (see tria_hip_effective_max_hd).
+ * REGISTER-FRUGAL scorer (ported from the CUDA arm, src/triattention-cuda.cu).
+ * The old HIP kernel materialized per-thread k_f32[256] + rel_r[128] + rel_i[128]
+ * (~512 floats / thread). On gfx1102/1103 (RDNA3 32-CU) that 256-float stack array
+ * blew the VGPR budget and the device module failed to load, crashing EVERY HIP
+ * dispatch (TODO-238) — so TRIA_MAX_HD was capped at 128 on those archs and hd=256
+ * fell back to (slow) CPU scoring via a runtime gcnArchName gate.
+ *
+ * The register-frugal kernel below interchanges the freq/offset loops and
+ * dequantizes K two elements at a time on the fly, so the only per-thread arrays
+ * are delta[TRIA_MAX_OFFSETS] + trig_acc[TRIA_MAX_OFFSETS] (17 each, constant-indexed
+ * and fully unrolled -> register-resident). No 256-float stack array is materialized,
+ * so hd=256 is now safe on ALL archs (gfx1102/1103/1150) — the arch cap and the
+ * tria_hip_effective_max_hd runtime gate are both removed. TRIA_MAX_HD is now an
+ * arch-independent dispatch ceiling, not a stack-array size. Result is bit-identical
+ * to the CUDA/CPU path — see worker-scratch/triattn-cuda-scorer-2026-06-11/design.md.
  */
-#if defined(__gfx1102__) || defined(__gfx1103__)
-#define TRIA_MAX_HD 128                         /* gfx1102/1103 register budget: 256-float stack array fails module load */
-#else
 #define TRIA_MAX_HD 256                         /* max supported head_dim (large-head: hd=256) */
-#endif
-#define TRIA_MAX_FC (TRIA_MAX_HD / 2)           /* head_dim <= TRIA_MAX_HD => fc <= TRIA_MAX_HD/2 */
+#define TRIA_MAX_FC (TRIA_MAX_HD / 2)           /* head_dim <= 256 => fc <= 128 */
+#define TRIA_MAX_OFFSETS 17                     /* == TRIA_N_OFFSETS (triattention.h) */
 #define TRIA_REDUCE_BLOCK 256
 
 static __device__ __forceinline__ float tria_fp16_to_fp32(uint16_t d_bits) {
@@ -134,12 +137,34 @@ static __device__ __forceinline__ float tria_fp16_to_fp32(uint16_t d_bits) {
     return d;
 }
 
+/* Dequantize a single head-local element idx (0..head_dim-1) from a q8_0 row.
+ * Bit-identical to indexing the old kernel's precomputed k_f32[idx]:
+ * d = fp16(block scale); value = d * (float)int8. */
+static __device__ __forceinline__ float tria_dequant_one(
+        const uint8_t * __restrict__ row, int head_block_start, int idx) {
+    const int blk_idx = idx / TRIA_QK8_0;
+    const int j       = idx - blk_idx * TRIA_QK8_0;
+    const uint8_t * blk = row + (size_t)(head_block_start + blk_idx) * TRIA_Q8_0_BLOCK_SIZE;
+    uint16_t d_bits;
+    memcpy(&d_bits, blk, 2);
+    const float d = tria_fp16_to_fp32(d_bits);
+    const int8_t q = (int8_t)blk[2 + j];
+    return d * (float)q;
+}
+
 /*
  * Pass 1 — raw per-token score for one query head (eq 6-11, max_beta=0).
  * out[s] = mean_offsets( sum_f rel_r*cos(omega*delta) - rel_i*sin(omega*delta) ) + extra
  *   rel_r = qmr*kr + qmi*ki ; rel_i = qmi*kr - qmr*ki ; delta = cur_pos - pos + offset
  *   extra = sum_f max(0, q_abs_mean - |q_mean|) * |k_f|   (skipped if q_abs_mean == NULL)
  * One thread per token. K head slice is shared across the KV head's query heads (GQA).
+ *
+ * REGISTER-FRUGAL: f is the outer loop; per-offset accumulation lives in
+ * trig_acc[TRIA_MAX_OFFSETS] (constant-indexed, fully unrolled -> register
+ * resident). K is dequantized two elements at a time on the fly, so no
+ * k_f32[256]/rel_r[128]/rel_i[128] arrays are materialized. The per-offset
+ * accumulation order (ascending f) and the outer reduction order (ascending
+ * offset) match the CUDA/CPU reference exactly, so the result is bit-identical.
  */
 static __global__ void tria_raw_score_kernel(
         const uint8_t * __restrict__ k_q8,        /* device slice, row 0 == score_start */
@@ -164,31 +189,29 @@ static __global__ void tria_raw_score_kernel(
     const int row_bytes = (n_embd_k_gqa / TRIA_QK8_0) * TRIA_Q8_0_BLOCK_SIZE;
     const uint8_t * row = k_q8 + (size_t)s * row_bytes;
     const int head_block_start = kvi * (head_dim / TRIA_QK8_0);
-    const int n_head_blocks = head_dim / TRIA_QK8_0;
 
-    float k_f32[TRIA_MAX_HD];
-    for (int b = 0; b < n_head_blocks; b++) {
-        const uint8_t * blk = row + (head_block_start + b) * TRIA_Q8_0_BLOCK_SIZE;
-        uint16_t d_bits;
-        memcpy(&d_bits, blk, 2);
-        const float d = tria_fp16_to_fp32(d_bits);
-        const int8_t * qs = (const int8_t *)(blk + 2);
-        for (int j = 0; j < TRIA_QK8_0; j++) {
-            k_f32[b * TRIA_QK8_0 + j] = d * (float)qs[j];
-        }
+    const int pos = key_pos[s];
+
+    /* per-offset delta (s-local, freq-independent) — kept register-resident */
+    float delta[TRIA_MAX_OFFSETS];
+    float trig_acc[TRIA_MAX_OFFSETS];
+    #pragma unroll
+    for (int oi = 0; oi < TRIA_MAX_OFFSETS; oi++) {
+        delta[oi]    = (oi < n_offsets) ? (float)(cur_pos - pos + offsets[oi]) : 0.f;
+        trig_acc[oi] = 0.f;
     }
 
-    float rel_r[TRIA_MAX_FC];
-    float rel_i[TRIA_MAX_FC];
     float extra = 0.f;
     for (int f = 0; f < freq_count; f++) {
-        float kr, ki;
-        if (rope_neox) { kr = k_f32[f];        ki = k_f32[freq_count + f]; }
-        else           { kr = k_f32[2 * f];    ki = k_f32[2 * f + 1];      }
+        int ridx, iidx;
+        if (rope_neox) { ridx = f;        iidx = freq_count + f; }
+        else           { ridx = 2 * f;    iidx = 2 * f + 1;      }
+        const float kr = tria_dequant_one(row, head_block_start, ridx);
+        const float ki = tria_dequant_one(row, head_block_start, iidx);
         const float qr = q_mean_real[f];
         const float qi = q_mean_imag[f];
-        rel_r[f] = qr * kr + qi * ki;
-        rel_i[f] = qi * kr - qr * ki;
+        const float rel_r = qr * kr + qi * ki;
+        const float rel_i = qi * kr - qr * ki;
         if (q_abs_mean) {
             const float qma = sqrtf(qr * qr + qi * qi);
             const float residual = q_abs_mean[f] - qma;
@@ -196,19 +219,21 @@ static __global__ void tria_raw_score_kernel(
                 extra += residual * sqrtf(kr * kr + ki * ki);
             }
         }
+        const float w = omega[f];
+        #pragma unroll
+        for (int oi = 0; oi < TRIA_MAX_OFFSETS; oi++) {
+            if (oi < n_offsets) {
+                float c, sn;
+                sincosf(w * delta[oi], &sn, &c);
+                trig_acc[oi] += rel_r * c - rel_i * sn;
+            }
+        }
     }
 
-    const int pos = key_pos[s];
     float trig_sum = 0.f;
-    for (int oi = 0; oi < n_offsets; oi++) {
-        const float delta = (float)(cur_pos - pos + offsets[oi]);
-        float trig = 0.f;
-        for (int f = 0; f < freq_count; f++) {
-            float c, sn;
-            sincosf(omega[f] * delta, &sn, &c);
-            trig += rel_r[f] * c - rel_i[f] * sn;
-        }
-        trig_sum += trig;
+    #pragma unroll
+    for (int oi = 0; oi < TRIA_MAX_OFFSETS; oi++) {
+        if (oi < n_offsets) trig_sum += trig_acc[oi];
     }
     scores_out[s] = trig_sum / (float)n_offsets + extra;
 }
@@ -358,34 +383,6 @@ extern "C" int tria_hip_scores_download(float * scores, const float * scores_dev
     return (int)hipMemcpy(scores, scores_dev, (size_t)n_scores * sizeof(float), hipMemcpyDeviceToHost);
 }
 
-/*
- * Runtime per-device head_dim ceiling. The DEVICE kernel arrays (k_f32/rel_r/rel_i)
- * are sized by TRIA_MAX_HD evaluated in the device pass: 128 on gfx1102/1103, 256
- * elsewhere. The HOST pass always sees TRIA_MAX_HD=256 (__gfx1102__ is undefined
- * there), so it must query the ACTUAL device arch at runtime — otherwise it would
- * accept an hd=256 model and launch it against a 128-wide gfx1102/1103 kernel,
- * causing an out-of-bounds write (TODO-238 regression). Returns the effective max
- * head_dim for the current HIP device; the freq_count ceiling is half that.
- */
-static int tria_hip_effective_max_hd() {
-    /* Cached after first query — the device arch does not change at runtime and this
-       gate is hit on every scoring dispatch. -1 = uncached. */
-    static int cached = -1;
-    if (cached > 0) {
-        return cached;
-    }
-    int eff = TRIA_MAX_HD; /* host pass default: 256 */
-    int dev = 0;
-    hipDeviceProp_t prop;
-    if (hipGetDevice(&dev) == hipSuccess && hipGetDeviceProperties(&prop, dev) == hipSuccess) {
-        if (strstr(prop.gcnArchName, "gfx1102") || strstr(prop.gcnArchName, "gfx1103")) {
-            eff = 128; /* device arrays were sized at 128 on these archs */
-        }
-    }
-    cached = eff;
-    return cached;
-}
-
 extern "C" int tria_hip_score_q8_0(
         const void * k_data_host,
         int n_tokens,
@@ -410,11 +407,13 @@ extern "C" int tria_hip_score_q8_0(
 
     if (!k_data_host || n_tokens <= 0 || n_kv_heads <= 0) return 0;
     if (n_heads < n_kv_heads || (n_heads % n_kv_heads) != 0) return (int)hipErrorInvalidValue;
-    /* Runtime arch gate: on gfx1102/1103 the device kernel arrays are 128-wide, so
-       reject hd>128 here (caller falls back to CPU scoring). gfx1150 keeps hd=256. */
-    const int eff_max_hd = tria_hip_effective_max_hd();
-    const int eff_max_fc = eff_max_hd / 2;
-    if (freq_count > eff_max_fc || head_dim > eff_max_hd || (head_dim % TRIA_QK8_0) != 0) {
+    /* Register-frugal kernel: no arch-specific cap. hd=256 is safe on all archs
+       (gfx1102/1103/1150) because the scorer no longer materializes a 256-float
+       stack array — see the TRIA_MAX_HD note above. */
+    if (freq_count > TRIA_MAX_FC || head_dim > TRIA_MAX_HD || (head_dim % TRIA_QK8_0) != 0) {
+        return (int)hipErrorInvalidValue;
+    }
+    if (n_offsets <= 0 || n_offsets > TRIA_MAX_OFFSETS) {
         return (int)hipErrorInvalidValue;
     }
     const int gqa = n_heads / n_kv_heads;
