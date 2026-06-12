@@ -27,25 +27,25 @@
 #define QR_IQ6_K 1   // ik_llama IQ6_K (256-element superblock, 6.625 bpw)
 
 // IQ4_K centroid table — first 16 are standard iq4nl values, second 16 are "shifted" variant
-static __constant__ int8_t iq4k_values[32] = {
+static __device__ int8_t iq4k_values[32] = {
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117,
 };
 
 // IQ3_K centroid table — 8 standard + 8 shifted values
-static __constant__ int8_t iq3nl_values_dev[16] = {
+static __device__ int8_t iq3nl_values_dev[16] = {
     -63, -40, -23, -10, 1, 13, 28,  47,
     -59, -36, -19,  -6, 5, 17, 32,  51,
 };
 
 // IQ2_K centroid table — 4 standard + 4 shifted values
-static __constant__ int8_t iq2nl_values_dev[8] = {
+static __device__ int8_t iq2nl_values_dev[8] = {
     -31, -13,  1, 17,
     -26,  -8,  6, 22,
 };
 
 // IQ5_K centroid table — 32 standard + 32 shifted values (source: ikllama/main ggml-common.h)
-static __constant__ int8_t iq5nl_values_dev[64] = {
+static __device__ int8_t iq5nl_values_dev[64] = {
     -126, -114, -103,  -92,  -83,  -74,  -65,  -57,  -50,  -43,  -36,  -30,  -24,  -18,  -12,   -6,
       -1,    5,   11,   17,   23,   29,   36,   43,   51,   59,   68,   77,   87,   97,  109,  121,
     -124, -112, -101,  -90,  -81,  -72,  -63,  -55,  -48,  -41,  -34,  -28,  -22,  -16,  -10,   -4,
@@ -53,7 +53,7 @@ static __constant__ int8_t iq5nl_values_dev[64] = {
 };
 
 // IQ6_K centroid table — 64 standard + 64 shifted values (+1) (source: ikllama/main ggml-common.h)
-static __constant__ int8_t iq6nl_values_dev[128] = {
+static __device__ int8_t iq6nl_values_dev[128] = {
     -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
      -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
       -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
@@ -66,31 +66,31 @@ static __constant__ int8_t iq6nl_values_dev[128] = {
 
 // ---- 2-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
-static __constant__ float TURBO_CENTROIDS_2BIT[4] = {
+static __device__ float TURBO_CENTROIDS_2BIT[4] = {
     -0.133462f, -0.039994f, 0.039994f, 0.133462f
 };
 
-static __constant__ float TURBO_MID_2BIT[3] = {
+static __device__ float TURBO_MID_2BIT[3] = {
     -0.086728f, 0.0f, 0.086728f
 };
 
 // ---- 3-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
-static __constant__ float TURBO_CENTROIDS_3BIT[8] = {
+static __device__ float TURBO_CENTROIDS_3BIT[8] = {
     -0.190685f, -0.117832f, -0.065717f, -0.021460f,
      0.021460f,  0.065717f,  0.117832f,  0.190685f
 };
 
 // ---- Midpoints for nearest centroid lookup ----
 
-static __constant__ float TURBO_MID_3BIT[7] = {
+static __device__ float TURBO_MID_3BIT[7] = {
     -0.154259f, -0.091775f, -0.043589f, 0.0f,
      0.043589f,  0.091775f,  0.154259f
 };
 
 // ---- WHT sign arrays (seed=42) ----
 
-static __constant__ float TURBO_WHT_SIGNS1[128] = {
+static __device__ float TURBO_WHT_SIGNS1[128] = {
     -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
@@ -101,7 +101,7 @@ static __constant__ float TURBO_WHT_SIGNS1[128] = {
     1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f
 };
 
-static __constant__ float TURBO_WHT_SIGNS2[128] = {
+static __device__ float TURBO_WHT_SIGNS2[128] = {
     1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f,
     1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
@@ -114,14 +114,14 @@ static __constant__ float TURBO_WHT_SIGNS2[128] = {
 
 // ---- 64-element WHT sign arrays (first 64 of the 128-element arrays) ----
 
-static __constant__ float TURBO_WHT_SIGNS1_64[64] = {
+static __device__ float TURBO_WHT_SIGNS1_64[64] = {
     -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
     1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f
 };
 
-static __constant__ float TURBO_WHT_SIGNS2_64[64] = {
+static __device__ float TURBO_WHT_SIGNS2_64[64] = {
     1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
     1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f,
     1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
@@ -340,7 +340,7 @@ static bool turbo_innerq_is_active(void) {
 
 // ---- 4-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
-static __constant__ float TURBO_CENTROIDS_4BIT[16] = {
+static __device__ float TURBO_CENTROIDS_4BIT[16] = {
     -0.173926f, -0.117195f, -0.089527f, -0.068756f,
     -0.051262f, -0.035597f, -0.020989f, -0.006938f,
      0.006938f,  0.020989f,  0.035597f,  0.051262f,
@@ -349,7 +349,7 @@ static __constant__ float TURBO_CENTROIDS_4BIT[16] = {
 
 // ---- Midpoints for nearest 4-bit centroid lookup ----
 
-static __constant__ float TURBO_MID_4BIT[15] = {
+static __device__ float TURBO_MID_4BIT[15] = {
     -0.145561f, -0.103361f, -0.079142f, -0.060009f,
     -0.043430f, -0.028293f, -0.013964f,  0.000000f,
      0.013964f,  0.028293f,  0.043430f,  0.060009f,
@@ -477,21 +477,21 @@ static __device__ __forceinline__ float turboq2_dequant_element(
 
 // ---- Weight centroids: Lloyd-Max for N(0,1) ----
 
-static __constant__ float TQ4_CENTROIDS_WEIGHT[16] = {
+static __device__ float TQ4_CENTROIDS_WEIGHT[16] = {
     -2.732590f, -2.069017f, -1.618046f, -1.256231f,
     -0.942340f, -0.656759f, -0.388048f, -0.128395f,
      0.128395f,  0.388048f,  0.656759f,  0.942340f,
      1.256231f,  1.618046f,  2.069017f,  2.732590f
 };
 
-static __constant__ float TQ3_CENTROIDS_WEIGHT[8] = {
+static __device__ float TQ3_CENTROIDS_WEIGHT[8] = {
     -1.996684f, -1.291398f, -0.740341f, -0.247508f,
      0.230106f,  0.725222f,  1.277503f,  1.988943f
 };
 
 // ---- Sign array for weight WHT (golden ratio hash, 32 elements) ----
 
-static __constant__ float TQ_WEIGHT_SIGNS[32] = {
+static __device__ float TQ_WEIGHT_SIGNS[32] = {
     +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
     -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
     -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
@@ -504,7 +504,7 @@ static __constant__ float TQ_WEIGHT_SIGNS[32] = {
 // =====================================================================================
 
 // MSE reduction: 50.1% vs Lloyd-Max 3-bit, +3.02 dB. numpy GLA: n_train=4000, 100 iters, seed=99. Decode: state_t = read_9_bits(qs, t*3)
-static __constant__ float d_turboq3_tcq_codebook[512] = {
+static __device__ float d_turboq3_tcq_codebook[512] = {
     -0.24244059f, -0.12586778f, -0.06693592f, -0.02260770f, +0.01492950f, +0.05467265f, +0.10069778f, +0.18883320f,
     -0.19693744f, -0.14152811f, -0.09539399f, -0.06046141f, -0.02731707f, +0.01163860f, +0.05423523f, +0.11278591f,
     -0.11856443f, -0.06727399f, -0.02913110f, +0.00417571f, +0.03549468f, +0.07371171f, +0.11926779f, +0.18401266f,
@@ -624,7 +624,7 @@ void dequantize_turboq3_tcq(const void * vx, const int64_t ib, const int iqs, fl
 // =====================================================================================
 
 // MSE reduction: 33.1% vs Lloyd-Max 2-bit, +1.75 dB. numpy GLA: n_train=4000, 100 iters, 5 restarts. Decode: state_t = read_8_bits(qs, t*2)
-static __constant__ float d_turboq2_tcq_codebook[256] = {
+static __device__ float d_turboq2_tcq_codebook[256] = {
     -0.08176727f, -0.00033508f, +0.06850938f, +0.16613583f, -0.14090237f, -0.05715980f, +0.01615283f, +0.11012612f,
     -0.10581727f, -0.04260033f, -0.00423828f, +0.06296677f, -0.17352516f, -0.07213694f, +0.02485547f, +0.10813029f,
     -0.12736021f, -0.06026637f, +0.00177779f, +0.06987048f, -0.08498892f, -0.01943354f, +0.06211906f, +0.01397950f,
@@ -667,8 +667,8 @@ static __constant__ float d_turboq2_tcq_codebook[256] = {
 // opt in via TURBO_TCQ_ALPHA (K) and TURBO_TCQ_ALPHA_V (V) env vars.
 // K/V routing comes from the innerq_is_k / iq_is_k kernel parameter at the
 // TURBOQ{3,2}_TCQ encode dispatch (set-rows.cu).
-static __constant__ float d_tcq_norm_alpha   = 1.0f;
-static __constant__ float d_tcq_norm_alpha_v = 1.0f;
+static __device__ float d_tcq_norm_alpha   = 1.0f;
+static __device__ float d_tcq_norm_alpha_v = 1.0f;
 
 // TCQ error dump: save post-FWHT normalized values and output symbols for
 // autocorrelation analysis. Opt-in via TURBO_TCQ_DUMP_ERRORS=N (port of buun

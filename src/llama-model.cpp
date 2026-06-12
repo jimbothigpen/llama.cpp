@@ -2828,6 +2828,45 @@ int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float
     return fc_input_size;
 }
 
+int32_t llama_model_eagle3_get_fc_norm(const struct llama_model * model, float * buf, int64_t buf_size) {
+    if (!model || model->arch != LLM_ARCH_EAGLE3) {
+        return 0;
+    }
+    // fc_norm is ONE packed tensor [n_embd, n_aux] = n_aux contiguous rows of n_embd. Copy it
+    // into buf as contiguous F32 rows and return n_aux (0 = no fc_norm → bare fc matmul).
+    const ggml_tensor * t = model->eagle3_fc_norm;
+    if (!t) {
+        return 0;
+    }
+    const int64_t ne     = ggml_nelements(t); // n_embd * n_aux
+    const int64_t n_aux  = t->ne[1];
+    if (buf_size < ne) {
+        return 0; // caller buffer too small
+    }
+    const ggml_type ty = t->type;
+    if (ty == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(t, buf, 0, ne * sizeof(float));
+    } else if (ty == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(ne);
+        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_fp16_to_fp32_row(tmp.data(), buf, ne);
+    } else if (ty == GGML_TYPE_BF16) {
+        std::vector<ggml_bf16_t> tmp(ne);
+        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_bf16_to_fp32_row(tmp.data(), buf, ne);
+    } else {
+        return 0; // unsupported fc_norm dtype
+    }
+    return (int32_t) n_aux;
+}
+
+float llama_model_eagle3_get_norm_eps(const struct llama_model * model) {
+    if (!model || model->arch != LLM_ARCH_EAGLE3) {
+        return 1e-6f;
+    }
+    return model->hparams.f_norm_rms_eps;
+}
+
 int64_t llama_model_eagle3_get_d2t(const struct llama_model * model, int32_t * buf, int64_t buf_size) {
     if (!model || model->arch != LLM_ARCH_EAGLE3 || !model->d2t) {
         return 0;

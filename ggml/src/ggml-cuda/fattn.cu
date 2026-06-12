@@ -660,7 +660,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                             V->type == GGML_TYPE_TURBOQ2_TCQ || V->type == GGML_TYPE_TURBOQ3_TCQ;
         const bool innerq_kv = K->type == GGML_TYPE_TURBOQ2_INNERQ || K->type == GGML_TYPE_TURBOQ3_INNERQ ||
                                V->type == GGML_TYPE_TURBOQ2_INNERQ || V->type == GGML_TYPE_TURBOQ3_INNERQ;
-        const int d_limit = (tcq_kv || innerq_kv) ? 256 : 512;
+        int d_limit = (tcq_kv || innerq_kv) ? 256 : 512;
+        // TODO 135: on pre-Ampere (sm_60/sm_70/sm_75) the turbo VEC kernel at D=512 needs
+        // >48 KB static shared memory and is compiled as NO_DEVICE_CODE there (see
+        // fattn-vec.cuh). Cap to D=256 so we never launch a stubbed kernel; D<=256 turbo
+        // (every real head_dim=128 KV-PPL cell) runs natively via the VEC inline-dequant path.
+        if (cc < GGML_CUDA_CC_AMPERE && d_limit > 256) {
+            d_limit = 256;
+        }
         if (Q->ne[0] <= d_limit && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
             return BEST_FATTN_KERNEL_VEC;
         }

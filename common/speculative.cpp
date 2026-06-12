@@ -445,6 +445,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     int64_t n_embd;        // EAGLE3 hidden dim
     int64_t fc_input_size; // n_aux_layers × n_embd_tgt
 
+    // Optional per-aux fc_norm (fc_norm=true drafts): RMSNorm each [n_embd] feature segment
+    // before the fc projection. Empty / n_fc_norm==0 → no fc_norm (bare fc matmul).
+    std::vector<float> fc_norm_f32; // n_fc_norm contiguous rows of n_embd
+    int32_t n_fc_norm = 0;
+    float   fc_norm_eps = 1e-6f;
+
     // draft-to-target vocab remap; empty when vocabs are identical
     std::vector<llama_token> d2t_map;
 
@@ -486,6 +492,17 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         int64_t fc_in = llama_model_eagle3_get_fc_weight(model_eagle3, fc_weight_f32.data(), n_elements);
         GGML_ASSERT(fc_in == fc_input_size && "eagle3 fc.weight dimension mismatch");
 
+        // Optional per-aux fc_norm: RMSNorm weights applied to each feature segment before fc.
+        // Only enabled when one norm is present per aux layer; partial/absent → bare fc matmul.
+        fc_norm_f32.resize((size_t) n_aux * n_embd);
+        n_fc_norm = llama_model_eagle3_get_fc_norm(model_eagle3, fc_norm_f32.data(), (int64_t) fc_norm_f32.size());
+        if (n_fc_norm != n_aux) {
+            n_fc_norm = 0;
+            fc_norm_f32.clear();
+        } else {
+            fc_norm_eps = llama_model_eagle3_get_norm_eps(model_eagle3);
+        }
+
         // Load optional draft-to-target vocab remap
         const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model_eagle3));
         d2t_map.resize(n_vocab);
@@ -493,8 +510,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             d2t_map.clear(); // tensor absent or unsupported type — no remap
         }
 
-        LOG_INF("%s: EAGLE3 initialized (n_embd=%lld, fc_in=%lld, n_aux=%d, d2t=%s)\n",
+        LOG_INF("%s: EAGLE3 initialized (n_embd=%lld, fc_in=%lld, n_aux=%d, fc_norm=%s, d2t=%s)\n",
                 __func__, (long long)n_embd, (long long)fc_input_size, n_aux,
+                n_fc_norm > 0 ? "present" : "none",
                 d2t_map.empty() ? "none" : "present");
     }
 
@@ -544,6 +562,23 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 memcpy(feat_concat.data() + layer * n_embd,
                        layer_data + last_tok_idx * n_embd,
                        n_embd * sizeof(float));
+            }
+
+            // fc_norm (fc_norm=true drafts): RMSNorm each [n_embd] aux segment in place before the
+            // fc projection — mirrors SGLang self.fc_norm (chunk → per-aux RMSNorm → concat → fc).
+            if (n_fc_norm == n_aux) {
+                for (int layer = 0; layer < n_aux; layer++) {
+                    float       * seg = feat_concat.data() + (int64_t) layer * n_embd;
+                    const float * w   = fc_norm_f32.data() + (int64_t) layer * n_embd;
+                    double ss = 0.0;
+                    for (int64_t k = 0; k < n_embd; k++) {
+                        ss += (double) seg[k] * (double) seg[k];
+                    }
+                    const float inv_rms = 1.0f / sqrtf((float) (ss / (double) n_embd) + fc_norm_eps);
+                    for (int64_t k = 0; k < n_embd; k++) {
+                        seg[k] = seg[k] * inv_rms * w[k];
+                    }
+                }
             }
 
             // CPU FC projection: g_embd = fc_weight × feat_concat

@@ -249,13 +249,37 @@ static __global__ void flash_attn_ext_vec(
 
     constexpr int ne_KQ      = ncols*D;
     constexpr int ne_combine = nwarps*V_cols_per_iter*D;
+    constexpr int ne_KQ_max  = ne_KQ > ne_combine ? ne_KQ : ne_combine;
+
+    // TODO 135: pre-Ampere GPUs (sm_60/sm_70/sm_75) cap *static* shared memory at 48 KB.
+    // The turbo V path uses V_cols_per_iter=8, so KQ[nwarps*8*D] reaches ~64 KB at D=512 —
+    // exactly the ptxas "uses too much shared data (0x10100 bytes, 0xc000 max)" build failure
+    // that strips turbo FA-vec from the sm_75 binary (-> ggml_abort on T4). Compile those
+    // over-budget configs as NO_DEVICE_CODE on pre-Ampere and shrink the allocation so ptxas
+    // accepts the translation unit; the host dispatch (ggml_cuda_get_best_fattn_kernel) caps
+    // turbo D to 256 there, so a stubbed kernel is never launched. D<=256 turbo — including
+    // every real head_dim=128 KV-PPL cell (Qwen3.5-9B / Qwen3.6-35B) — keeps full device code
+    // and runs natively (the VEC kernel dequantizes turbo K/V to f16 inline). sm_80+ unchanged.
+    // Budget-driven & per-instance: K-turbo/V-non-turbo D=512 units stay under 48 KB and are
+    // unaffected. The extra turbo __shared__ arrays (tcq_smem_codebook <=2 KB, turbo_lut) are
+    // negligible at D=512 (turbo_lut is size-1 there), so a KQ-keyed check is sufficient.
+#if !defined(GGML_USE_HIP) && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < GGML_CUDA_CC_AMPERE)
+    constexpr bool fattn_vec_smem_over_budget = (size_t) ne_KQ_max * sizeof(float) > 48*1024;
+#else
+    constexpr bool fattn_vec_smem_over_budget = false;
+#endif // pre-Ampere static shared-memory guard
+    constexpr int ne_KQ_alloc = fattn_vec_smem_over_budget ? 1 : ne_KQ_max;
 #ifdef V_DOT2_F32_F16_AVAILABLE
     half2            VKQ[ncols][(D/2)/nthreads_V] = {{{0.0f, 0.0f}}};
-    __shared__ half   KQ[ne_KQ > ne_combine ? ne_KQ : ne_combine];
+    __shared__ half   KQ[ne_KQ_alloc];
 #else
     float2           VKQ[ncols][(D/2)/nthreads_V] = {{{0.0f, 0.0f}}};
-    __shared__ float  KQ[ne_KQ > ne_combine ? ne_KQ : ne_combine];
+    __shared__ float  KQ[ne_KQ_alloc];
 #endif // V_DOT2_F32_F16_AVAILABLE
+    if constexpr (fattn_vec_smem_over_budget) {
+        NO_DEVICE_CODE;
+        return;
+    }
 
     // Shared-memory LUT for turbo KQ scoring: precompute Q[d] * centroid[c] once,
     // then the hot loop does turbo_lut[d][idx] (shmem read, no multiply).

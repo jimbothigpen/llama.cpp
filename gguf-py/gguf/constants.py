@@ -285,7 +285,8 @@ class Keys:
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
         # Normalizer constants
-        NORMALIZER_LOWERCASE = "tokenizer.ggml.normalizer.lowercase"
+        NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
+        NORMALIZER_STRIP_ACCENTS = "tokenizer.ggml.normalizer.strip_accents"
         # FIM/Infill special tokens constants
         FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
         FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"
@@ -981,6 +982,7 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_NORM          = auto()
     # eagle3 speculative decode
     EAGLE3_FC              = auto()
+    EAGLE3_FC_NORM         = auto()
     EAGLE3_HIDDEN_NORM     = auto()
     EAGLE3_D2T             = auto()
     # dflash speculative decode
@@ -1565,6 +1567,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     # EAGLE3 speculative decode
     MODEL_TENSOR.EAGLE3_FC:                 "fc",
+    MODEL_TENSOR.EAGLE3_FC_NORM:            "fc_norm",
     MODEL_TENSOR.EAGLE3_HIDDEN_NORM:        "blk.{bid}.hidden_norm",
     MODEL_TENSOR.EAGLE3_D2T:                "d2t",
     # DFlash speculative decode
@@ -4342,6 +4345,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.EAGLE3_FC,
+        MODEL_TENSOR.EAGLE3_FC_NORM,
         MODEL_TENSOR.EAGLE3_HIDDEN_NORM,
         MODEL_TENSOR.EAGLE3_D2T,
     ],

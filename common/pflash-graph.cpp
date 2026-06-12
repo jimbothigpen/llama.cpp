@@ -27,14 +27,7 @@ void pflash_generate_placeholder_scores(float * out, int n_lookahead, int S,
     }
 }
 
-// ─── CPU helpers for attention scoring (small tensors only) ───────────────
-
-static void softmax_inplace(float * x, int n) {
-    float mx = *std::max_element(x, x + n);
-    float sum = 0.0f;
-    for (int i = 0; i < n; i++) { x[i] = expf(x[i] - mx); sum += x[i]; }
-    for (int i = 0; i < n; i++) { x[i] /= sum; }
-}
+// ─── CPU helpers ──────────────────────────────────────────────────────────
 
 // Download tensor to host as F32 (handles F32 and F16 source types)
 static void tensor_get_f32(const ggml_tensor * t, std::vector<float> & dst) {
@@ -74,11 +67,14 @@ static ggml_tensor * pflash_build_norm(
 // Builds a single ggml graph covering N_LOOKAHEAD layers.
 // Each layer:
 //   1. Computes Q_last (last-token query) and K_all (all-token keys) on GPU.
-//   2. Marks Q_last and K_normed as output tensors for later download.
+//   2. Computes the last-token attention scores entirely on-device (Q·Kᵀ →
+//      softmax over tokens → mean over heads) and marks the [S] score vector
+//      as the only output tensor.
 //   3. Advances hidden state h through FFN (no attention residual) for the
 //      next layer.
-// After graph compute, downloads Q and K per layer to CPU to compute
-// last-token attention weights → per-token importance scores.
+// After graph compute, only the per-layer [S] score vectors are downloaded
+// (< 600 KB at S=24K) — the per-layer K tensor and the O(S²) attention matrix
+// never leave VRAM. The same graph runs on the CPU backend when no GPU exists.
 //
 // Skipping attention residual keeps O(S²) attention matrix off GPU memory.
 // RoPE is omitted (not required for relative importance ranking in S3).
@@ -151,9 +147,17 @@ pflash_scorer_result pflash_score(
         ggml_get_rows(ctx, model.tok_embd, inp_tokens),
         GGML_TYPE_F32);
 
-    // Per-layer output tensors: collected for post-graph download
-    std::vector<ggml_tensor *> out_Q(n_layers); // [d_head, n_heads] per layer
-    std::vector<ggml_tensor *> out_K(n_layers); // [d_head, n_kv, S] per layer
+    // Per-layer output tensors: per-token importance scores computed on-GPU.
+    // out_score[l]: [S] — mean over heads of last-token softmax attention weights.
+    // Replaces the old per-layer Q/K download + CPU scalar attention loop: the
+    // O(S²) attention is never materialized and only a tiny [S] vector leaves VRAM.
+    std::vector<ggml_tensor *> out_score(n_layers);
+
+    // PARITY_HARNESS (strippable): when PFLASH_PARITY is set, also expose Q/K
+    // so the post-graph block can recompute the original scalar reference.
+    const bool pflash_parity = getenv("PFLASH_PARITY") != nullptr;
+    std::vector<ggml_tensor *> out_Q, out_K;
+    if (pflash_parity) { out_Q.assign(n_layers, nullptr); out_K.assign(n_layers, nullptr); }
 
     for (int l = 0; l < n_layers; l++) {
         const auto & lw = model.layers[l];
@@ -200,8 +204,6 @@ pflash_scorer_result pflash_score(
         } else {
             Q_normed = Q_3d;
         }
-        ggml_set_output(Q_normed);
-        out_Q[l] = Q_normed;
 
         // ── K for all tokens ───────────────────────────────────────────────
         // K_flat = wk^T @ h_norm → [n_kv*d_head, S]
@@ -220,8 +222,36 @@ pflash_scorer_result pflash_score(
         } else {
             K_normed = K_3d;
         }
-        ggml_set_output(K_normed);
-        out_K[l] = K_normed;
+
+        // ── On-GPU last-token attention scoring ────────────────────────────
+        // CPU reference (per token t):
+        //   score[t] = mean_h softmax_t( scale · Q[:,h] · K[:,kv(h),t] )
+        // GQA: head h maps to kv group kv(h) = h / gqa_ratio. Group the heads
+        // so each kv head broadcasts over its gqa_ratio query heads via mul_mat.
+        //
+        // Q3: [d_head, gqa_ratio, n_kv]  — Q_normed [d_head, n_heads] regrouped
+        //     (head index = hh + kv·gqa_ratio, matching kv(h) = h / gqa_ratio)
+        ggml_tensor * Q3 = ggml_reshape_3d(ctx, Q_normed, d_head, gqa_ratio, n_kv);
+        // K3: [d_head, S, n_kv] — K_normed [d_head, n_kv, S] with S,n_kv swapped
+        ggml_tensor * K3 = ggml_cont(ctx, ggml_permute(ctx, K_normed, 0, 2, 1, 3));
+        // scores[t, hh, kv] = Q[:,head]·K[:,kv,t]  → [S, gqa_ratio, n_kv]
+        ggml_tensor * scores = ggml_mul_mat(ctx, K3, Q3);
+        scores = ggml_scale(ctx, scores, scale_attn);
+        // softmax over t (ne[0] = S), per (query head, kv head)
+        ggml_tensor * attn = ggml_soft_max(ctx, scores);            // [S, gqa_ratio, n_kv]
+        // mean over all n_heads = gqa_ratio·n_kv: flatten head dims, sum, scale
+        ggml_tensor * attn2d = ggml_reshape_2d(ctx, attn, S, n_heads);   // [S, n_heads]
+        ggml_tensor * attn_t = ggml_cont(ctx, ggml_transpose(ctx, attn2d)); // [n_heads, S]
+        ggml_tensor * score  = ggml_sum_rows(ctx, attn_t);          // [1, S]
+        score = ggml_scale(ctx, score, 1.0f / (float)n_heads);
+        score = ggml_reshape_1d(ctx, score, S);                     // [S]
+        ggml_set_output(score);
+        out_score[l] = score;
+
+        if (pflash_parity) {
+            ggml_set_output(Q_normed); out_Q[l] = Q_normed;
+            ggml_set_output(K_normed); out_K[l] = K_normed;
+        }
 
         // ── FFN residual (advances h for next layer without O(S²) attention) ─
         ggml_tensor * h_ffn_norm = pflash_build_norm(ctx, h, lw.ffn_norm, norm_eps, model.norm_type);
@@ -242,8 +272,7 @@ pflash_scorer_result pflash_score(
     // ── Allocate and run graph ─────────────────────────────────────────────
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, 512, false);
     for (int l = 0; l < n_layers; l++) {
-        ggml_build_forward_expand(gf, out_Q[l]);
-        ggml_build_forward_expand(gf, out_K[l]);
+        ggml_build_forward_expand(gf, out_score[l]);
     }
     ggml_build_forward_expand(gf, h); // ensure FFN chain executes
 
@@ -276,41 +305,53 @@ pflash_scorer_result pflash_score(
         return result;
     }
 
-    // ── Per-layer attention scoring (CPU, small tensors only) ─────────────
-    // Q_normed:  [d_head, n_heads]     → tiny (n_heads * d_head * 4 bytes)
-    // K_normed:  [d_head, n_kv, S]     → ~22 MB for S=11K
-    //
-    // score[l, k] = mean_h softmax(Q_last[h] · K_all[kv(h), k] / sqrt(d))[k]
-    //
-    std::vector<float> Q_host, K_host;
-    std::vector<float> attn_row(S);
-
+    // ── Download per-layer scores (computed on-device) ────────────────────
+    // out_score[l]: [S] — already the mean-over-heads last-token attention
+    // weights. Only n_layers · S floats leave VRAM (< 600 KB at S=24K); the
+    // O(S²) attention matrix and the per-layer K tensor never touch the host.
+    std::vector<float> score_host;
     for (int l = 0; l < n_layers; l++) {
-        tensor_get_f32(out_Q[l], Q_host); // [d_head, n_heads] row-major in memory
-        tensor_get_f32(out_K[l], K_host); // [d_head, n_kv, S]
-
+        tensor_get_f32(out_score[l], score_host); // [S]
         float * score_l = result.running_max.data() + (size_t)l * S;
-        std::fill(score_l, score_l + S, 0.0f);
+        std::copy(score_host.begin(), score_host.begin() + S, score_l);
+    }
 
-        for (int h = 0; h < n_heads; h++) {
-            int kv_h = h / gqa_ratio;
-            // Q layout [d_head, n_heads]: Q[d, h] = Q_host[d + h*d_head]
-            // K layout [d_head, n_kv, S]:  K[d, kv_h, t] = K_host[d + kv_h*d_head + t*n_kv*d_head]
-            const float * q    = Q_host.data() + (size_t)h    * d_head;
-            const float * K_kv = K_host.data() + (size_t)kv_h * d_head; // base for this kv head
-
-            for (int t = 0; t < S; t++) {
-                const float * k = K_kv + (size_t)t * (size_t)n_kv * d_head; // step n_kv*d_head per token
-                float dot = 0.0f;
-                for (int d = 0; d < d_head; d++) dot += q[d] * k[d];
-                attn_row[t] = dot * scale_attn;
+    // PARITY_HARNESS (strippable): recompute the original scalar reference from
+    // downloaded Q/K and report max-abs-diff + Pearson corr vs the GPU scores.
+    if (pflash_parity) {
+        std::vector<float> Q_host, K_host, ref(S), attn_row(S);
+        double worst = 0.0, sxy = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0;
+        size_t npts = 0;
+        for (int l = 0; l < n_layers; l++) {
+            tensor_get_f32(out_Q[l], Q_host); // [d_head, n_heads]
+            tensor_get_f32(out_K[l], K_host); // [d_head, n_kv, S]
+            std::fill(ref.begin(), ref.end(), 0.0f);
+            for (int hh = 0; hh < n_heads; hh++) {
+                int kv_h = hh / gqa_ratio;
+                const float * q    = Q_host.data() + (size_t)hh   * d_head;
+                const float * K_kv = K_host.data() + (size_t)kv_h * d_head;
+                for (int t = 0; t < S; t++) {
+                    const float * k = K_kv + (size_t)t * (size_t)n_kv * d_head;
+                    float dot = 0.0f;
+                    for (int d = 0; d < d_head; d++) dot += q[d] * k[d];
+                    attn_row[t] = dot * scale_attn;
+                }
+                float mx = *std::max_element(attn_row.data(), attn_row.data() + S);
+                float sum = 0.0f;
+                for (int t = 0; t < S; t++) { attn_row[t] = expf(attn_row[t] - mx); sum += attn_row[t]; }
+                for (int t = 0; t < S; t++) ref[t] += attn_row[t] / sum;
             }
-            softmax_inplace(attn_row.data(), S);
-            for (int t = 0; t < S; t++) score_l[t] += attn_row[t];
+            const float * gpu = result.running_max.data() + (size_t)l * S;
+            for (int t = 0; t < S; t++) {
+                float r = ref[t] / (float)n_heads, g = gpu[t];
+                worst = std::max(worst, (double)std::fabs(r - g));
+                sx += r; sy += g; sxx += (double)r * r; syy += (double)g * g; sxy += (double)r * g; npts++;
+            }
         }
-        for (int t = 0; t < S; t++) score_l[t] /= (float)n_heads;
-
-        fprintf(stderr, "pflash: scored layer %d/%d\n", l + 1, n_layers);
+        double cov = sxy - sx * sy / npts;
+        double corr = cov / (sqrt(sxx - sx * sx / npts) * sqrt(syy - sy * sy / npts));
+        fprintf(stderr, "pflash-parity: layers=%d S=%d  max_abs_diff=%.3e  pearson=%.8f\n",
+            n_layers, S, worst, corr);
     }
 
     ggml_gallocr_free(alloc);

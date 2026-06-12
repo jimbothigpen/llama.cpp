@@ -1129,9 +1129,17 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
     }
 
 #ifdef GGML_USE_CUDA
+    // 236-L2: re-sync EVERY decode while finalized — do NOT mark-updated (one-shot).
+    // turbo_innerq_scale_inv lives in the KV-cache backend buffer, which is zeroed by
+    // ggml_backend_buffer_clear between perplexity chunks (and on any cache reset). A
+    // one-shot sync therefore survives only until the first clear, after which the Q-side
+    // compensation reads scale_inv == 0 → Q is zeroed → ~17 PPL. The host scale_inv values
+    // are static after finalize; re-copying this 512-byte tensor each decode is negligible
+    // and guarantees the graph always sees the active values. update() runs this block every
+    // decode because turbo_innerq_needs_tensor_update() stays true post-finalize (it gates
+    // the ctor's NO_UPDATE short-circuit — see llama_kv_cache_context ctor).
     if (turbo_innerq_scale_inv && turbo_innerq_needs_tensor_update()) {
         ggml_backend_tensor_set(turbo_innerq_scale_inv, g_innerq_scale_inv_host, 0, sizeof(float) * INNERQ_MAX_CHANNELS);
-        turbo_innerq_mark_tensor_updated();
         updated = true;
     }
 #endif
