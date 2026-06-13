@@ -1037,62 +1037,11 @@ extern "C" {
     LLAMA_API float * llama_get_mtp_chain_logits_ith(struct llama_context * ctx, int32_t chain_depth, int32_t i);
     LLAMA_API int32_t llama_get_mtp_chain_depth     (struct llama_context * ctx);
 
-    // EAGLE3 speculative decoding API [EXPERIMENTAL]
-
-    // Configure target context for EAGLE3 feature extraction.
-    // After calling this, forward passes through ctx_tgt will extract hidden states
-    // at the layers specified by the EAGLE3 model's aux_layers config.
-    LLAMA_API void llama_set_eagle3(
-            struct llama_context * ctx_tgt,
-       const struct llama_model  * model_eagle3);
-
-    // Get extracted target features after a target model forward pass.
-    // Returns pointer to concatenated hidden states [n_aux_layers * n_embd * n_tokens].
-    // The pointer is valid until the next call to llama_decode() on ctx_tgt.
-    LLAMA_API const float * llama_get_eagle3_target_features(
-            struct llama_context * ctx_tgt,
-                         int32_t * n_features);
-
-    // Set g_embeddings for an EAGLE3 decoder context before decode.
-    // data points to [n_embd * n_tokens] floats from the encoder output.
-    LLAMA_API void llama_set_eagle3_g_embeddings(
-            struct llama_context * ctx_eagle3,
-                     const float * data,
-                         int32_t   n_tokens);
-
-    // EAGLE3 model info: number of auxiliary extraction layers in this model.
-    LLAMA_API int32_t llama_model_eagle3_n_aux_layers(const struct llama_model * model);
-
-    // EAGLE3 model info: copy fc.weight to host F32 buffer; buf must hold n_embd * fc_input_size floats.
-    // Returns fc_input_size (= n_aux_layers * target_n_embd), or 0 on error.
-    LLAMA_API int64_t llama_model_eagle3_get_fc_weight(
-            const struct llama_model * model,
-                               float * buf,
-                             int64_t   buf_size);
-
-    // EAGLE3 model info: copy optional per-aux fc_norm RMSNorm weights to host F32 buffer.
-    // buf must hold n_aux_layers * n_embd floats. Returns the number of fc_norm tensors written
-    // (0 if the draft has no fc_norm — caller then applies a bare fc matmul).
-    LLAMA_API int32_t llama_model_eagle3_get_fc_norm(
-            const struct llama_model * model,
-                               float * buf,
-                             int64_t   buf_size);
-
-    // EAGLE3 model info: RMSNorm epsilon for fc_norm (defaults to 1e-6 when unavailable).
-    LLAMA_API float llama_model_eagle3_get_norm_eps(const struct llama_model * model);
-
-    // EAGLE3 model info: copy d2t (draft-to-target vocab remap) to host int32 buffer.
-    // buf must hold n_vocab int32 entries. Returns n_vocab on success, 0 if tensor absent or wrong type.
-    LLAMA_API int64_t llama_model_eagle3_get_d2t(
-            const struct llama_model * model,
-                             int32_t * buf,
-                             int64_t   buf_size);
-
-    // EAGLE3 weight inheritance: compact-vocab drafts ship no token embeddings and borrow the
-    // target's. Returns the model's tok_embd tensor (may be null); the setter shares a tensor
-    // pointer into the draft model before its context/graph is built.
-    LLAMA_API struct ggml_tensor * llama_model_eagle3_get_tok_embd(const struct llama_model * model);
-    LLAMA_API void                 llama_model_eagle3_set_tok_embd(struct llama_model * model, struct ggml_tensor * tensor);
+    // NOTE: the fork's custom EAGLE3 C-API (llama_set_eagle3 / llama_get_eagle3_target_features /
+    // llama_set_eagle3_g_embeddings / llama_model_eagle3_*) was retired when mainline's in-graph
+    // EAGLE3 (#18039) was adopted (Path A forward-sync 2026-06-13). The mainline EAGLE3 API lives in
+    // llama-ext.h (llama_model_target_layer_ids[_n], llama_{set,get}_embeddings_layer_inp,
+    // llama_{set,get}_embeddings_nextn[_ith]).
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

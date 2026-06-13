@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <vector>
 
 #define LLAMA_MAX_SEQ 256
 
@@ -44,6 +45,8 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
     bool eagle3_extract_enabled = false;
+
+    std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer (EAGLE3 #18039)
 
     enum llama_context_type ctx_type    = LLAMA_CONTEXT_TYPE_DEFAULT;
     enum llama_mtp_op_type  mtp_op_type = MTP_OP_NONE;

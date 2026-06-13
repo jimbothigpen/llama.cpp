@@ -610,11 +610,12 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
-    // EAGLE3 speculative decode
-    struct ggml_tensor * fc               = nullptr; // encoder fc projection [hidden, 3*hidden]
-    struct ggml_tensor * eagle3_fc_norm   = nullptr; // optional packed [n_embd, n_aux] per-aux RMSNorm before fc (fc_norm=true drafts)
-    struct ggml_tensor * target_tok_embd  = nullptr; // target model's token embeddings (if different)
-    struct ggml_tensor * d2t              = nullptr; // draft-to-target vocab mapping [vocab]
+    // eagle3 (mainline #18039)
+    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+
+    // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
+    std::vector<int32_t> target_layer_ids;
 
     // DFlash speculative decode
     struct ggml_tensor * dflash_fc          = nullptr; // target feature projection [n_target_features, n_embd]

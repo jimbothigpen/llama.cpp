@@ -287,6 +287,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35moe(params);
         case LLM_ARCH_MISTRAL3:
             return new llama_model_mistral3(params);
+        case LLM_ARCH_EAGLE3:
+            return new llama_model_eagle3(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -295,8 +297,6 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_step35(params);
         case LLM_ARCH_ZAYA:
             return new llama_model_zaya(params);
-        case LLM_ARCH_EAGLE3:
-            return new llama_model_eagle3(params);
         case LLM_ARCH_DFLASH_DRAFT:
             return new llama_model_dflash_draft(params);
         default:
@@ -2322,7 +2322,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // TODO: move reranking logic here and generalize
     llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
 
-    llm->res->set_outputs();
+    llm->res->set_outputs(params);
 
     return llm->res->get_gf();
 }
@@ -2497,11 +2497,11 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_EAGLE3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
-        case LLM_ARCH_EAGLE3:
         case LLM_ARCH_DFLASH_DRAFT:
             return LLAMA_ROPE_TYPE_NORM;
 
@@ -2694,8 +2694,9 @@ uint64_t llama_model_n_params(const llama_model * model) {
 
 bool llama_model_has_encoder(const llama_model * model) {
     switch (model->arch) {
-        case LLM_ARCH_T5:        return true;
-        case LLM_ARCH_T5ENCODER: return true;
+        case LLM_ARCH_T5:
+        case LLM_ARCH_T5ENCODER:
+        case LLM_ARCH_EAGLE3:    return true;
         default:                 return false;
     }
 }
@@ -2788,122 +2789,16 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
 }
 
 //
-// EAGLE3 public API
+// EAGLE3 public API (mainline #18039)
 //
 
-int32_t llama_model_eagle3_n_aux_layers(const struct llama_model * model) {
-    if (!model || model->arch != LLM_ARCH_EAGLE3) {
-        return 0;
-    }
-    int32_t n = 0;
-    for (int i = 0; i < 3; i++) {
-        if (model->hparams.eagle3_extract_layers[i] >= 0) n++;
-    }
-    return (n > 0) ? n : 3;
+const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+    const auto & v = model->target_layer_ids;
+    return v.empty() ? nullptr : v.data();
 }
 
-int64_t llama_model_eagle3_get_fc_weight(const struct llama_model * model, float * buf, int64_t buf_size) {
-    if (!model || model->arch != LLM_ARCH_EAGLE3 || !model->fc) {
-        return 0;
-    }
-    const int64_t fc_input_size = model->fc->ne[0]; // rows of fc.weight
-    const int64_t n_elements    = ggml_nelements(model->fc);
-    if (buf_size < n_elements) {
-        return 0;
-    }
-    const ggml_type fc_type = model->fc->type;
-    const int64_t nbytes = ggml_nbytes(model->fc);
-    if (fc_type == GGML_TYPE_F32) {
-        ggml_backend_tensor_get(model->fc, buf, 0, n_elements * sizeof(float));
-    } else if (fc_type == GGML_TYPE_F16) {
-        std::vector<ggml_fp16_t> tmp(n_elements);
-        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
-        ggml_fp16_to_fp32_row(tmp.data(), buf, n_elements);
-    } else if (fc_type == GGML_TYPE_BF16) {
-        std::vector<ggml_bf16_t> tmp(n_elements);
-        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
-        ggml_bf16_to_fp32_row(tmp.data(), buf, n_elements);
-    } else {
-        // Quantized type (Q4_K, Q8_0, IQ3_S, …) — dequantize via ggml type traits.
-        // Quantized eagle3 drafts reach this path; the previous hard-return-0 caused
-        // fc_in==0 → assert failure in speculative.cpp:493.
-        const struct ggml_type_traits * traits = ggml_get_type_traits(fc_type);
-        if (!traits || !traits->to_float) {
-            return 0; // truly unsupported type
-        }
-        std::vector<uint8_t> tmp(nbytes);
-        ggml_backend_tensor_get(model->fc, tmp.data(), 0, nbytes);
-        traits->to_float(tmp.data(), buf, n_elements);
-    }
-    return fc_input_size;
-}
-
-int32_t llama_model_eagle3_get_fc_norm(const struct llama_model * model, float * buf, int64_t buf_size) {
-    if (!model || model->arch != LLM_ARCH_EAGLE3) {
-        return 0;
-    }
-    // fc_norm is ONE packed tensor [n_embd, n_aux] = n_aux contiguous rows of n_embd. Copy it
-    // into buf as contiguous F32 rows and return n_aux (0 = no fc_norm → bare fc matmul).
-    const ggml_tensor * t = model->eagle3_fc_norm;
-    if (!t) {
-        return 0;
-    }
-    const int64_t ne     = ggml_nelements(t); // n_embd * n_aux
-    const int64_t n_aux  = t->ne[1];
-    if (buf_size < ne) {
-        return 0; // caller buffer too small
-    }
-    const ggml_type ty = t->type;
-    const int64_t tybytes = ggml_nbytes(t);
-    if (ty == GGML_TYPE_F32) {
-        ggml_backend_tensor_get(t, buf, 0, ne * sizeof(float));
-    } else if (ty == GGML_TYPE_F16) {
-        std::vector<ggml_fp16_t> tmp(ne);
-        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
-        ggml_fp16_to_fp32_row(tmp.data(), buf, ne);
-    } else if (ty == GGML_TYPE_BF16) {
-        std::vector<ggml_bf16_t> tmp(ne);
-        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
-        ggml_bf16_to_fp32_row(tmp.data(), buf, ne);
-    } else {
-        const struct ggml_type_traits * traits = ggml_get_type_traits(ty);
-        if (!traits || !traits->to_float) {
-            return 0; // unsupported fc_norm dtype
-        }
-        std::vector<uint8_t> tmp(tybytes);
-        ggml_backend_tensor_get(t, tmp.data(), 0, tybytes);
-        traits->to_float(tmp.data(), buf, ne);
-    }
-    return (int32_t) n_aux;
-}
-
-float llama_model_eagle3_get_norm_eps(const struct llama_model * model) {
-    if (!model || model->arch != LLM_ARCH_EAGLE3) {
-        return 1e-6f;
-    }
-    return model->hparams.f_norm_rms_eps;
-}
-
-int64_t llama_model_eagle3_get_d2t(const struct llama_model * model, int32_t * buf, int64_t buf_size) {
-    if (!model || model->arch != LLM_ARCH_EAGLE3 || !model->d2t) {
-        return 0;
-    }
-    const int64_t n = ggml_nelements(model->d2t);
-    if (buf_size < n || model->d2t->type != GGML_TYPE_I32) {
-        return 0;
-    }
-    ggml_backend_tensor_get(model->d2t, buf, 0, n * sizeof(int32_t));
-    return n;
-}
-
-struct ggml_tensor * llama_model_eagle3_get_tok_embd(const struct llama_model * model) {
-    return model ? model->tok_embd : nullptr;
-}
-
-void llama_model_eagle3_set_tok_embd(struct llama_model * model, struct ggml_tensor * tensor) {
-    if (model) {
-        model->tok_embd = tensor;
-    }
+uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
+    return (uint32_t) model->target_layer_ids.size();
 }
 
 //
