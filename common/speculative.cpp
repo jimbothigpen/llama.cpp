@@ -493,25 +493,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     std::vector<float> features_buf;
     std::vector<float> g_embd_buf;
 
-    llama_batch batch;
-
-    std::vector<common_sampler_ptr> smpls;
-
-    // FC weight dequantized to host F32 for CPU matmul
-    std::vector<float> fc_weight_f32;
-    int64_t n_embd;        // EAGLE3 hidden dim
-    int64_t fc_input_size; // n_aux_layers × n_embd_tgt
-
-    // Optional per-aux fc_norm (fc_norm=true drafts): RMSNorm each [n_embd] feature segment
-    // before the fc projection. Empty / n_fc_norm==0 → no fc_norm (bare fc matmul).
-    std::vector<float> fc_norm_f32; // n_fc_norm contiguous rows of n_embd
-    int32_t n_fc_norm = 0;
-    float   fc_norm_eps = 1e-6f;
-
-    // draft-to-target vocab remap; empty when vocabs are identical
-    std::vector<llama_token> d2t_map;
-
-    common_speculative_impl_draft_eagle3(const common_params_speculative & sparams, uint32_t n_seq)
+    common_speculative_impl_draft_eagle3(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
         , params(params.draft)
     {
