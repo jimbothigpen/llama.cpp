@@ -54,8 +54,8 @@ class LlamaEagle3Model(TextModel):
         super().set_gguf_parameters()
         eagle_config = self.hparams.get("eagle_config", {})
         extract_layers = eagle_config.get("eagle_aux_hidden_state_layer_ids", [1, 18, 35])
-        self.gguf_writer.add_array(gguf.Keys.GENERAL.TARGET_LAYERS.format(arch="eagle3"), extract_layers)
-        self.gguf_writer.add_uint32(gguf.Keys.GENERAL.TARGET_HIDDEN_SIZE.format(arch="eagle3"), self.hparams["hidden_size"])
+        self.gguf_writer.add_array("eagle3.target_layers", extract_layers)
+        self.gguf_writer.add_uint32("eagle3.target_hidden_size", self.hparams["hidden_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip t2d (target-to-draft, not needed for inference)
@@ -68,7 +68,7 @@ class LlamaEagle3Model(TextModel):
         if name == "d2t":
             if not hasattr(self, "_eagle3_int_tensors"):
                 self._eagle3_int_tensors = {}
-            self._eagle3_int_tensors["d2t.weight"] = data_torch
+            self._eagle3_int_tensors["d2t"] = data_torch
             return
 
         # fc encoder projection
@@ -118,7 +118,7 @@ class LlamaEagle3Model(TextModel):
 
             # hidden_norm for g_embeddings normalization
             if midname == "hidden_norm.weight":
-                yield ("blk.0.hidden_norm.weight", data_torch)
+                yield ("blk.0.attn_norm_2.weight", data_torch)
                 return
 
             # Pre-attention norm (input_layernorm)
