@@ -1,6 +1,6 @@
 # TODO 204 — Block-level GET_ROWS decode inverse for InnerQ×TCQ — Design & Findings
 
-**Date:** 2026-06-12 · **Worker:** opus (204-innerq-blockdecode-2026-06-12) · **Branch:** `feature/204-innerq-blockdecode-2026-06-12` (base `318a54cf0`)
+**Date:** 2026-06-12 · **Authored-by:** Claude Opus 4.8 · **Branch:** `feature/204-innerq-blockdecode-2026-06-12` (base `318a54cf0`)
 
 ## TL;DR — disposition: ESCALATE (block-decode op is redundant, not implemented)
 
@@ -9,7 +9,7 @@ Q-side `scale_inv` compensation that the fork already ships (and which **236-L2*
 merged into `main` earlier today as `a87187c4d` / `f27e8d9cb`, made robust). It would
 add per-decode compute and a new graph op for **zero** correctness or accuracy gain.
 Moreover, the non-FA TCQ-K path the op was meant to repair **is not runtime-reachable
-today**, so there is no live mis-decode to fix. Recommend the orchestrator either
+today**, so there is no live mis-decode to fix. Recommend the project owner either
 **close 204 as superseded by 236-L2**, or **re-scope** it (see §5) if the goal is to
 *enable* a non-FA TCQ path for FA-less backends — that work needs K→F32 materialization,
 not a block-decode, and would still reuse the existing Q-side correction.
@@ -98,12 +98,12 @@ scale_inv). Result: `turboq3_tcq×turboq3_tcq, TURBO_INNERQ=256: 17.34 → 6.90`
 makes the **Q-side correction (approach A) robust** — i.e. it closes the InnerQ×TCQ
 correctness gap that §-FLAG-A was a facet of, for the path that actually runs (FA).
 
-## §5 Recommendation (orchestrator decision)
+## §5 Recommendation (project decision)
 
 - **Option 1 — CLOSE 204 as superseded by 236-L2 (recommended).** The dot-product
   correction is mathematically complete via Q-side `scale_inv`; the block-decode adds cost
   for no gain. Keep this branch's findings doc + proof as the record.
-- **Option 2 — RE-SCOPE to "enable non-FA TCQ K".** If the orchestrator wants TCQ KV to
+- **Option 2 — RE-SCOPE to "enable non-FA TCQ K".** If the project wants TCQ KV to
   work on FA-less backends (old CUDA arch, certain Vulkan), the missing piece is a
   **K→F32 get_rows materialization** in the non-FA graph (TCQ get_rows *is* already
   `supports_op`-true, `ggml-cuda.cu:5411`), after which the **existing** Q-side correction

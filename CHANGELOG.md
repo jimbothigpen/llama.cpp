@@ -438,7 +438,7 @@ adaptation like IQ4_KT), random-hash codebook (not learned VQ), greedy per-group
 ### Measurements — IQ3_KT/IQ3_K baseline-matrix Qwen3.5-9B (CLOSED) (2026-05-31)
 
 Vulkan gfx1103 20-chunk baseline confirms both IQ3 types drifted identically (−6.8% binary-refresh drift,
-consistent with `/opt/llama-yggdrasil-vulkan` rebase from 2026-05-25 mainline sync):
+consistent with the Vulkan build rebase from 2026-05-25 mainline sync):
 - **IQ3_KT: 8.4299 ±0.107 PPL** (was anchor 9.0493; ratio vs IQ3_K = +23.3%)
 - **IQ3_K: 6.8348 ±0.084 PPL** (was anchor 7.3243; same −6.8% drift)
 
