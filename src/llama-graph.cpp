@@ -2488,7 +2488,8 @@ ggml_tensor * llm_graph_context::build_attn(
         // TriAttention in-graph K/V capture (Phase A harness)
         // Scatter k_cur/v_cur into CPU-backed capture buffers using the same index tensors.
         // Bypasses broken ggml_backend_tensor_get() on ROCm past ~272 MiB sub-alloc boundaries.
-        if (g_tria_capture && il < (int) g_tria_capture_n) {
+        if (g_tria_capture && il < (int) g_tria_capture_n &&
+            (g_tria_capture_hparams == nullptr || g_tria_capture_hparams == &hparams)) {
             if (g_tria_capture[il].k_buffer) {
                 // reshape k_cur 3D [ne0, ne1, n_tok] → 2D [ne0*ne1, n_tok] to match KV cache layout
                 ggml_tensor * k_2d = ggml_view_2d(ctx0, k_cur,
@@ -2804,7 +2805,8 @@ ggml_tensor * llm_graph_context::build_attn(
     // write the KV cache. For SWA layers we use the SWA idxs; the per-layer capture
     // buffer was duped from the matching (base or swa) sub-cache tensor, and swa_full
     // is forced under TriAttention so cell==position alignment holds for SWA layers.
-    if (g_tria_capture && il < (int) g_tria_capture_n) {
+    if (g_tria_capture && il < (int) g_tria_capture_n &&
+        (g_tria_capture_hparams == nullptr || g_tria_capture_hparams == &hparams)) {
         if (k_cur && g_tria_capture[il].k_buffer) {
             const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
             ggml_tensor * k_2d = ggml_view_2d(ctx0, k_cur,

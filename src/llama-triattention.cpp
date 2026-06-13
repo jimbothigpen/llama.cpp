@@ -21,6 +21,11 @@
 tria_kv_capture * g_tria_capture   = nullptr;
 size_t            g_tria_capture_n = 0;
 
+/* hparams of the model that owns g_tria_capture (the TriAttention target). Set
+ * by the first context to allocate capture buffers; consulted to keep a draft
+ * context from scattering into the target's buffers. See llama-triattention.h. */
+const struct llama_hparams * g_tria_capture_hparams = nullptr;
+
 /* ------------------------------------------------------------------ */
 /* Public C++ API                                                      */
 /* ------------------------------------------------------------------ */

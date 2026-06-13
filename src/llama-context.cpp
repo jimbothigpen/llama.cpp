@@ -411,7 +411,14 @@ llama_context::llama_context(
         memory.reset(model.create_memory(params_mem, cparams));
 
         // TriAttention capture buffer init (Phase A; Part 2: hybrid SWA support)
-        if (memory && g_tria_rt) {
+        // Scope to the target model: g_tria_rt is a process global, so a draft
+        // context created for speculative decoding would otherwise re-alloc and
+        // clobber g_tria_capture with its own (differently-shaped) buffers. The
+        // first model to allocate wins (it is the TriAttention target — its
+        // common_init_from_params set g_tria_rt before constructing its context);
+        // a later context whose model differs is skipped. (nullptr == unscoped.)
+        if (memory && g_tria_rt &&
+            (g_tria_capture_hparams == nullptr || g_tria_capture_hparams == &model.hparams)) {
             llama_kv_cache * kv     = dynamic_cast<llama_kv_cache *>(memory.get());
             llama_kv_cache * kv_swa = nullptr;  // SWA sub-cache for hybrid models
             if (!kv) {
@@ -433,8 +440,9 @@ llama_context::llama_context(
                     kv, kv_swa, backend_cpu, (int) model.hparams.n_layer(),
                     tria_capture, &tria_capture_ctx, &tria_capture_buf);
                 if (!tria_capture.empty()) {
-                    g_tria_capture   = tria_capture.data();
-                    g_tria_capture_n = tria_capture.size();
+                    g_tria_capture       = tria_capture.data();
+                    g_tria_capture_n     = tria_capture.size();
+                    g_tria_capture_hparams = &model.hparams;  // claim ownership for this model
                 }
             }
         }
@@ -548,8 +556,9 @@ llama_context::~llama_context() {
 
     // TriAttention capture buffer cleanup
     if (g_tria_capture == tria_capture.data()) {
-        g_tria_capture   = nullptr;
-        g_tria_capture_n = 0;
+        g_tria_capture       = nullptr;
+        g_tria_capture_n     = 0;
+        g_tria_capture_hparams = nullptr;  // release ownership
     }
     llama_tria_capture_free(tria_capture_ctx, tria_capture_buf);
 }
