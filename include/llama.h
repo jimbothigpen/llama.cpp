@@ -400,6 +400,11 @@ extern "C" {
 
         uint32_t oscar_residual_window; // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
 
+        // Layer-wise adaptive KV cache precision (Phase A5)
+        enum ggml_type type_k_low; // data type for K cache in low-precision layers (GGML_TYPE_COUNT = same as type_k)
+        enum ggml_type type_v_low; // data type for V cache in low-precision layers (GGML_TYPE_COUNT = same as type_v)
+        int32_t n_layers_high_precision; // number of top layers to keep at high precision (0 = all layers use same precision)
+
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
         // currently works only with CPU execution

@@ -426,6 +426,9 @@ llama_context::llama_context(
             /*.swa_full   =*/ swa_full_eff,
             /*.ctx_type   =*/ params.ctx_type,
             /*.oscar_residual_window =*/ params.oscar_residual_window,
+            /*.n_layers_high_precision =*/ params.n_layers_high_precision,
+            /*.type_k_low =*/ params.type_k_low,
+            /*.type_v_low =*/ params.type_v_low,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
 
@@ -3797,6 +3800,9 @@ llama_context_params llama_context_default_params() {
         /*.type_k_swa                  =*/ GGML_TYPE_COUNT,
         /*.type_v_swa                  =*/ GGML_TYPE_COUNT,
         /*.oscar_residual_window       =*/ 0,
+        /*.type_k_low                  =*/ GGML_TYPE_COUNT, // GGML_TYPE_COUNT = disabled (same as type_k)
+        /*.type_v_low                  =*/ GGML_TYPE_COUNT, // GGML_TYPE_COUNT = disabled (same as type_v)
+        /*.n_layers_high_precision     =*/ 0,               // 0 = all layers use same precision
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

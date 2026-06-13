@@ -1750,6 +1750,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_k_swa = params.cache_type_k_swa;
     cparams.type_v_swa = params.cache_type_v_swa;
     cparams.oscar_residual_window = params.cache_oscar_residual_window;
+    cparams.type_k_low              = params.cache_type_k_low;
+    cparams.type_v_low              = params.cache_type_v_low;
+    cparams.n_layers_high_precision = params.cache_n_layers_high_precision;
 
     return cparams;
 }

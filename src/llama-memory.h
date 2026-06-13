@@ -31,6 +31,11 @@ struct llama_memory_params {
     // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
     uint32_t oscar_residual_window = 0;
 
+    // Layer-wise adaptive KV cache precision (Phase A5)
+    int32_t   n_layers_high_precision = 0;          // number of top layers to keep at high precision (0 = disabled)
+    ggml_type type_k_low = GGML_TYPE_COUNT;         // low precision type for bottom layers (COUNT = disabled)
+    ggml_type type_v_low = GGML_TYPE_COUNT;         // low precision type for bottom layers (COUNT = disabled)
+
     llama_memory_t mem_other;
 };
 

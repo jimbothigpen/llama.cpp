@@ -619,6 +619,11 @@ struct common_params {
     ggml_type cache_type_v_swa = GGML_TYPE_COUNT; // KV cache data type for V in SWA layers (COUNT = use cache_type_v)
     uint32_t  cache_oscar_residual_window = 512; // OScaR residual window size (0 = disabled)
 
+    // Layer-wise adaptive KV cache precision (Phase A5)
+    int32_t   cache_n_layers_high_precision = 0;           // number of top layers to keep at high precision (0 = disabled)
+    ggml_type cache_type_k_low = GGML_TYPE_COUNT;          // low precision type for bottom K layers (COUNT = disabled)
+    ggml_type cache_type_v_low = GGML_TYPE_COUNT;          // low precision type for bottom V layers (COUNT = disabled)
+
     // TriAttention KV scoring (Phase A)
     std::string triattention_stats_path  = "";   // path to .tria calibration file; empty = disabled
     int         triattention_budget_pct  = 0;    // % of n_ctx to retain; 0 = disabled

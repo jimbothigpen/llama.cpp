@@ -174,7 +174,10 @@ llama_kv_cache::llama_kv_cache(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share
+    const  layer_share_cb & share,
+                int32_t   n_layers_high_precision,
+                ggml_type type_k_low,
+                ggml_type type_v_low
 #ifdef LLAMA_KV_COMPACTION
     ,                bool   enable_compacted_prefix
 #endif
@@ -182,6 +185,9 @@ llama_kv_cache::llama_kv_cache(
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     oscar_residual_window(oscar_res_window),
+    n_layers_high_precision(n_layers_high_precision),
+    type_k_low(type_k_low),
+    type_v_low(type_v_low),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
     v_cells(*v_cells_impl) {
@@ -386,6 +392,20 @@ llama_kv_cache::llama_kv_cache(
             } else if (adaptive_mode == 7 && v_is_turbo && n_layer >= 8) {
                 const bool is_boundary = (il < 2 || il >= n_layer - 2);
                 layer_type_v = is_boundary ? GGML_TYPE_Q8_0 : GGML_TYPE_TURBOQ2_0;
+            }
+        }
+
+        // Layer-wise adaptive KV cache precision (Phase A5 / CLI-driven)
+        // Bottom (n_layer - n_layers_high_precision) layers use low precision types.
+        // Composable with TURBO_LAYER_ADAPTIVE — this override applies on top of it.
+        if (n_layers_high_precision > 0) {
+            const uint32_t n_layer_hp = hparams.n_layer();
+            const bool is_low_layer = (il < (n_layer_hp - (uint32_t)n_layers_high_precision));
+            if (is_low_layer && type_k_low != GGML_TYPE_COUNT) {
+                layer_type_k = type_k_low;
+            }
+            if (is_low_layer && type_v_low != GGML_TYPE_COUNT) {
+                layer_type_v = type_v_low;
             }
         }
 

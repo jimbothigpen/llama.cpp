@@ -125,7 +125,10 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share
+        const  layer_share_cb & share,
+                    int32_t   n_layers_high_precision = 0,
+                    ggml_type type_k_low = GGML_TYPE_COUNT,
+                    ggml_type type_v_low = GGML_TYPE_COUNT
 #ifdef LLAMA_KV_COMPACTION
         ,                bool   enable_compacted_prefix = true
 #endif
@@ -371,6 +374,11 @@ private:
 
     // OScaR residual window: keep this many most-recent K tokens in F16 (0 = disabled)
     const uint32_t oscar_residual_window = 0;
+
+    // Layer-wise adaptive KV cache precision (Phase A5)
+    int32_t   n_layers_high_precision = 0;    // number of top layers to keep at high precision (0 = disabled)
+    ggml_type type_k_low = GGML_TYPE_COUNT;   // low precision type for bottom layers (COUNT = disabled)
+    ggml_type type_v_low = GGML_TYPE_COUNT;   // low precision type for bottom layers (COUNT = disabled)
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;

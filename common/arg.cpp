@@ -2144,6 +2144,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_OSCAR_RESIDUAL_WINDOW"));
     add_opt(common_arg(
+        {"--cache-type-k-low"}, "TYPE",
+        string_format(
+            "KV cache data type for K in low-precision layers (Phase A5: layer-wise adaptive KV precision)\n"
+            "allowed values: %s\n"
+            "(default: disabled, use same type as --cache-type-k)",
+            get_all_kv_cache_types().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.cache_type_k_low = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_LOW"));
+    add_opt(common_arg(
+        {"--cache-type-v-low"}, "TYPE",
+        string_format(
+            "KV cache data type for V in low-precision layers (Phase A5: layer-wise adaptive KV precision)\n"
+            "allowed values: %s\n"
+            "(default: disabled, use same type as --cache-type-v)",
+            get_all_kv_cache_types().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.cache_type_v_low = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_LOW"));
+    add_opt(common_arg(
+        {"--n-layers-high-precision"}, "N",
+        "number of top layers to keep at high KV precision for layer-wise adaptive KV cache (Phase A5)\n"
+        "(default: 0, disabled; all layers use the same precision set by -ctk/-ctv)",
+        [](common_params & params, int value) {
+            params.cache_n_layers_high_precision = value;
+        }
+    ).set_env("LLAMA_ARG_N_LAYERS_HIGH_PRECISION"));
+    add_opt(common_arg(
         {"--triattention"}, "PATH",
         "path to TriAttention calibration stats file (.tria); enables KV scoring (default: disabled)",
         [](common_params & params, const std::string & value) {

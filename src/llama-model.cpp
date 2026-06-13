@@ -2307,7 +2307,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 nullptr, // mem_other
                                 filter,
                                 reuse,
-                                nullptr); // share
+                                nullptr, // share
+                                params.n_layers_high_precision,
+                                params.type_k_low,
+                                params.type_v_low);
                     }
                 }
             }
