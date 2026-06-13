@@ -286,7 +286,6 @@ def main() -> None:
                                      target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
-                                     target_model_dir=args.target_model_dir,
                                      )
 
         if args.vocab_only:
