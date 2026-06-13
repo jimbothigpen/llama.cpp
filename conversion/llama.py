@@ -68,10 +68,18 @@ class LlamaModel(TextModel):
                 target_config = {**target_config, **target_config["text_config"]}
             self.target_vocab_size = target_config["vocab_size"]
 
-            # target_layers: derived from target model layer count (low/mid/high)
-            target_num_layers = target_config["num_hidden_layers"]
-            target_layers = [2, target_num_layers // 2, target_num_layers - 3]
-            logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
+            # target_layers: use eagle_aux_hidden_state_layer_ids from draft eagle_config if present,
+            # else derive from target model layer count (low/mid/high).
+            # SpecForge models store the training layer IDs in eagle_config; use them when available.
+            eagle3_cfg = eagle3_raw_config.get("eagle_config", {})
+            eagle_layer_ids = eagle3_cfg.get("eagle_aux_hidden_state_layer_ids")
+            if eagle_layer_ids:
+                target_layers = eagle_layer_ids
+                logger.info(f"EAGLE-3: target_layers = {target_layers} (from eagle_config in draft)")
+            else:
+                target_num_layers = target_config["num_hidden_layers"]
+                target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+                logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
             self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config
