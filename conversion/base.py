@@ -122,8 +122,7 @@ class ModelBase:
                  sentence_transformers_dense_modules: bool = False,
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
-                 fp8_as_q8: bool = False,
-                 target_model_dir: Path | None = None):
+                 fp8_as_q8: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
