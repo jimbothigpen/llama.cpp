@@ -227,6 +227,16 @@ public:
     ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
     ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
 
+    // TorQuant affine tap (Props 3.4/3.5): per-(layer, channel) K/V means.
+    // mu_k/mu_v are subtracted from k_cur/v_cur before quantized cache write;
+    // mu_v_out (mu_v expanded across Q heads) is added back to the attention
+    // output once per token. Exact for standard softmax: the K shift is
+    // constant across cache positions (cancels in softmax), the V shift is
+    // restored because attention weights sum to 1.
+    ggml_tensor * build_input_affine_mu_k(ggml_context * ctx) const;
+    ggml_tensor * build_input_affine_mu_v(ggml_context * ctx) const;
+    ggml_tensor * build_input_affine_mu_v_out(ggml_context * ctx) const;
+
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
 
@@ -237,6 +247,10 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+
+    void set_input_affine_mu_k(ggml_tensor * dst) const;
+    void set_input_affine_mu_v(ggml_tensor * dst) const;
+    void set_input_affine_mu_v_out(ggml_tensor * dst) const;
 
 private:
     const llama_model & model;
@@ -279,6 +293,20 @@ private:
 
     // pre-computed hadamard martrices
     std::unordered_map<int64_t, std::vector<float>> attn_rot_hadamard;
+
+    // env: LLAMA_AFFINE_TAP=<table.afft> (+ LLAMA_AFFINE_TAP_K / LLAMA_AFFINE_TAP_V to gate halves)
+    // flattened [n_layer_model, max_dim] row-major, zero-padded; empty = tap off
+    bool affine_tap_k = false;
+    bool affine_tap_v = false;
+    int64_t affine_mu_k_dim     = 0;
+    int64_t affine_mu_v_dim     = 0;
+    int64_t affine_mu_v_out_dim = 0;
+    int64_t affine_n_layer      = 0;
+    std::vector<float> affine_mu_k_flat;
+    std::vector<float> affine_mu_v_flat;
+    std::vector<float> affine_mu_v_out_flat;
+
+    void affine_tap_load(const char * path);
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
@@ -434,6 +462,10 @@ public:
     ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
     ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
 
+    ggml_tensor * build_input_affine_mu_k(ggml_context * ctx) const;
+    ggml_tensor * build_input_affine_mu_v(ggml_context * ctx) const;
+    ggml_tensor * build_input_affine_mu_v_out(ggml_context * ctx) const;
+
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
@@ -443,6 +475,10 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+
+    void set_input_affine_mu_k(ggml_tensor * dst) const;
+    void set_input_affine_mu_v(ggml_tensor * dst) const;
+    void set_input_affine_mu_v_out(ggml_tensor * dst) const;
 
     ggml_tensor * get_turbo_innerq_scale_inv() const;
 
