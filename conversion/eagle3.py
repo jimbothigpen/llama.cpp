@@ -54,8 +54,8 @@ class LlamaEagle3Model(TextModel):
         super().set_gguf_parameters()
         eagle_config = self.hparams.get("eagle_config", {})
         extract_layers = eagle_config.get("eagle_aux_hidden_state_layer_ids", [1, 18, 35])
-        self.gguf_writer.add_array(gguf.Keys.Eagle3.EXTRACT_LAYERS.format(arch="eagle3"), extract_layers)
-        self.gguf_writer.add_uint32(gguf.Keys.Eagle3.TARGET_HIDDEN_SIZE.format(arch="eagle3"), self.hparams["hidden_size"])
+        self.gguf_writer.add_array(gguf.Keys.GENERAL.TARGET_LAYERS.format(arch="eagle3"), extract_layers)
+        self.gguf_writer.add_uint32(gguf.Keys.GENERAL.TARGET_HIDDEN_SIZE.format(arch="eagle3"), self.hparams["hidden_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip t2d (target-to-draft, not needed for inference)
