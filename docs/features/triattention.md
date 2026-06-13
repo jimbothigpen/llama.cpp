@@ -10,9 +10,9 @@
 >
 > **Not a zero-config feature.** You must generate a per-model `.tria` calibration file with
 > `llama-tria-gen` before enabling scoring. CPU scoring works for any architecture; GPU
-> scoring (HIP + Vulkan) is active for models with `head_dim ≤ 128` (Qwen3.x, Llama-3.1,
-> most GQA models). Gemma-4 (`head_dim 256/512`) scores on CPU — GPU extension for hd > 128
-> is a separate follow-on.
+> scoring (HIP + Vulkan) is active for models with **uniform** `head_dim ≤ 256` (Qwen3.x,
+> Qwen3.5/3.6, Llama-3.1, most GQA models). Gemma-4 (`head_dim` varies per layer: 256/512)
+> scores on CPU — GPU scoring requires uniform head_dim (see §6).
 
 ---
 
@@ -31,7 +31,7 @@
 | **Composes with** | KV quantization (`--cache-type-k`, `--cache-type-v`); speculative decode |
 | **Phase A capture** | `6cbc9e06c` (in-graph CPU capture sidesteps the ROCm sub-alloc zero-read bug) |
 | **Phase B evictor** | `6f93b4e5d` (score-sorted compaction; prefix-protect + window-protect) |
-| **Phase C GPU kernel** | HIP `51a64b43c`+`88f94232c`, Vulkan `0d13ac92b` (GQA-aware, hd ≤ 128) |
+| **Phase C GPU kernel** | HIP `51a64b43c`+`88f94232c`, Vulkan `0d13ac92b` (GQA-aware, hd ≤ 256 uniform supported) |
 | **SWA capture** | `086c8508f` (Gemma-4 / hybrid iswa layers now captured and scored) |
 | **Calibration tool** | `d6ecb3245`+`53eb84dd9`+`60ece65ca` (`llama-tria-gen`, tria-gen v1; v4 `.tria` format) |
 
@@ -62,7 +62,7 @@ llama-cli \
 ```
 
 For Gemma-4 (CPU scoring — drop `--cache-type-k q8_0` or keep it for other reasons; GPU
-scoring is a separate follow-on for hd > 128):
+scoring requires uniform head_dim and Gemma-4's hybrid hd remains CPU-only):
 
 ```bash
 llama-tria-gen -m Gemma4-27B.gguf -f corpus.txt -o gemma4-27b.tria
@@ -151,8 +151,9 @@ identical keep-sets (GPU == CPU parity gate PASS; prune count 251 136 identical)
 
 CPU-only scoring with SWA-layer capture (`086c8508f`) and per-layer `head_dim` support
 (`41151f8db`) lifts Gemma-4 retrieval from a ~30 % ceiling (SWA layers unscored) to 70 %
-at 25 % budget. GPU scoring for Gemma-4 (`head_dim 256/512`) requires a separate hd > 128
-kernel extension (tracked as a perf follow-on; not blocking).
+at 25 % budget. GPU scoring for Gemma-4 (`head_dim` varies: 256/512 across layers) remains CPU-only because
+GPU scoring requires uniform head_dim — not an hd > 128 constraint (hd ≤ 256 uniform is
+already GPU-eligible). A per-layer hd table for hybrid models is a separate follow-on.
 
 **Frame:** TriAttention retains retrieval quality at aggressive KV budgets. A 50 % budget
 on Qwen3-8B is effectively lossless for needle-retrieval tasks while halving KV memory.
@@ -167,7 +168,7 @@ on Qwen3-8B is effectively lossless for needle-retrieval tasks while halving KV 
 |---|---|
 | `--cache-type-k q8_0` | GPU kernel operates on Q8_0 K slices; without it scoring falls back to CPU |
 | `nh % nkv == 0` | GQA ratio must be an integer (holds for all standard GQA models) |
-| `head_dim ≤ 128, head_dim % 32 == 0` | Current GPU kernel constraint; hd=64/96/128 all eligible |
+| `head_dim ≤ 256, head_dim % 32 == 0` | GPU kernel constraint; hd=64/96/128/256 all eligible (uniform hd only — hybrid hd models fall back to CPU) |
 | Non-rotary dim = 0 | Models with a non-rotary (content) term fall back to CPU — GPU kernel implements the RoPE-direction term only |
 
 Gate log printed once at startup:
@@ -182,7 +183,7 @@ tria: gpu gate — is_q8_0=1 nh=32 nkv=8 hd=128 nonrot=0 -> eligible
 |---|---|---|
 | Qwen3-8B / 9B / 35B | ✅ HIP + Vulkan | `hd=128`, GQA 32/8; GPU == CPU parity confirmed |
 | Llama-3.1 8B / 70B | ✅ HIP + Vulkan | `hd=128`, GQA |
-| Gemma-4 27B / 82B | CPU only | `hd=256/512` (full-attn), `hd=64` (SWA) — SWA layers scored on CPU; full-attn layers scored on CPU. GPU hd>128 extension is a separate follow-on |
+| Gemma-4 27B / 82B | CPU only | `hd=256/512` (full-attn), `hd=64` (SWA) — hybrid hd across layers forces CPU-only scoring (GPU kernel requires uniform head_dim; see §6) |
 | Hybrid SSM + attention (ZAYA1-8B) | ✅ CPU (attn layers only) | SSM layers have no KV; attention layers scored normally |
 | MLA (DeepSeek) | Not supported | MLA lacks a standalone `Qcur` tensor; `tria-gen` cannot hook it |
 
