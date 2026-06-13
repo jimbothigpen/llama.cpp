@@ -163,6 +163,15 @@ llama_context::llama_context(
         }
 
         cparams.ctx_other = params.ctx_other;
+
+        // Proportional RoPE fallback: the assistant's full-attention Q must use the same
+        // rope_freq_base/scale as the K vectors already stored in the target's shared KV cache.
+        // Override here so any rope_theta difference between the two GGUF files cannot cause a
+        // QK-space mismatch and depress spec-decode accept%.  SWA layers are unaffected: their
+        // freq_base is read from hparams.rope_freq_base_train_swa, not cparams.rope_freq_base.
+        const auto & cparams_tgt = params.ctx_other->get_cparams();
+        cparams.rope_freq_base  = cparams_tgt.rope_freq_base;
+        cparams.rope_freq_scale = cparams_tgt.rope_freq_scale;
     }
 
     // Initialize backend samplers here so they are part of the sampling graph
