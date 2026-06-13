@@ -1,6 +1,6 @@
 set(TARGET llama-ui)
 
-set(LLAMA_UI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
+set(LLAMA_UI_HF_BUCKET "ggml-org/llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
 
 # Backward compat: forward old var to new one
 if(DEFINED LLAMA_BUILD_WEBUI)
@@ -77,6 +77,7 @@ add_custom_target(llama-ui-assets ALL
         "-DUI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
         "-DUI_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         "-DLLAMA_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DLLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
         "-DHF_BUCKET=${LLAMA_UI_HF_BUCKET}"
         "-DHF_VERSION=${HF_UI_VERSION}"
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"

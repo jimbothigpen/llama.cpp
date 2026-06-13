@@ -154,6 +154,9 @@ class Keys:
         HIDDEN_ACT                        = "{arch}.hidden_activation"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
+        TARGET_LAYERS                     = "{arch}.target_layers"
+        TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
+        NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
 
         # Multi-Token Prediction (MTP) drafter / "assistant" models that consume
         # the target backbone's last-layer hidden states and KV cache directly.
@@ -524,6 +527,7 @@ class MODEL_ARCH(IntEnum):
     RND1             = auto()
     PANGU_EMBED      = auto()
     MISTRAL3         = auto()
+    EAGLE3           = auto()
     MISTRAL4         = auto()
     PADDLEOCR        = auto()
     MIMO2            = auto()
@@ -533,7 +537,6 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
     ZAYA             = auto()
-    EAGLE3           = auto()
     DFLASH_DRAFT     = auto()
     MELLUM           = auto()
 
@@ -942,14 +945,17 @@ class MODEL_TENSOR(IntEnum):
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
     # nextn/mtp
-    NEXTN_PROJ_PRE       = auto()
-    NEXTN_PROJ_POST      = auto()
-    NEXTN_EH_PROJ        = auto()
-    NEXTN_EMBED_TOKENS   = auto()
-    NEXTN_ENORM          = auto()
-    NEXTN_HNORM          = auto()
+    NEXTN_PROJ_PRE         = auto()
+    NEXTN_PROJ_POST        = auto()
+    NEXTN_EH_PROJ          = auto()
+    NEXTN_EMBED_TOKENS     = auto()
+    NEXTN_ENORM            = auto()
+    NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
+    # eagle3
+    FC                     = auto()  # feature fusion layer
+    D2T                    = auto()  # draft to target vocabulary mapping
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -1112,6 +1118,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.RND1:             "rnd1",
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
     MODEL_ARCH.MISTRAL3:         "mistral3",
+    MODEL_ARCH.EAGLE3:           "eagle3",
     MODEL_ARCH.MISTRAL4:         "mistral4",
     MODEL_ARCH.PADDLEOCR:        "paddleocr",
     MODEL_ARCH.MIMO2:            "mimo2",
@@ -1121,7 +1128,6 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.ZAYA:             "zaya",
-    MODEL_ARCH.EAGLE3:           "eagle3",
     MODEL_ARCH.DFLASH_DRAFT:     "dflash-draft",
     MODEL_ARCH.MELLUM:           "mellum",
 }
@@ -1147,8 +1153,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
-    MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embeddinggemma 2_Dense
-    MODEL_TENSOR.DENSE_3_OUT:                "dense_3", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
@@ -1565,11 +1571,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
-    # EAGLE3 speculative decode
-    MODEL_TENSOR.EAGLE3_FC:                 "fc",
-    MODEL_TENSOR.EAGLE3_FC_NORM:            "fc_norm",
-    MODEL_TENSOR.EAGLE3_HIDDEN_NORM:        "blk.{bid}.hidden_norm",
-    MODEL_TENSOR.EAGLE3_D2T:                "d2t",
+    # EAGLE3 speculative decode (mainline #18039)
+    MODEL_TENSOR.FC:                        "fc",
+    MODEL_TENSOR.D2T:                       "d2t",
     # DFlash speculative decode
     MODEL_TENSOR.DFLASH_FC:                 "dflash_fc",
     MODEL_TENSOR.DFLASH_HIDDEN_NORM:        "dflash_hidden_norm",
@@ -4115,6 +4119,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
     ],
+    MODEL_ARCH.EAGLE3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_NORM_2,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FC,
+        MODEL_TENSOR.D2T,
+    ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -4329,25 +4351,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
-    ],
-    MODEL_ARCH.EAGLE3: [
-        MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.OUTPUT,
-        MODEL_TENSOR.ROPE_FREQS,
-        MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_Q,
-        MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_V,
-        MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_GATE,
-        MODEL_TENSOR.FFN_DOWN,
-        MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.EAGLE3_FC,
-        MODEL_TENSOR.EAGLE3_FC_NORM,
-        MODEL_TENSOR.EAGLE3_HIDDEN_NORM,
-        MODEL_TENSOR.EAGLE3_D2T,
     ],
     MODEL_ARCH.DFLASH_DRAFT: [
         MODEL_TENSOR.TOKEN_EMBD,

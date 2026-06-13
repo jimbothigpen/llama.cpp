@@ -4,8 +4,9 @@
 #   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
 #   2. If BUILD_UI=ON: npm build
 #   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
+#      of dist.tar.gz (verified against dist.tar.gz.sha256)
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 
 set(UI_SOURCE_DIR     "" CACHE STRING "UI source directory (to run npm build)")
 set(UI_BINARY_DIR     "" CACHE STRING "UI binary directory (to store generated files)")
@@ -16,11 +17,21 @@ set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/O
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
-set(ASSETS
-    bundle.css
-    bundle.js
+# IMPORTANT: When adding PWA assets, sync:
+#   - tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PWA_MANIFEST)
+#
+# The HTTP server registers routes and public endpoints for every embedded asset.
+set(REQUIRED_ASSETS
     index.html
     loading.html
+    manifest.webmanifest
+    sw.js
+    build.json
+    # post-build.js flattens and dehashes these to fixed names in the dist dir
+    bundle.js
+    bundle.css
+    workbox.js
+    version.json
 )
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
@@ -29,10 +40,10 @@ set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
 
-function(assets_present out_var)
+function(assets_present dir out_var)
     set(present TRUE)
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${DIST_DIR}/${asset}")
+    foreach(asset ${REQUIRED_ASSETS})
+        if(NOT EXISTS "${dir}/${asset}")
             set(present FALSE)
             break()
         endif()
@@ -40,30 +51,10 @@ function(assets_present out_var)
     set(${out_var} ${present} PARENT_SCOPE)
 endfunction()
 
-function(copy_src_dist out_var)
-    set(${out_var} FALSE PARENT_SCOPE)
-
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${SRC_DIST_DIR}/${asset}")
-            return()
-        endif()
-    endforeach()
-
-    file(MAKE_DIRECTORY "${DIST_DIR}")
-    message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
-    foreach(asset ${ASSETS})
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${SRC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
-        )
-    endforeach()
-    set(${out_var} TRUE PARENT_SCOPE)
-endfunction()
-
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
-    assets_present(present)
+    assets_present("${DIST_DIR}" present)
     if(NOT present)
         return()
     endif()
@@ -159,7 +150,7 @@ function(npm_build out_var)
 
     message(STATUS "UI: running npm run build, output -> ${DIST_DIR}")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
                 ${NPM_EXECUTABLE} run build
         WORKING_DIRECTORY "${UI_SOURCE_DIR}"
         RESULT_VARIABLE rc
@@ -171,7 +162,7 @@ function(npm_build out_var)
         return()
     endif()
 
-    assets_present(present)
+    assets_present("${DIST_DIR}" present)
     if(NOT present)
         message(STATUS "UI: npm build finished but assets missing in ${DIST_DIR}")
         return()
@@ -203,7 +194,7 @@ function(hf_download version out_var out_resolved)
     set(${out_var}      FALSE PARENT_SCOPE)
     set(${out_resolved} ""    PARENT_SCOPE)
 
-    file(MAKE_DIRECTORY "${DIST_DIR}")
+    set(archive "${UI_BINARY_DIR}/dist.tar.gz")
 
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
@@ -212,68 +203,65 @@ function(hf_download version out_var out_resolved)
     list(APPEND candidates "latest")
 
     foreach(resolved ${candidates})
-        set(base "https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${resolved}")
+        set(base "https://huggingface.co/buckets/${HF_BUCKET}/resolve/${resolved}")
 
-        message(STATUS "UI: downloading from ${resolved}: ${base}")
+        message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
-        set(ok TRUE)
-        foreach(asset ${ASSETS})
-            file(DOWNLOAD "${base}/${asset}?download=true" "${DIST_DIR}/${asset}"
-                STATUS status TIMEOUT 60
-            )
-            list(GET status 0 rc)
-            if(NOT rc EQUAL 0)
-                list(GET status 1 errmsg)
-                message(STATUS "UI: download ${asset} from ${resolved} failed: ${errmsg}")
-                set(ok FALSE)
-                break()
-            endif()
-            message(STATUS "UI: downloaded ${asset}")
-        endforeach()
-
-        if(NOT ok)
+        file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
+            STATUS status TIMEOUT 300
+        )
+        list(GET status 0 rc)
+        if(NOT rc EQUAL 0)
+            list(GET status 1 errmsg)
+            message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
             continue()
         endif()
 
-        # Best-effort checksum verification
-        file(DOWNLOAD "${base}/checksums.txt?download=true" "${DIST_DIR}/checksums.txt"
-            STATUS cs_status TIMEOUT 30
+        file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
+            STATUS status TIMEOUT 30
         )
-        list(GET cs_status 0 cs_rc)
-        if(cs_rc EQUAL 0)
-            message(STATUS "UI: verifying checksums")
-            file(STRINGS "${DIST_DIR}/checksums.txt" cs_lines)
-            foreach(asset ${ASSETS})
-                file(SHA256 "${DIST_DIR}/${asset}" h)
-                string(TOLOWER "${h}" h)
-                string(REGEX MATCH "${h}[ \t]+${asset}" m "${cs_lines}")
-                if(NOT m)
-                    message(WARNING "UI: checksum verification failed for ${asset}")
-                    set(ok FALSE)
-                    break()
-                endif()
-            endforeach()
-            if(ok)
-                message(STATUS "UI: all checksums verified")
-            endif()
+        list(GET status 0 rc)
+        if(NOT rc EQUAL 0)
+            list(GET status 1 errmsg)
+            message(STATUS "UI: download dist.tar.gz.sha256 from ${resolved} failed: ${errmsg}")
+            continue()
         endif()
 
-        if(ok)
-            set(${out_var}      TRUE         PARENT_SCOPE)
-            set(${out_resolved} "${resolved}" PARENT_SCOPE)
-            return()
+        # Validate sha256 checkums
+        file(READ "${archive}.sha256" expected)
+        string(REGEX MATCH "^[0-9a-fA-F]+" expected "${expected}")
+        string(TOLOWER "${expected}" expected)
+        file(SHA256 "${archive}" actual)
+        if("${expected}" STREQUAL "" OR NOT "${actual}" STREQUAL "${expected}")
+            message(STATUS "UI: checksum mismatch for dist.tar.gz from ${resolved}")
+            continue()
         endif()
+
+        # Clear DIST_DIR to remove stale files first
+        file(REMOVE_RECURSE "${DIST_DIR}")
+
+        file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
+
+        assets_present("${DIST_DIR}" present)
+        if(NOT present)
+            message(STATUS "UI: archive from ${resolved} is missing required assets")
+            continue()
+        endif()
+
+        message(STATUS "UI: archive verified and extracted")
+        set(${out_var}      TRUE          PARENT_SCOPE)
+        set(${out_resolved} "${resolved}" PARENT_SCOPE)
+        return()
     endforeach()
 endfunction()
 
-function(emit_files)
-    assets_present(present)
+function(emit_files dist_dir)
+    assets_present("${dist_dir}" present)
 
     set(args "${UI_CPP}" "${UI_H}")
     if(present)
-        foreach(asset ${ASSETS})
-            list(APPEND args "${asset}" "${DIST_DIR}/${asset}")
-        endforeach()
+        # llama-ui-embed embeds every top-level file in dist_dir
+        list(APPEND args "${dist_dir}")
     endif()
 
     execute_process(
@@ -288,9 +276,10 @@ endfunction()
 # ---------------------------------------------------------------------------
 # 1. Priority 1: pre-built assets supplied in tools/ui/dist
 # ---------------------------------------------------------------------------
-copy_src_dist(SRC_OK)
+assets_present("${SRC_DIST_DIR}" SRC_OK)
 if(SRC_OK)
-    emit_files()
+    message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
+    emit_files("${SRC_DIST_DIR}")
     return()
 endif()
 
@@ -300,6 +289,8 @@ endif()
 set(provisioned FALSE)
 
 if(BUILD_UI)
+    # Resolve version from git build-info if not explicitly set
+    resolve_version(HF_VERSION)
     npm_build(NPM_OK)
     if(NPM_OK)
         set(provisioned TRUE)
@@ -321,7 +312,7 @@ if(NOT provisioned AND HF_ENABLED)
         endif()
     endif()
 
-    assets_present(have_assets)
+    assets_present("${DIST_DIR}" have_assets)
     if(stamp_ok AND have_assets)
         message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
         set(provisioned TRUE)
@@ -341,7 +332,7 @@ endif()
 # 4. Fallback: warn about stale or missing assets, then emit whatever we have
 # ---------------------------------------------------------------------------
 if(NOT provisioned)
-    assets_present(have_assets)
+    assets_present("${DIST_DIR}" have_assets)
     if(have_assets)
         message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR}")
     else()
@@ -353,4 +344,4 @@ if(NOT provisioned)
     endif()
 endif()
 
-emit_files()
+emit_files("${DIST_DIR}")
