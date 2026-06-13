@@ -262,29 +262,29 @@ first block in each row and amortised over all blocks in that row).
 [scales[8]: 8B — 1 codebook-shift bit + 7-bit signed-offset scale per sub-block]
 [qs[128]: 128B — 4-bit indices, 2 per byte]
 ```
-Row prefix: 4-byte `float` scale.  
+Row prefix: 4-byte `float` scale.
 4.25 bpw = 136 × 8 / 256.
 
 **`block_iq4_kss`** — 128 bytes (`ggml-common.h:561–564`):
 ```
 [qs[32]: 128B — 32 uint32_t words; 4-bit indices + Gray-code-packed scale bits]
 ```
-No separate scale bytes — scales are packed into the `qs` words.  
-Row prefix: 4-byte `float` scale.  
+No separate scale bytes — scales are packed into the `qs` words.
+Row prefix: 4-byte `float` scale.
 4.0 bpw = 128 × 8 / 256.
 
 **`block_iq3_ks`** — 102 bytes (`ggml-common.h:569–575`):
 ```
 [extra: u16, 2B] [scales[4]: 4B] [qs[64]: 64B] [qh[32]: 32B]
 ```
-Row prefix: 2-byte `ggml_half` scale.  
+Row prefix: 2-byte `ggml_half` scale.
 3.1875 bpw = 102 × 8 / 256.
 
 **`block_iq2_kl`** — 86 bytes (`ggml-common.h:580–587`):
 ```
 [scales_h: u16, 2B] [scales_l[4]: 4B] [qs[64]: 64B] [qh[16]: 16B]
 ```
-Row prefix: 2-byte `ggml_half` scale.  
+Row prefix: 2-byte `ggml_half` scale.
 2.6875 bpw = 86 × 8 / 256.
 
 ### CPU dequant (`ggml/src/ggml-iqk-quants.c`)

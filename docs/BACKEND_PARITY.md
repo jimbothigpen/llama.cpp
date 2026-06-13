@@ -204,8 +204,8 @@ notes and the README's feature table.
 
 ### MTP speculative decoding with multi-token drafts (Vulkan, n_max ≥ 2) — RESOLVED
 
-**Feature:** MTP (Multi-Token Prediction) speculative decoding  
-**Backends affected:** Vulkan (historical)  
+**Feature:** MTP (Multi-Token Prediction) speculative decoding
+**Backends affected:** Vulkan (historical)
 **Status:** Resolved — `n_max >= 2` now works on Vulkan; the `--spec-draft-n-max 1` constraint is no longer required.
 **Symptom (historical):** The inference process hung when running Vulkan MTP speculative decoding with `n_max >= 2` (multi-token draft batches). Single-token drafts (`n_max = 1`) were unaffected.
 
