@@ -78,6 +78,8 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
