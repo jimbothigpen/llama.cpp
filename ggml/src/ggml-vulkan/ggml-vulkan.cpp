@@ -5837,6 +5837,27 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                  std::string(device->properties.deviceName.data()).find("(DG1)") == std::string::npos) &&
                                 getenv("GGML_VK_DISABLE_ASYNC") == nullptr;
 
+        // The async tensor-upload path (set_tensor_async + timeline-semaphore events,
+        // mainline #18047) deadlocks in ggml_backend_vk_device_event_synchronize when
+        // loading large many-tensor MoE models with --no-mmap on Mesa RADV integrated
+        // GPUs (gfx11xx APUs, e.g. Strix Halo gfx1150): the timeline semaphore never
+        // signals and model load hangs forever (upstream #18317 / #15128 / #18741 — closed
+        // with no master-side fix; their only workaround is mmap=1, which we cannot use on
+        // Strix Halo). Default async OFF for this device class so the model loader falls
+        // back to the correct synchronous upload (load-once/serve-forever, so the small
+        // extra load time is acceptable). The deadlock is actually triggered by async
+        // upload into HOST-VISIBLE memory (GGML_VK_PREFER_HOST_MEMORY); device-local async
+        // works — but that env is itself the wrong choice on a 96 GiB-VRAM-carveout APU
+        // (it forces weights into the small OS-RAM partition → unusable decode throughput),
+        // so the real serving fix is to not set it. This guard just turns the hard hang
+        // into a completing load. Drop it once upstream fixes the semaphore;
+        // GGML_VK_FORCE_ASYNC=1 re-enables async for testing such a fix.
+        if (device->driver_id == vk::DriverId::eMesaRadv &&
+            device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu &&
+            getenv("GGML_VK_FORCE_ASYNC") == nullptr) {
+            device->support_async = false;
+        }
+
         if (!device->support_async) {
             GGML_LOG_DEBUG("ggml_vulkan: WARNING: Async execution disabled on certain Intel devices.\n");
         }
@@ -17137,11 +17158,17 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->type        = ggml_backend_vk_device_get_type(dev);
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
+    // Report async/event support from the device's support_async flag so the model
+    // loader's async tensor-upload selector (llama-model-loader.cpp) actually honors it.
+    // Previously these were hardcoded true, so GGML_VK_DISABLE_ASYNC and the RADV-iGPU
+    // default-off (see ggml_vk_get_device, refs #18317/#18047) never reached the loader
+    // and the deadlocking async path was still selected for --no-mmap MoE loads.
+    const vk_device& vkdev = ggml_vk_get_device(ctx->device);
     props->caps = {
-        /* .async                 = */ true,
+        /* .async                 = */ vkdev->support_async,
         /* .host_buffer           = */ true,
         /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ true,
+        /* .events                = */ vkdev->support_async,
     };
 }
 
