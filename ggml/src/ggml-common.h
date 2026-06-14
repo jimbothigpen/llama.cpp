@@ -373,6 +373,18 @@ typedef struct {
 static_assert(sizeof(block_turboq4_0) == 2*sizeof(ggml_half) + QK_TURBOQ4*3/8 + QK_TURBOQ4/8, "wrong turboq4_0 block size");
 #endif
 static_assert(QK_TURBOQ4 == 128, "turboq4 kernels assume QK_TURBOQ4 == 128");
+
+// TURBOQ8_0: 8-bit, uniform 256-level grid centroid[i]=(i-127.5)/127.5 + per-block absmax scale, no QJL.
+// Per block: norm(fp16, = grp_norm*absmax_scale) + 8-bit indices (128 bytes, 1 per byte)
+// = 130 bytes per 128 values = 8.125 bits/value → Q8-class precision with FWHT outlier suppression.
+// NOTE: no rnorm field (uniform-grid+absmax design, unlike turboq4 recon-norm).
+#define QK_TURBOQ8 128
+typedef struct {
+    ggml_half  norm;                    //   2 bytes: grp_norm * per-block absmax scale
+    uint8_t    qs[QK_TURBOQ8];          // 128 bytes: 8-bit uniform-grid indices (1 per byte)
+} block_turboq8_0;                      // 130 bytes total
+static_assert(sizeof(block_turboq8_0) == sizeof(ggml_half) + QK_TURBOQ8, "wrong turboq8_0 block size/padding");
+static_assert(QK_TURBOQ8 == 128, "turboq8 kernels assume QK_TURBOQ8 == 128");
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max for N(0,1))
 // Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
 // Per block: d0(fp16) + d1(fp16) + 3-bit indices packed (12 bytes) = 16 bytes per 32 values
