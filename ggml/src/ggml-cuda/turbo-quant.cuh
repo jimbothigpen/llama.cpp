@@ -16,6 +16,7 @@
 // ---- Quantization ratios for dequantize_block template ----
 #define QR_TURBOQ3 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 #define QR_TURBOQ4 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
+#define QR_TURBOQ8 1  // Each dequantize call produces 2 consecutive elements (like q8_0)
 
 // ---- Phase 5b-1a: ik_llama IQK base weight quant types ----
 #define QR_IQ4_K 1   // ik_llama IQ4_K (256-element superblock, 4.50 bpw)
@@ -395,6 +396,14 @@ static __device__ __forceinline__ float turboq4_dequant_element(
         const block_turboq4_0 * __restrict__ x, int j, float norm) {
     uint8_t idx = (x->qs[j / 2] >> ((j % 2) * 4)) & 0xF;
     return TURBO_CENTROIDS_4BIT[idx] * norm;
+}
+
+// ---- TURBOQ8: 8-bit uniform-grid decode (centroid[i]=(i-127.5)/127.5; per-block absmax in norm) ----
+// 1 byte per element (no packing). Affine form avoids a 256-entry centroid table:
+// value = (qs-127.5)/127.5 * norm. norm already folds in the per-block absmax scale.
+static __device__ __forceinline__ float turboq8_dequant_element(
+        const block_turboq8_0 * __restrict__ x, int j, float norm) {
+    return ((float)x->qs[j] - 127.5f) * (1.0f / 127.5f) * norm;
 }
 
 // ---- Nearest 3-bit centroid index ----

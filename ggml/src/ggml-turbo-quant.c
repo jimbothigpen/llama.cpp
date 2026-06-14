@@ -798,6 +798,101 @@ size_t quantize_turboq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrows * row_size;
 }
 
+/* ---------- TURBOQ8_0: 8-bit, uniform 256-level grid + per-block absmax (no QJL) ----------
+ * Unified codec: byte-identical math to the GPU encode (set-rows.cu k_set_rows_turboq8 /
+ * turbo-quant.cuh quantize_f32_turboq8_0_block) so CPU encode ↔ GPU decode (and vice versa)
+ * agree on every backend. Centroid grid is uniform: centroid[i] = (i-127.5)/127.5 ∈ [-1,1];
+ * the per-block absmax scale is folded into the stored norm (= grp_norm * scale).
+ * NOTE: this deliberately does NOT use Lloyd-Max centroids or reconstruction-norm correction
+ * (the 4-bit/3-bit path's approach) — the Hadamard rotation suppresses outliers so a uniform
+ * grid in the rotated domain is the design buun measured/shipped.                              */
+
+void quantize_row_turboq8_0_ref(const float * GGML_RESTRICT x, block_turboq8_0 * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ8 == 0);
+    const int nb = k / QK_TURBOQ8;
+    const int d  = QK_TURBOQ8;  /* == TURBO_D == 128 */
+
+    for (int block = 0; block < nb; block++) {
+        const float * src = x + block * d;
+
+        /* Step 1: extract L2 norm */
+        float norm_sq = 0.0f;
+        for (int i = 0; i < d; i++) norm_sq += src[i] * src[i];
+        const float norm = sqrtf(norm_sq);
+
+        /* Step 2: normalize */
+        float normalized[TURBO_D];
+        if (norm > 1e-10f) {
+            const float inv = 1.0f / norm;
+            for (int i = 0; i < d; i++) normalized[i] = src[i] * inv;
+        } else {
+            memset(normalized, 0, d * sizeof(float));
+        }
+
+        /* Step 3: forward FWHT rotation */
+        float rotated[TURBO_D];
+        matvec(turbo_rotation, normalized, rotated, d);
+
+        /* Step 4: per-block absmax → uniform 256-level grid */
+        float absmax = 0.0f;
+        for (int i = 0; i < d; i++) {
+            const float a = fabsf(rotated[i]);
+            if (a > absmax) absmax = a;
+        }
+        const float scale     = absmax > 1e-10f ? absmax : 1e-10f;
+        const float inv_scale = 1.0f / scale;
+        for (int i = 0; i < d; i++) {
+            int idx = (int)lrintf(rotated[i] * inv_scale * 127.5f + 127.5f);
+            idx = idx < 0 ? 0 : (idx > 255 ? 255 : idx);
+            y[block].qs[i] = (uint8_t)idx;
+        }
+
+        /* Step 5: stored norm folds in the absmax scale (decode = centroid*norm) */
+        y[block].norm = GGML_FP32_TO_FP16(norm * scale);
+    }
+}
+
+void dequantize_row_turboq8_0(const block_turboq8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ8 == 0);
+    const int nb = k / QK_TURBOQ8;
+    const int d  = QK_TURBOQ8;
+
+    for (int block = 0; block < nb; block++) {
+        const float norm = GGML_FP16_TO_FP32(x[block].norm);
+
+        /* Reconstruct in rotated domain via the uniform grid */
+        float rotated_recon[TURBO_D];
+        for (int i = 0; i < d; i++) {
+            rotated_recon[i] = ((float)x[block].qs[i] - 127.5f) * (1.0f / 127.5f);
+        }
+
+        /* Inverse rotate, then scale by stored norm */
+        float * dst = y + block * d;
+        matvec(turbo_rotation_t, rotated_recon, dst, d);
+        for (int i = 0; i < d; i++) dst[i] *= norm;
+    }
+}
+
+size_t quantize_turboq8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                          int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBOQ8 == 0);
+
+    size_t row_size = (n_per_row / QK_TURBOQ8) * sizeof(block_turboq8_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_turboq8_0_ref(
+            src + row * n_per_row,
+            (block_turboq8_0 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
 /* ================================================================== */
 /* WHT3_0 / WHT4_0: WHT-rotated weight quantization                  */
 /* ================================================================== */

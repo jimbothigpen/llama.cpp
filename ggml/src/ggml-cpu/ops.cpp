@@ -4949,6 +4949,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_TURBOQ2_0:
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:
+        case GGML_TYPE_TURBOQ8_0:
         case GGML_TYPE_TURBOQ2_INNERQ:
         case GGML_TYPE_TURBOQ3_INNERQ:
         case GGML_TYPE_IQ2_XXS:
