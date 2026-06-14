@@ -806,6 +806,28 @@ static void test_quantifiers() {
             "yy"
         }
     );
+    // An upper repetition bound far above MAX_REPETITION_THRESHOLD (2000) must not abort
+    // grammar parsing; it is clamped to unbounded. This mirrors json-schema-to-grammar
+    // emitting char{0,524288} for a string with a large maxLength (e.g. the Workflow tool's
+    // `script` field), which previously threw "number of repetitions exceeds sane defaults"
+    // and aborted the entire multi-tool tool-call grammar, forcing an unconstrained fallback.
+    test_grammar(
+        "oversized upper-bound repetition (clamped to unbounded)",
+        // Grammar
+        R"""(root ::= "a"{0,524288})""",
+        // Passing strings — incl. well past the 2000 cap, proving it is unbounded, not capped
+        {
+            "",
+            "a",
+            "aaaaa",
+            std::string(3000, 'a'),
+        },
+        // Failing strings
+        {
+            "b",
+            "ab",
+        }
+    );
 }
 
 static void test_failure_missing_root() {

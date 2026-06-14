@@ -649,7 +649,18 @@ const char * llama_grammar_parser::parse_sequence(
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
             bool has_max = max_times != UINT64_MAX;
-            if (min_times > MAX_REPETITION_THRESHOLD || (has_max && max_times > MAX_REPETITION_THRESHOLD)) {
+            // A pathologically large *upper* bound (e.g. json-schema-to-grammar emitting
+            // char{0,524288} for a string with a big maxLength) is treated as unbounded
+            // rather than rejected. Materializing that many alternative rules is unnecessary
+            // (the grammar is structural guidance, not a hard length enforcer) and a memory
+            // hazard; rejecting it would abort an otherwise-valid grammar — e.g. a single
+            // oversized tool field killing an entire multi-tool tool-call grammar and forcing
+            // an unconstrained-generation fallback.
+            if (has_max && max_times > MAX_REPETITION_THRESHOLD) {
+                max_times = UINT64_MAX; // treat as unbounded ({m,n} -> {m,})
+            }
+            // A huge *lower* bound genuinely requires inlining that many copies; keep rejecting.
+            if (min_times > MAX_REPETITION_THRESHOLD) {
                 throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
             }
             handle_repetitions(min_times, max_times);
