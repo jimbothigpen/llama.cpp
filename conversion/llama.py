@@ -61,12 +61,19 @@ class LlamaModel(TextModel):
             # Read both eagle3 raw config and target model config
             with open(self.dir_model / "config.json", 'r', encoding='utf-8') as f:
                 eagle3_raw_config = json.load(f)
-            with open(self.target_model_dir / "config.json", 'r', encoding='utf-8') as f:
-                target_config = json.load(f)
+            try:
+                with open(self.target_model_dir / "config.json", 'r', encoding='utf-8') as f:
+                    target_config = json.load(f)
+            except FileNotFoundError:
+                # Tokenizer-only target dir (SpecForge compact-vocab): no target model config.
+                # Fall back to draft config values for vocab_size and hidden_size.
+                logger.warning("EAGLE-3: %s/config.json not found; using draft config fallbacks",
+                               self.target_model_dir)
+                target_config = {}
 
             if "text_config" in target_config:
                 target_config = {**target_config, **target_config["text_config"]}
-            self.target_vocab_size = target_config["vocab_size"]
+            self.target_vocab_size = target_config.get("vocab_size") or self.hparams.get("vocab_size", 0)
 
             # target_layers: use eagle_aux_hidden_state_layer_ids from draft eagle_config if present,
             # else derive from target model layer count (low/mid/high).
@@ -77,18 +84,22 @@ class LlamaModel(TextModel):
                 target_layers = eagle_layer_ids
                 logger.info(f"EAGLE-3: target_layers = {target_layers} (from eagle_config in draft)")
             else:
-                target_num_layers = target_config["num_hidden_layers"]
-                target_layers = [2, target_num_layers // 2, target_num_layers - 3]
-                logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
+                target_num_layers = target_config.get("num_hidden_layers")
+                if target_num_layers:
+                    target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+                    logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
+                else:
+                    target_layers = [1, 18, 35]
+                    logger.info(f"EAGLE-3: target_layers = {target_layers} (default; no eagle_config or target config)")
             self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
 
-            # target_hidden_size: prefer eagle3 config, fallback to target config
+            # target_hidden_size: prefer eagle3 config, fallback to target config, then draft config
             if eagle3_raw_config.get("target_hidden_size") is not None:
                 target_hidden_size = eagle3_raw_config["target_hidden_size"]
                 src = "EAGLE-3 config"
             else:
-                target_hidden_size = target_config["hidden_size"]
-                src = "target model config"
+                target_hidden_size = target_config.get("hidden_size") or self.hparams.get("hidden_size")
+                src = "target/draft model config"
             logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
             self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
 
@@ -241,6 +252,14 @@ class LlamaModel(TextModel):
             if name.endswith(".hidden_norm.weight"):
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM_2, bid), data_torch)
                 return
+            # fc_norm=True drafts store one RMSNorm per extracted aux layer as fcs.{i}.weight;
+            # stash here and pack into a single fc_norm.weight tensor in prepare_tensors.
+            if name.startswith("fcs.") and name.endswith(".weight") and name[4:-7].isdigit():
+                idx = int(name[4:-7])
+                if not hasattr(self, "_eagle3_fc_norm"):
+                    self._eagle3_fc_norm = {}
+                self._eagle3_fc_norm[idx] = data_torch
+                return
 
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
@@ -343,6 +362,16 @@ class LlamaModel(TextModel):
                 shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
                 logger.info(f"{name + ',':<30} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
                 self.gguf_writer.add_tensor(name, data, raw_dtype=data_qtype)
+
+        # eagle3: pack per-aux fc_norm RMSNorm weights into a single fc_norm.weight tensor
+        if getattr(self, 'is_eagle3', False):
+            fc_norm_map = getattr(self, "_eagle3_fc_norm", {})
+            if fc_norm_map:
+                rows = [fc_norm_map[i].to(torch.float32) for i in sorted(fc_norm_map)]
+                data = torch.stack(rows).cpu().numpy()
+                shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+                logger.info(f"{'fc_norm.weight,':<30} F32, shape = {shape_str}")
+                self.gguf_writer.add_tensor("fc_norm.weight", data, raw_dtype=gguf.GGMLQuantizationType.F32)
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
