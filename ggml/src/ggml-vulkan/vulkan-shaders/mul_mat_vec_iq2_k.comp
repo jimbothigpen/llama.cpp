@@ -62,7 +62,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 if (shmem_idx < u32_to_load) {
                     const uint local_block = shmem_idx / U32_PER_BLOCK;
                     const uint u32_in_block = shmem_idx - local_block * U32_PER_BLOCK;
-                    const uint global_block = (row * num_blocks_per_row) + i_base + local_block;
+                    // MUL_MAT_ID: a_offset (QUANT_K-block units) selects the expert weight matrix;
+                    // dense / non-id path has a_offset == 0 (no-op). Matches mainline q2_k.
+                    const uint global_block = a_offset + (row * num_blocks_per_row) + i_base + local_block;
                     shmem_a[shmem_idx] = data_a_u32[global_block * U32_PER_BLOCK + u32_in_block];
                 }
             }

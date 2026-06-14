@@ -98,7 +98,11 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
             }
         }
 
-        std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
+        // Size by ggml_nbytes (the true tensor byte size) rather than ggml_row_size(type, nels):
+        // for row_meta quant types (ik_llama IQ4_KS/IQ3_KS/IQK trellis, ...) each of the tensor's
+        // nrows carries its own per-row metadata word, so the single-row ggml_row_size(type, nels)
+        // under-allocates by (nrows-1) meta words and the block quantize loop overflows the heap.
+        std::vector<uint8_t> dataq(ggml_nbytes(tensor));
         {
             // parallel quantization by block
             size_t blck_size = ggml_blck_size(tensor->type);
@@ -8855,6 +8859,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
+    }
+
+    // ik_llama (IQK) quants are not in all_types; cover their MoE expert (MUL_MAT_ID) path here.
+    // The Vulkan mul_mat_vec(_id) shaders for these custom-layout quants ignored the per-expert
+    // weight offset (a_offset), so every expert read expert 0's weights -> garbage for qwen35moe
+    // on gfx1150 (dense / single-expert was unaffected). Small n exercises the fused dmmv_id vec
+    // path (hit during short-prompt prefill + generation); larger n the dequant->f16 matrix path.
+    // NOTE: GGML_TYPE_IQ2_KL is intentionally omitted — it has a separate, pre-existing Vulkan
+    // defect (fails MUL_MAT_ID on Vulkan at every n, including the n>8 dequant->f16 matrix path
+    // that this a_offset fix does not touch), so it is tracked as its own follow-up rather than
+    // gating this fix's regression test.
+    for (ggml_type type_a : { GGML_TYPE_IQ2_K,  GGML_TYPE_IQ3_K,  GGML_TYPE_IQ4_K,
+                              GGML_TYPE_IQ5_K,  GGML_TYPE_IQ6_K,
+                              GGML_TYPE_IQ4_KS, GGML_TYPE_IQ2_KS, GGML_TYPE_IQ4_KSS,
+                              GGML_TYPE_IQ5_KS, GGML_TYPE_IQ3_KS,
+                              GGML_TYPE_IQ1_KT, GGML_TYPE_IQ2_KT, GGML_TYPE_IQ3_KT, GGML_TYPE_IQ4_KT }) {
+        for (int n : {1, 4, 8, 32}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 2, false, 64, n, 256));
+        }
     }
 
     for (ggml_type type_a : base_types) {

@@ -33,7 +33,7 @@ FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
-    // a_offset is in QUANT_K units; we ignore it (assume non-batched A).
+    // a_offset is in QUANT_K-block units; for MUL_MAT_ID it selects the expert (see row_u32 below).
 
     const uint num_blocks_per_row = p.ncols / QUANT_K;
     const uint row_size_u32       = 1 + num_blocks_per_row * U32_PER_BLOCK;
@@ -50,7 +50,10 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     [[unroll]] for (uint n = 0; n < num_rows; ++n) {
         const uint row     = first_row + n;
-        const uint row_u32 = row * row_size_u32;
+        // MUL_MAT_ID: a_offset (QUANT_K-block units) selects the expert. rows-before-expert =
+        // a_offset / num_blocks_per_row, scaled by the per-row u32 stride (incl. the +1 row-meta
+        // word). Dense / non-id path has a_offset == 0, so this is a no-op there.
+        const uint row_u32 = (a_offset / num_blocks_per_row + row) * row_size_u32;
         const float d_row  = uintBitsToFloat(data_a[row_u32]);
 
         for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {

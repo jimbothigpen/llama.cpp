@@ -51,7 +51,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     [[unroll]] for (uint n = 0; n < num_rows; ++n) {
         const uint row     = first_row + n;
-        const uint row_u16 = row * row_size_u16;
+        // MUL_MAT_ID: a_offset (QUANT_K-block units) selects the expert; convert to per-row u16
+        // stride (incl. +1 row-meta word). Dense / non-id path has a_offset == 0 (no-op).
+        const uint row_u16 = (a_offset / num_blocks_per_row + row) * row_size_u16;
         const float d_row  = float(unpackHalf2x16(uint(data_a[row_u16])).x);
 
         for (uint i_base = 0; i_base < num_blocks_per_row; i_base += BLOCKS_PER_WG) {
