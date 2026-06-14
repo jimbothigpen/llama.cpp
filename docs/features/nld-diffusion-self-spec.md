@@ -9,7 +9,7 @@
 | | Value |
 |---|---|
 | **What it is** | Self-speculative decode for diffusion-LM models — bidirectional draft, causal verify, shared KV |
-| **Supported arches** | Dream, LLaDA, LLaDA-MoE, RND1 (`llm_arch_is_diffusion`, `llama-arch.cpp:960`) |
+| **Supported arches** | Dream, LLaDA, LLaDA-MoE, RND1 (`llm_arch_is_diffusion`, `llama-arch.cpp:982`) |
 | **Headline model family** | NVIDIA Nemotron-Labs-Diffusion 3B / 8B / 14B (via Dream arch); also Dream 7B / LLaDA / LLaDA-MoE / RND1 |
 | **Binary** | `llama-diffusion-cli` (`examples/diffusion/diffusion-cli.cpp`) |
 | **CLI self-spec flags** | `--diffusion-self-spec` + `--diffusion-draft-length N` (`arg.cpp:4089-4096`) |

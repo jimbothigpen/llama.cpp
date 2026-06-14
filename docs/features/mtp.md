@@ -142,9 +142,9 @@ Two hooks manage KV cache state across draft and verify steps:
 
 The target context is connected to the MTP draft context through three API calls:
 
-- **`llama_set_mtp_op_type()`** (`llama-context.cpp:3853`) — marks the context's MTP operation role
-- **`llama_set_embeddings_pre_norm()`** (`llama-context.cpp:3857`; internal declaration `llama-context.h:141`) — activates the masked pre-norm embedding path that feeds the MTP head
-- **`llama_set_mtp_source()`** (`llama-context.cpp:3861`) — registers the target context as the source for MTP draft generation
+- **`llama_set_mtp_op_type()`** (`llama-context.cpp:4033`) — marks the context's MTP operation role
+- **`llama_set_embeddings_nextn()`** (`llama-context.cpp:4041`; internal declaration `llama-context.h:143`) — activates the masked next-token (nextn) embedding path that feeds the MTP head
+- **`llama_set_mtp_source()`** (`llama-context.cpp:4037`) — registers the target context as the source for MTP draft generation
 
 ### Gemma 4 external-assistant path
 

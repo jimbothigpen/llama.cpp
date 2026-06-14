@@ -31,7 +31,7 @@
 
 ```bash
 # Convert the z-lab DFlash drafter (Qwen3.6 family shown)
-python3 conversion/dflash_converter.py <dflash-drafter-dir> \
+python3 conversion/dflash_draft.py <dflash-drafter-dir> \
     --outfile dflash-draft.gguf \
     --target-model-dir <base-model-dir>
 
@@ -61,7 +61,7 @@ llama-server \
 | Component | Source |
 |---|---|
 | Runtime (speculative loop, cross-attention ring, dispatch) | **buun `master`** |
-| GGUF converter (`conversion/dflash_converter.py`) | **Anbeeld / beellama.cpp** (MIT) |
+| GGUF converter (`conversion/dflash_draft.py`) | **Anbeeld / beellama.cpp** (MIT) |
 | Drafter weights (z-lab DFlash drafter family) | **z-lab** |
 
 DFlash is a novel speculative-decode mechanism in which a small drafter model
@@ -101,7 +101,7 @@ vocabulary projection; it produces a single drafted token per step.
 ### Requirements
 
 1. **A DFlash drafter GGUF.** Convert a z-lab DFlash drafter (Qwen3.6 or
-   Gemma-4) with `conversion/dflash_converter.py`. The drafter GGUF is not a
+   Gemma-4) with `conversion/dflash_draft.py`. The drafter GGUF is not a
    standard causal LM — it will error or SIGSEGV if loaded as `-m`.
 2. **Build ≥ `2726a56c0`** — the `mask_token_id` type fix (`1436d1890`) is
    required to load any z-lab DFlash drafter. Earlier builds will fail at
@@ -211,7 +211,7 @@ impl and is byte-for-byte untouched.
 - **buun `master`** — runtime upstream (speculative loop + cross-attention ring)
 - **Anbeeld / beellama.cpp** (MIT) — converter upstream
 - **z-lab** — DFlash drafter weights (Qwen3.6 family)
-- **Converter source:** `conversion/dflash_converter.py`
+- **Converter source:** `conversion/dflash_draft.py`
 - **Runtime source:** `common/speculative.cpp` — `common_speculative_impl_dflash`
 - **Feature index:** [docs/features/README.md](README.md)
 - **Related docs (this repo):**
