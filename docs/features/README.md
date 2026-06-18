@@ -8,7 +8,7 @@ Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache
 
 | Feature | Status | Types | Compression vs fp16 |
 |---|---|---|---|
-| [TurboQuant KV base](turboquant-kv-base.md) | Stable | `turboq2`, `turboq3`, `turboq4` | ~7.5× / ~5.1× / ~3.8× |
+| [TurboQuant KV base](turboquant-kv-base.md) | Stable (`turboq8` Preview, CPU + CUDA/HIP only) | `turboq2`, `turboq3`, `turboq4`, `turboq8` | ~7.5× / ~5.1× / ~3.8× / ~1.97× |
 | [TCQ KV cache](tcq-kv.md) | Stable | `turboq2_tcq`, `turboq3_tcq` | ~7.1× / ~4.9× |
 | [InnerQ KV cache](innerq-kv.md) | Experimental (CUDA/HIP only) | `turboq2_innerq`, `turboq3_innerq` | ~7.5× / ~5.1× (same memory as base; quality improvement) |
 | [OScaR INT2 K-cache](oscar-kv.md) | Experimental (CUDA/HIP only, Phase 1) | `kv_oscar_int2` | ~8× K-only; FHT+INT2; residual window (`--cache-oscar-residual-window`); gate PASS 9B (+9.1% PPL); **DO NOT USE sub-1B** (architectural issue) |

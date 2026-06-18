@@ -11,6 +11,9 @@
 | `turboq2` | `GGML_TYPE_TURBOQ2_0` (slot 60) | 2.125 | ~7.5× | 34 | CPU, CUDA/HIP, Vulkan |
 | `turboq3` | `GGML_TYPE_TURBOQ3_0` (slot 61) | 3.125 | ~5.1× | 50 | CPU, CUDA/HIP, Vulkan |
 | `turboq4` | `GGML_TYPE_TURBOQ4_0` (slot 62) | 4.25 | ~3.8× | 68 | CPU, CUDA/HIP, Vulkan |
+| `turboq8` | `GGML_TYPE_TURBOQ8_0` (slot 63) | 8.125 | ~1.97× | 130 | CPU, CUDA/HIP |
+
+> **`turboq8` (high-precision member, source: buun).** An 8-bit KV codec contributed by **buun** (`TURBO8_0`). Unlike the PolarQuant `turboq2/3/4` types above, it uses the FWHT rotation followed by a **uniform 256-level grid** (`centroid[i] = (i − 127.5)/127.5`) with a per-block absmax scale — no QJL, no learned codebook. It is the highest-quality / lowest-compression member of the family (~2× vs fp16 KV), intended as a near-lossless KV option and as the high-precision anchor for asymmetric K/V pairs. Exposed as `--cache-type-k turboq8` / `-v turboq8`. **Backends: CPU + CUDA/HIP only — no Vulkan kernel yet.** Quality benchmarks are pending (measure-first); see the matrix below.
 
 **TL;DR.** Drop-in KV compression — drop `--cache-type-k`/`-v` onto any existing GGUF run. No model re-download, no offline quantization step. `turboq3` is the practical sweet spot: roughly 5× memory reduction with ~11% perplexity increase vs fp16 KV.
 

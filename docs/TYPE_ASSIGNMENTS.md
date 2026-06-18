@@ -66,7 +66,8 @@ Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2
 | 60 | `GGML_TYPE_TURBOQ2_0` | `TURBO2_0` (42) | 2-bit PolarQuant, no QJL |
 | 61 | `GGML_TYPE_TURBOQ3_0` | `TURBO3_0` (43) | 2-bit PolarQuant + 1-bit QJL |
 | 62 | `GGML_TYPE_TURBOQ4_0` | `TURBO4_0` (44) | 4-bit PolarQuant (default `TURBOQ4_USE_4BIT=1`; legacy 3-bit+QJL mode available via `TURBOQ4_USE_4BIT=0`) |
-| 63–64 | reserved | | future TurboQuant variants |
+| 63 | `GGML_TYPE_TURBOQ8_0` | buun `TURBO8_0` | 8-bit KV: FWHT + uniform 256-level grid (`centroid[i]=(i-127.5)/127.5`) + per-block absmax, no QJL, no PolarQuant codebook. CLI string `turboq8`; block `block_turboq8_0` = 130 bytes (fp16 absmax + 128×uint8), 8.125 bpw. CPU + CUDA/HIP fattn-vec; no Vulkan kernel yet. |
+| 64 | reserved | | future TurboQuant variants |
 | 65 | `GGML_TYPE_TURBOQ3_NATIVE` | turbo-tan `TQ3_0` (200) | 3-bit native KV (turbo-tan); see "Row-interleaved / packed variants" |
 
 Symbol prefix: `turboq_` (kernels), `TURBOQ_` (constants). The `Q` suffix

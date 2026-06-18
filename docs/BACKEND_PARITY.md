@@ -73,6 +73,7 @@ Status updated per layer landing. Initial state derived from
 |---|---|---|---|---|
 | Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3 (gfx1103); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
 | TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
+| TurboQuant8 KV (TURBOQ8_0, source: buun) | 1 | **wired** — CPU vec_dot + CUDA/HIP fattn-vec instances on main (`b22b6492d`); 8-bit uniform-grid codec; quality bench pending (measure-first) | not present — no Vulkan kernel | P2 — follow CUDA/HIP measure-first; port after benchmark justifies it |
 | WHT weight quants (WHT3_0) | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |

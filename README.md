@@ -119,6 +119,7 @@ at runtime via `SET_ROWS`; model weights are unchanged.
 | `turboq2` (slot 60) | 2.125 | 128 | ~7.5× | 4-centroid PolarQuant, no QJL |
 | `turboq3` (slot 61) | 3.125 | 128 | ~5.1× | 2-bit PolarQuant + 1-bit QJL signs |
 | `turboq4` (slot 62) | 4.25 | 128 | ~3.8× | 4-bit PolarQuant |
+| `turboq8` (slot 63) | 8.125 | 128 | ~1.97× | uniform 256-level grid + absmax, no QJL (source: buun; CPU + CUDA/HIP only, no Vulkan) |
 
 Example:
 ```bash
