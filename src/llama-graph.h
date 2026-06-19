@@ -38,6 +38,17 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
+// diffusion self-conditioning state (diffusion-gemma, PR #24427). Set per denoising step via
+// llama_set_diffusion_self_cond(); read by the decoder graph's self-conditioning input. `probs`
+// is the previous step's per-position softmax over the vocabulary, laid out column-major as the
+// {n_vocab, n_tokens} graph input (probs[t*n_vocab + v]). enabled=false => zero self-conditioning.
+struct llama_diffusion_cond {
+    bool                 enabled  = false;
+    int64_t              n_vocab  = 0;
+    int64_t              n_tokens = 0;
+    std::vector<float>   probs;   // size n_vocab * n_tokens when enabled
+};
+
 enum llm_ffn_op_type : int {
     LLM_FFN_NONE = 0,           // sentinel: unset; archs must assign before use
     LLM_FFN_SILU,
@@ -706,6 +717,11 @@ struct llm_graph_params {
     const llama_model            * src_model;
     const llama_cross            * cross;
     llama_eagle3                 * eagle3 = nullptr;
+
+    // diffusion self-conditioning state (diffusion-gemma). Points at a stable llama_context
+    // member; the data is refreshed each decode via llama_set_diffusion_self_cond() and copied
+    // into the graph input by set_input(), so it does not participate in graph-reuse identity.
+    const llama_diffusion_cond   * diffusion = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 

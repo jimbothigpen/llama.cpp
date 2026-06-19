@@ -146,6 +146,7 @@ enum llm_arch {
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_MELLUM,
     LLM_ARCH_LAGUNA,
+    LLM_ARCH_DIFFUSION_GEMMA,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -435,6 +436,11 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
     LLM_TENSOR_LAYER_OUT_SCALE,
+    LLM_TENSOR_ENC_LAYER_OUT_SCALE,  // diffusion-gemma: encoder per-layer output scale
+    LLM_TENSOR_SC_PRE_NORM,          // diffusion-gemma: self-conditioning MLP pre-norm
+    LLM_TENSOR_SC_GATE,              // diffusion-gemma: self-conditioning MLP gate proj
+    LLM_TENSOR_SC_UP,                // diffusion-gemma: self-conditioning MLP up proj
+    LLM_TENSOR_SC_DOWN,              // diffusion-gemma: self-conditioning MLP down proj
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n

@@ -740,6 +740,26 @@ class TensorNameMap:
             "model.blocks.{bid}.embed_skip.a_g", # talkie
         ),
 
+        MODEL_TENSOR.ENC_LAYER_OUT_SCALE: (
+            "model.encoder.layers.{bid}.layer_scalar", # diffusion-gemma
+        ),
+
+        MODEL_TENSOR.SC_PRE_NORM: (
+            "model.decoder.self_conditioning.pre_norm", # diffusion-gemma
+        ),
+
+        MODEL_TENSOR.SC_GATE: (
+            "model.decoder.self_conditioning.gate_proj", # diffusion-gemma
+        ),
+
+        MODEL_TENSOR.SC_UP: (
+            "model.decoder.self_conditioning.up_proj", # diffusion-gemma
+        ),
+
+        MODEL_TENSOR.SC_DOWN: (
+            "model.decoder.self_conditioning.down_proj", # diffusion-gemma
+        ),
+
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
             "model.embed_tokens_per_layer",  # gemma3n
         ),

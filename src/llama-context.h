@@ -146,6 +146,9 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    // diffusion self-conditioning (diffusion-gemma). probs==nullptr clears (zero self-cond).
+    void set_diffusion_self_cond(const float * probs, int64_t n_vocab, int64_t n_tokens);
+
     // EAGLE3 speculative decoding
     void set_eagle3(const int * extract_layers, int32_t n_layers);
     const std::vector<float> & get_eagle3_target_features() const;
@@ -355,6 +358,9 @@ private:
     const llama_model & model;
 
     llama_cparams cparams;
+
+    // diffusion self-conditioning state, refreshed per denoising step (diffusion-gemma)
+    llama_diffusion_cond diffusion_cond;
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;

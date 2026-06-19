@@ -1071,6 +1071,12 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Set the diffusion self-conditioning input for the next decode (diffusion-gemma block
+    // diffusion). `probs` is the previous denoising step's per-position softmax over the
+    // vocabulary, laid out as {n_vocab, n_tokens} column-major (probs[t*n_vocab + v]); pass
+    // probs=nullptr (or n=0) to clear it (zero self-conditioning, e.g. the first step).
+    LLAMA_API void llama_set_diffusion_self_cond(struct llama_context * ctx, const float * probs, int64_t n_vocab, int64_t n_tokens);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //

@@ -1348,6 +1348,9 @@ class GGUFWriter:
     def add_diffusion_shift_logits(self, value: bool) -> None:
         self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
 
+    def add_diffusion_canvas_length(self, value: int) -> None:
+        self.add_uint32(Keys.Diffusion.CANVAS_LENGTH, value)
+
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''
         if not skip_pack_prefix:

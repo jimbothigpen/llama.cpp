@@ -823,6 +823,36 @@ struct llama_model_gemma4 : public llama_model_base {
 };
 
 
+// DiffusionGemma (PR #24427): a gemma4 MoE checkpoint run as a bidirectional block-diffusion
+// denoiser. Reuses the gemma4 transformer body verbatim; adds a self-conditioning gated MLP
+// applied to the input embedding during the decoder (denoise) phase. Encoder phase (causal
+// prefill / canvas commit) is identical to plain gemma4. Phase is derived at graph-build time
+// from cparams.causal_attn (the runner toggles it: encoder=causal, decoder=bidirectional).
+struct llama_model_diffusion_gemma : public llama_model_gemma4 {
+    llama_model_diffusion_gemma(const struct llama_model_params & params) : llama_model_gemma4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // self-conditioning gated MLP (model-level, decoder phase only)
+    ggml_tensor * self_cond_norm = nullptr; // self_cond_pre_norm {n_embd}
+    ggml_tensor * self_cond_gate = nullptr; // self_cond_gate {n_embd, n_ff}
+    ggml_tensor * self_cond_up   = nullptr; // self_cond_up   {n_embd, n_ff}
+    ggml_tensor * self_cond_down = nullptr; // self_cond_down {n_ff, n_embd}
+
+    struct graph : public llm_graph_context {
+        const llama_model & model;
+        const llama_diffusion_cond * dcond = nullptr;
+
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // scaled input embedding; in the decoder phase apply the self-conditioning transform
+        ggml_tensor * build_input(bool is_decoder);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_gemma4_assistant : public llama_model_base {
     llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

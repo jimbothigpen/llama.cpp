@@ -1359,6 +1359,23 @@ void llama_context::set_causal_attn(bool value) {
     sched_need_reserve = true;
 }
 
+void llama_context::set_diffusion_self_cond(const float * probs, int64_t n_vocab, int64_t n_tokens) {
+    if (probs == nullptr || n_vocab <= 0 || n_tokens <= 0) {
+        // clear -> zero self-conditioning (step 1 / encoder phase)
+        diffusion_cond.enabled  = false;
+        diffusion_cond.n_vocab  = n_vocab;
+        diffusion_cond.n_tokens = n_tokens;
+        diffusion_cond.probs.clear();
+        return;
+    }
+
+    const size_t n = (size_t) n_vocab * (size_t) n_tokens;
+    diffusion_cond.enabled  = true;
+    diffusion_cond.n_vocab  = n_vocab;
+    diffusion_cond.n_tokens = n_tokens;
+    diffusion_cond.probs.assign(probs, probs + n);
+}
+
 void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -2743,6 +2760,7 @@ llm_graph_params llama_context::graph_params(
         /*.src_model   =*/ src_ctx ? &src_ctx->get_model() : nullptr,
         /*.cross       =*/ &cross,
         /*.eagle3      =*/ const_cast<llama_eagle3 *>(&eagle3_state),
+        /*.diffusion   =*/ &diffusion_cond,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3989,6 +4007,10 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_diffusion_self_cond(llama_context * ctx, const float * probs, int64_t n_vocab, int64_t n_tokens) {
+    ctx->set_diffusion_self_cond(probs, n_vocab, n_tokens);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

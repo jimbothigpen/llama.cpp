@@ -385,6 +385,7 @@ class Keys:
 
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
+        CANVAS_LENGTH       = "diffusion.canvas_length"
 
     class xIELU:
         ALPHA_P             = "xielu.alpha_p"
@@ -458,6 +459,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA3N          = auto()
     GEMMA4           = auto()
     GEMMA4_ASSISTANT = auto()
+    DIFFUSION_GEMMA  = auto()
     GEMMA_EMBEDDING  = auto()
     STARCODER2       = auto()
     RWKV6            = auto()
@@ -612,6 +614,11 @@ class MODEL_TENSOR(IntEnum):
     ATTN_K_NORM          = auto()
     LAYER_OUT_NORM       = auto()
     LAYER_OUT_SCALE      = auto()
+    ENC_LAYER_OUT_SCALE  = auto()  # diffusion-gemma: encoder per-layer output scale
+    SC_PRE_NORM          = auto()  # diffusion-gemma: self-conditioning MLP pre-norm
+    SC_GATE              = auto()  # diffusion-gemma: self-conditioning MLP gate proj
+    SC_UP                = auto()  # diffusion-gemma: self-conditioning MLP up proj
+    SC_DOWN              = auto()  # diffusion-gemma: self-conditioning MLP down proj
     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
     PER_LAYER_MODEL_PROJ = auto() # gemma3n
     PER_LAYER_INP_GATE   = auto() # gemma3n
@@ -1048,6 +1055,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA3:           "gemma3",
     MODEL_ARCH.GEMMA3N:          "gemma3n",
     MODEL_ARCH.GEMMA4:           "gemma4",
+    MODEL_ARCH.DIFFUSION_GEMMA:  "diffusion-gemma",
     MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
     MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
     MODEL_ARCH.STARCODER2:       "starcoder2",
@@ -1202,6 +1210,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
+    MODEL_TENSOR.ENC_LAYER_OUT_SCALE:       "blk.{bid}.enc_layer_output_scale",
+    MODEL_TENSOR.SC_PRE_NORM:               "self_cond_pre_norm",
+    MODEL_TENSOR.SC_GATE:                   "self_cond_gate",
+    MODEL_TENSOR.SC_UP:                     "self_cond_up",
+    MODEL_TENSOR.SC_DOWN:                   "self_cond_down",
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
     MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
     MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
@@ -2680,6 +2693,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.PER_LAYER_PROJ,
         MODEL_TENSOR.PER_LAYER_PROJ_NORM,
         MODEL_TENSOR.PER_LAYER_POST_NORM,
+    ],
+    MODEL_ARCH.DIFFUSION_GEMMA: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM_2,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM_1,
+        MODEL_TENSOR.FFN_POST_NORM_2,
+        MODEL_TENSOR.LAYER_OUT_SCALE,
+        MODEL_TENSOR.ENC_LAYER_OUT_SCALE,
+        MODEL_TENSOR.SC_PRE_NORM,
+        MODEL_TENSOR.SC_GATE,
+        MODEL_TENSOR.SC_UP,
+        MODEL_TENSOR.SC_DOWN,
     ],
     MODEL_ARCH.GEMMA4_ASSISTANT: [
         MODEL_TENSOR.ROPE_FREQS,
