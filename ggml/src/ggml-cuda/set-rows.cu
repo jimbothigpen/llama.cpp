@@ -761,6 +761,23 @@ static __global__ void k_set_rows_turboq2(
     x[j] = src_row[i_blk * QK_TURBOQ2 + j];
     __syncthreads();
 
+    // ---- Step 1b: InnerQ per-channel equalization (Phase X-5, TODO 249) ----
+    // The turboq3/4/8 encode kernels already carry this; k_set_rows_turboq2 was
+    // missing it entirely, so TURBOQ2_INNERQ never accumulated calibration stats
+    // (d_innerq_count stayed 0 → finalize never fired) nor pre-scaled K → it was
+    // byte-identical to plain turboq2 regardless of TURBO_INNERQ. Mirror turboq3:
+    // accumulate K² stats during calibration, then pre-scale K[j] by the finalized
+    // per-channel scale BEFORE the L2 norm + WHT (the graph-side Q rotation
+    // compensates with scale_inv so dot(Q,K) is preserved).
+    if (d_innerq_calibrating) {
+        atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
+        if (j == 0) atomicAdd(&d_innerq_count, 1);
+    }
+    if (d_innerq_active) {
+        x[j] *= d_innerq_scale[j];
+    }
+    __syncthreads();
+
     // ---- Step 2: Parallel L2 norm ----
     constexpr int n_warps = 128 / WARP_SIZE;
     __shared__ float warp_accum[n_warps];
