@@ -845,6 +845,10 @@ class DiffusionGemmaModel(Gemma4Model):
 
         self.gguf_writer.add_diffusion_canvas_length(hparams.get("canvas_length", 256))
 
+        # DiffusionGemma has no per-layer input embeddings (Gemma4 feature); write 0 so
+        # llama_model_gemma4::load_arch_hparams finds the required key but skips the tensors.
+        self.gguf_writer.add_embedding_length_per_layer_input(0)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
