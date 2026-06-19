@@ -208,7 +208,10 @@ static void turbo_innerq_init(void) {
     if (innerq_initialized) return;
     innerq_initialized = true;
 
+    // OSCAR_INNERQ is an alias arming the SAME InnerQ machinery for the calibrated OSCAR INT2 K path
+    // (Track 1A / TODO 243). TURBO_INNERQ takes precedence so existing Turbo runs are unchanged.
     const char * env = getenv("TURBO_INNERQ");
+    if (!env || atoi(env) <= 0) env = getenv("OSCAR_INNERQ");
     if (!env || atoi(env) <= 0) {
         innerq_enabled = 0;
         return;
@@ -337,6 +340,12 @@ static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
 // Host: check if InnerQ is currently active (finalized)
 static bool turbo_innerq_is_active(void) {
     return innerq_enabled == 2;
+}
+
+// Host: check if InnerQ is armed at all (calibrating OR active). Used by the OSCAR-INT2 calibrated
+// encode path to decide between the calibrated and plain kernels. Caller must have run init/finalize.
+static bool turbo_innerq_is_enabled(void) {
+    return innerq_enabled != 0;
 }
 
 // ---- 4-bit centroids (Lloyd-Max for N(0, 1/128)) ----

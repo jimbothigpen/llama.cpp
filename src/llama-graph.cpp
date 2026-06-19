@@ -2605,6 +2605,29 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    // Calibrated OSCAR INT2 (InnerQ-fused, Track 1A / TODO 243): unlike Turbo, OSCAR rotates Q with the
+    // Hadamard INSIDE the FA kernel, so here we apply ONLY the per-channel inverse calibration scale
+    // (no WHT). The encode path stores K_enc = quant(H·diag(s)·K); multiplying Q by scale_inv = 1/s
+    // (per channel, before the in-kernel H·Q) yields dot(H·diag(1/s)·Q, H·diag(s)·K) = dot(Q,K).
+    // Gated on OSCAR_INNERQ/TURBO_INNERQ (the same env that arms the encode-side d_innerq_scale) so the
+    // default (uncalibrated) OSCAR path is byte-identical and never depends on a "ones" tensor (§-FLAG-B).
+    // Supports head_dim ∈ {128, 256} (<= INNERQ_MAX_CHANNELS); other head dims keep plain OSCAR.
+    if (k->type == GGML_TYPE_KV_OSCAR_INT2) {
+        const char * iq_env    = getenv("TURBO_INNERQ");
+        if (!iq_env || atoi(iq_env) == 0) { iq_env = getenv("OSCAR_INNERQ"); }
+        const bool   innerq_on = iq_env && atoi(iq_env) != 0;
+        ggml_tensor * iq_scale_inv = innerq_on ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
+        // scale_inv is sized INNERQ_MAX_CHANNELS (256); view its first head_dim entries so the per-channel
+        // multiply aligns with Q's head dimension (OSCAR calibration supports head_dim ∈ {128, 256}).
+        if (iq_scale_inv && q->ne[0] <= iq_scale_inv->ne[0]) {
+            ggml_tensor * si = (q->ne[0] == iq_scale_inv->ne[0])
+                ? iq_scale_inv
+                : ggml_view_1d(ctx0, iq_scale_inv, q->ne[0], 0);
+            if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+            q = ggml_mul(ctx0, q, si); // broadcast [head_dim] over [head_dim, n_head, n_tokens]
+        }
+    }
+
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);
     cb(cur, "kqv_out", il);
 

@@ -4,7 +4,11 @@
 // The host-side state lives in turbo-innerq.cu; device-side state is per-TU
 // in turbo-quant.cuh (only set-rows.cu needs device access).
 
-#define INNERQ_MAX_CHANNELS 128
+// 256 to support the calibrated OSCAR INT2 K path on head_dim==256 models (OSCAR's primary target,
+// e.g. Qwen3.5-9B: key_length=256). Turbo InnerQ only ever indexes scale_inv[t % group_size] with
+// group_size<=128 (turbo-wht.cu), so the extra capacity is inert for the Turbo path. All InnerQ
+// finalize/publish/copy sites size by the dynamic group_size, not this constant.
+#define INNERQ_MAX_CHANNELS 256
 
 #ifdef GGML_BACKEND_SHARED
 #  if defined(_WIN32) && !defined(__MINGW32__)

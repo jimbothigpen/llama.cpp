@@ -79,7 +79,7 @@ static bool ggml_type_is_turboq_tcq(enum ggml_type t) {
     return t == GGML_TYPE_TURBOQ3_TCQ || t == GGML_TYPE_TURBOQ2_TCQ;
 }
 
-#define INNERQ_MAX_CHANNELS 128  // must match turbo-innerq.cuh INNERQ_MAX_CHANNELS
+#define INNERQ_MAX_CHANNELS 256  // must match turbo-innerq.cuh INNERQ_MAX_CHANNELS
 
 #ifdef GGML_USE_CUDA
 // Cross-TU InnerQ symbols from turbo-innerq.cu (CUDA backend).
