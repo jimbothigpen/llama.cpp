@@ -71,6 +71,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GPTBigCodeForCausalLM": "starcoder",
     "GPTNeoXForCausalLM": "gptneox",
     "GPTRefactForCausalLM": "refact",
+    "DiffusionGemmaForBlockDiffusion": "gemma",
     "Gemma2ForCausalLM": "gemma",
     "Gemma3ForCausalLM": "gemma",
     "Gemma3ForConditionalGeneration": "gemma",

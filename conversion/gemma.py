@@ -805,6 +805,70 @@ class Gemma4AssistantModel(Gemma4Model):
         self.gguf_writer.add_nextn_predict_layers(self.block_count)
 
 
+@ModelBase.register("DiffusionGemmaForBlockDiffusion")
+class DiffusionGemmaModel(Gemma4Model):
+    model_arch = gguf.MODEL_ARCH.DIFFUSION_GEMMA
+
+    def set_gguf_parameters(self):
+        # Call Gemma3Model explicitly to skip Gemma4's num_kv_shared_layers requirement
+        Gemma3Model.set_gguf_parameters(self)
+
+        hparams = self.hparams
+
+        swa_layers = [t == "sliding_attention" for t in hparams["layer_types"]]
+        self.gguf_writer.add_sliding_window_pattern(swa_layers)
+
+        head_dim_full = hparams["global_head_dim"]
+        head_dim_swa = hparams["head_dim"]
+        self.gguf_writer.add_key_length(head_dim_full)
+        self.gguf_writer.add_value_length(head_dim_full)
+        self.gguf_writer.add_key_length_swa(head_dim_swa)
+        self.gguf_writer.add_value_length_swa(head_dim_swa)
+
+        expert_intermediate_size = self.find_hparam(["expert_intermediate_size", "moe_intermediate_size"])
+        if expert_intermediate_size is not None:
+            self.gguf_writer.add_expert_feed_forward_length(expert_intermediate_size)
+
+        num_key_value_heads_full = hparams.get("num_global_key_value_heads")
+        num_key_value_heads_swa = hparams.get("num_key_value_heads")
+        if num_key_value_heads_full is not None and num_key_value_heads_swa is not None:
+            kv_arr = [num_key_value_heads_swa if is_swa else num_key_value_heads_full for is_swa in swa_layers]
+            self.gguf_writer.add_head_count_kv(kv_arr)
+
+        rope_params_full = hparams["rope_parameters"]["full_attention"]
+        partial_rotary_factor_full = rope_params_full.get("partial_rotary_factor", 1.0)
+        n_rot_full = int(head_dim_full * partial_rotary_factor_full)
+        partial_rotary_factor_swa = hparams.get("partial_rotary_factor", 1.0)
+        n_rot_swa = int(head_dim_swa * partial_rotary_factor_swa)
+        self.gguf_writer.add_rope_dimension_count(n_rot_full)
+        self.gguf_writer.add_rope_dimension_count_swa(n_rot_swa)
+
+        self.gguf_writer.add_diffusion_canvas_length(hparams.get("canvas_length", 256))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Skip vision encoder tensors (not yet ported)
+        if name.startswith(("model.encoder.vision_tower.", "model.encoder.embed_vision.")):
+            return None
+
+        # Normalize HF decoder-prefix paths to the flat naming convention expected by tensor_mapping
+        if name.startswith("model.decoder.layers."):
+            name = "model.layers." + name[len("model.decoder.layers."):]
+        elif name.startswith("model.decoder.embed_tokens."):
+            name = "model.embed_tokens." + name[len("model.decoder.embed_tokens."):]
+        elif name.startswith("model.decoder.norm."):
+            name = "model.norm." + name[len("model.decoder.norm."):]
+        # self-conditioning tensors (model.decoder.self_conditioning.*) pass through unchanged
+        elif name.startswith("model.encoder.language_model.layers."):
+            name = "model.encoder.layers." + name[len("model.encoder.language_model.layers."):]
+        elif name.startswith("model.encoder."):
+            return None  # skip remaining encoder tensors
+
+        return super().filter_tensors((name, gen))
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True
