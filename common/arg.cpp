@@ -3799,6 +3799,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
+        {"--spec-ensemble"},
+        "with 2+ --spec-type drafters, run ALL of them every step and keep the longest draft\n"
+        "  (\"pick-longest\" ensemble) instead of the default priority-order cascade (default: off)",
+        [](common_params & params) {
+            params.speculative.ensemble_pick_longest = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_ENSEMBLE"));
+    add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
         [](common_params & params, int value) {

@@ -2116,6 +2116,11 @@ struct common_speculative {
 
     // which implementaion was used for a given seq_id
     std::vector<common_speculative_impl *> impl_last;
+
+    // TODO 117: when true and 2+ impls are configured, common_speculative_draft() runs every impl
+    // and keeps the longest proposal per seq ("pick-longest" ensemble) instead of the priority
+    // cascade. Set from common_params_speculative::ensemble_pick_longest at init. Default false.
+    bool ensemble_pick_longest = false;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -2442,6 +2447,18 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         /* .impl_last = */ std::vector<common_speculative_impl *>(n_seq, nullptr)
     };
 
+    // TODO 117: opt-in "pick-longest" ensemble. Only meaningful with 2+ drafters; with a single
+    // drafter it is identical to the cascade, so leave it off to avoid the extra per-step bookkeeping.
+    result->ensemble_pick_longest = params.ensemble_pick_longest && result->impls.size() > 1;
+    if (params.ensemble_pick_longest && result->impls.size() <= 1) {
+        LOG_WRN("%s: --spec-ensemble ignored: needs 2+ --spec-type drafters (have %zu)\n",
+                __func__, result->impls.size());
+    }
+    if (result->ensemble_pick_longest) {
+        LOG_INF("%s: speculative ensemble = pick-longest over %zu drafters\n",
+                __func__, result->impls.size());
+    }
+
     return result;
 }
 
@@ -2545,28 +2562,10 @@ bool common_speculative_need_embd_nextn(common_speculative * spec) {
     return false;
 }
 
-void common_speculative_draft(common_speculative * spec) {
-    if (spec == nullptr) {
-        return;
-    }
-
+// default policy: run impls in priority order; the first to fill a non-empty draft for a seq wins,
+// and later impls skip that seq (they are still broadcast accept() with is_other=true).
+static void common_speculative_draft_cascade(common_speculative * spec) {
     auto & dparams = spec->dparams;
-
-    {
-        int n_drafting = 0;
-
-        for (auto & dp : dparams) {
-            GGML_ASSERT(!dp.drafting || dp.result->empty());
-
-            if (dp.drafting) {
-                n_drafting++;
-            }
-        }
-
-        if (n_drafting == 0) {
-            return;
-        }
-    }
 
     for (auto & impl : spec->impls) {
         {
@@ -2623,6 +2622,117 @@ void common_speculative_draft(common_speculative * spec) {
         if (dp.drafting) {
             dp.drafting = false;
         }
+    }
+}
+
+// TODO 117: "pick-longest" ensemble policy. Run EVERY impl against the same set of drafting seqs
+// each step (re-arming `drafting` between impls so none are skipped) and keep the longest proposal
+// per seq. Ties keep the higher-priority (earlier) impl. The losing impls already had draft() called
+// and are broadcast accept(is_other=true) by common_speculative_accept(), exactly as in the cascade;
+// the stateful impls (e.g. MTP) re-sync their draft state from the real accepted batch in process(),
+// so discarding their proposal here is safe.
+static void common_speculative_draft_ensemble(common_speculative * spec) {
+    auto & dparams = spec->dparams;
+    const size_t n = dparams.size();
+
+    // seqs that requested a draft at entry; each impl is re-armed against exactly this set
+    std::vector<bool>                      active(n, false);
+    std::vector<llama_tokens>              best(n);
+    std::vector<common_speculative_impl *> best_impl(n, nullptr);
+
+    for (size_t s = 0; s < n; ++s) {
+        active[s] = dparams[s].drafting;
+    }
+
+    for (auto & impl : spec->impls) {
+        // re-arm every originally-drafting seq so this impl proposes for all of them, on a clean buffer
+        for (size_t s = 0; s < n; ++s) {
+            dparams[s].drafting = active[s];
+            if (active[s]) {
+                dparams[s].result->clear();
+            }
+        }
+
+        {
+            common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
+            impl->draft(dparams);
+            impl->n_call_draft++;
+        }
+
+        // snapshot this impl's proposals; keep the longest per seq (copy out before it is overwritten)
+        for (size_t s = 0; s < n; ++s) {
+            if (!active[s]) {
+                continue;
+            }
+
+            auto & result = *dparams[s].result;
+
+            if (dparams[s].n_max > 0 && (int) result.size() > dparams[s].n_max) {
+                result.resize(dparams[s].n_max);
+            }
+
+            if (!result.empty() && result.size() > best[s].size()) {
+                best[s]      = result;
+                best_impl[s] = impl.get();
+            }
+        }
+    }
+
+    // commit the winning proposal per seq back into the caller-owned result buffer
+    for (size_t s = 0; s < n; ++s) {
+        auto & dp = dparams[s];
+
+        if (!active[s]) {
+            continue; // never armed this seq -> leave its result untouched (matches the cascade)
+        }
+
+        dp.drafting = false;
+
+        auto & result = *dp.result;
+        result.clear();
+
+        if (best_impl[s] == nullptr) {
+            continue; // armed but no impl drafted -> empty result
+        }
+
+        result = best[s];
+        spec->impl_last[s] = best_impl[s];
+
+        best_impl[s]->n_gen_drafts++;
+        best_impl[s]->n_gen_tokens += result.size();
+
+        LOG_DBG("%s: ensemble winner impl %s, gen = %zu tokens\n", __func__,
+                common_speculative_type_to_str(best_impl[s]->type).c_str(), result.size());
+    }
+}
+
+void common_speculative_draft(common_speculative * spec) {
+    if (spec == nullptr) {
+        return;
+    }
+
+    auto & dparams = spec->dparams;
+
+    {
+        int n_drafting = 0;
+
+        for (auto & dp : dparams) {
+            GGML_ASSERT(!dp.drafting || dp.result->empty());
+
+            if (dp.drafting) {
+                n_drafting++;
+            }
+        }
+
+        if (n_drafting == 0) {
+            return;
+        }
+    }
+
+    if (spec->ensemble_pick_longest) {
+        common_speculative_draft_ensemble(spec);
+    } else {
+        common_speculative_draft_cascade(spec);
     }
 }
 
