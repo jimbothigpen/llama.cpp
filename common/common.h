@@ -378,6 +378,12 @@ struct common_params_speculative {
     int32_t phantom_buffers    = 2;     // ghost buffer ring slots (0 = disabled)
     int32_t phantom_bloom_bits = 16384; // bloom filter size in bits
 
+    // ensemble (TODO 117): when multiple --spec-type drafters are configured, run ALL of them
+    // every step and keep the longest proposal ("pick-longest" true ensemble) instead of the
+    // default priority-order cascade (first non-empty draft wins, later drafters skipped).
+    // Opt-in; default false preserves the cascade. Ties keep the higher-priority (earlier) drafter.
+    bool ensemble_pick_longest = false;
+
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
     }

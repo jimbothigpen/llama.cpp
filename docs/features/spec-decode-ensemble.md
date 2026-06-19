@@ -65,12 +65,20 @@ throughput is still higher.
   better of its two arms — it is Pareto-safe.
 - **Default unchanged.** Do not change the global default to the cascade — n-gram's benefit is
   workload-specific and would surprise non-repetitive users.
-- **Pick-longest not built.** A "true ensemble" running both arms each step and taking the
-  longer draft is strictly dominated by the cascade: it forces the MTP forward pass even on
-  n-gram-hit steps, making it slower. Not implemented.
+- **Pick-longest (opt-in, `--spec-ensemble`).** A "true ensemble" running *both* arms every step
+  and keeping the longer draft per seq (ties keep the higher-priority arm). Enabled with
+  `--spec-ensemble` on top of a 2+ `--spec-type` list; the default remains the priority cascade.
+  It forces the neural forward pass even on n-gram-hit steps, so for *throughput* it is generally
+  dominated by the cascade (per the benchmark rationale above) — use it only when you specifically
+  want max draft length per step rather than min latency. Correctness is identical: greedy output
+  is character-for-character the same as the cascade. The losing arm each step is still broadcast
+  `accept(is_other=true)`, and stateful arms (MTP) re-sync from the real accepted batch in
+  `process()`, so discarding their proposal is safe. Implemented in
+  `common_speculative_draft_ensemble()` (TODO 117).
 
 ## Related
 
-- `common/speculative.cpp` — `common_speculative_draft()` cascade dispatch (line ~2336)
+- `common/speculative.cpp` — `common_speculative_draft()` dispatch → `_cascade` (default) /
+  `_ensemble` (pick-longest, `--spec-ensemble`)
 - `docs/features/mtp.md` — MTP speculative decoding
 - TODO 117 measurement data: `kernel-work/worker-scratch/117-ngram-neural-ensemble-2026-06-12/`
