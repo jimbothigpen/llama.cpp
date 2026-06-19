@@ -3,7 +3,10 @@
 void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
+    // Accept both key variants: local GGUFs emit LLM_KV_EAGLE3_EXTRACT_LAYERS (%s.eagle3.extract_layers)
+    // while upstream/mainline uses LLM_KV_TARGET_LAYERS (%s.target_layers)
+    if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false) &&
+        !ml.get_arr(LLM_KV_EAGLE3_EXTRACT_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("EAGLE3 model requires 'extract_layers' in GGUF metadata");
     }
     if (target_layer_ids.size() != 3) {
