@@ -953,6 +953,197 @@ size_t quantize_turboq8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrows * row_size;
 }
 
+/* ---------- TURBOQ5_0 / TURBOQ6_0: 5-/6-bit uniform grid + per-block absmax (no QJL) ----------
+ * Invented ygg TODO 250. Same unified codec design as TURBOQ8_0 (byte-identical to the GPU
+ * encode in set-rows.cu / turbo-quant.cuh), only the grid resolution and index packing differ.
+ * 5-bit: 32 levels, centroid[i]=(i-15.5)/15.5; 6-bit: 64 levels, centroid[i]=(i-31.5)/31.5.
+ * Index split (q5_0/q6_K-style) for cheap single-element device decode: low 4 bits in qs (nibble
+ * packed), high bit(s) in qh. The per-block absmax scale is folded into the stored norm.          */
+
+void quantize_row_turboq5_0_ref(const float * GGML_RESTRICT x, block_turboq5_0 * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ5 == 0);
+    const int nb = k / QK_TURBOQ5;
+    const int d  = QK_TURBOQ5;  /* == TURBO_D == 128 */
+
+    for (int block = 0; block < nb; block++) {
+        const float * src = x + block * d;
+
+        /* Step 1: extract L2 norm */
+        float norm_sq = 0.0f;
+        for (int i = 0; i < d; i++) norm_sq += src[i] * src[i];
+        const float norm = sqrtf(norm_sq);
+
+        /* Step 2: normalize */
+        float normalized[TURBO_D];
+        if (norm > 1e-10f) {
+            const float inv = 1.0f / norm;
+            for (int i = 0; i < d; i++) normalized[i] = src[i] * inv;
+        } else {
+            memset(normalized, 0, d * sizeof(float));
+        }
+
+        /* Step 3: forward FWHT rotation */
+        float rotated[TURBO_D];
+        matvec(turbo_rotation, normalized, rotated, d);
+
+        /* Step 4: per-block absmax → uniform 32-level grid */
+        float absmax = 0.0f;
+        for (int i = 0; i < d; i++) {
+            const float a = fabsf(rotated[i]);
+            if (a > absmax) absmax = a;
+        }
+        const float scale     = absmax > 1e-10f ? absmax : 1e-10f;
+        const float inv_scale = 1.0f / scale;
+        memset(y[block].qs, 0, sizeof(y[block].qs));
+        memset(y[block].qh, 0, sizeof(y[block].qh));
+        for (int i = 0; i < d; i++) {
+            int idx = (int)lrintf(rotated[i] * inv_scale * 15.5f + 15.5f);
+            idx = idx < 0 ? 0 : (idx > 31 ? 31 : idx);
+            y[block].qs[i / 2] |= (uint8_t)((idx & 0xF) << ((i & 1) * 4));
+            if (idx & 0x10) y[block].qh[i / 8] |= (uint8_t)(1u << (i & 7));
+        }
+
+        /* Step 5: stored norm folds in the absmax scale (decode = centroid*norm) */
+        y[block].norm = GGML_FP32_TO_FP16(norm * scale);
+    }
+}
+
+void dequantize_row_turboq5_0(const block_turboq5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ5 == 0);
+    const int nb = k / QK_TURBOQ5;
+    const int d  = QK_TURBOQ5;
+
+    for (int block = 0; block < nb; block++) {
+        const float norm = GGML_FP16_TO_FP32(x[block].norm);
+
+        /* Reconstruct in rotated domain via the uniform 32-level grid */
+        float rotated_recon[TURBO_D];
+        for (int i = 0; i < d; i++) {
+            const uint8_t lo  = (x[block].qs[i / 2] >> ((i & 1) * 4)) & 0xF;
+            const uint8_t hi  = (x[block].qh[i / 8] >> (i & 7)) & 0x1;
+            const int     idx = lo | (hi << 4);
+            rotated_recon[i]  = ((float)idx - 15.5f) * (1.0f / 15.5f);
+        }
+
+        /* Inverse rotate, then scale by stored norm */
+        float * dst = y + block * d;
+        matvec(turbo_rotation_t, rotated_recon, dst, d);
+        for (int i = 0; i < d; i++) dst[i] *= norm;
+    }
+}
+
+size_t quantize_turboq5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                          int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBOQ5 == 0);
+
+    size_t row_size = (n_per_row / QK_TURBOQ5) * sizeof(block_turboq5_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_turboq5_0_ref(
+            src + row * n_per_row,
+            (block_turboq5_0 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
+void quantize_row_turboq6_0_ref(const float * GGML_RESTRICT x, block_turboq6_0 * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ6 == 0);
+    const int nb = k / QK_TURBOQ6;
+    const int d  = QK_TURBOQ6;  /* == TURBO_D == 128 */
+
+    for (int block = 0; block < nb; block++) {
+        const float * src = x + block * d;
+
+        /* Step 1: extract L2 norm */
+        float norm_sq = 0.0f;
+        for (int i = 0; i < d; i++) norm_sq += src[i] * src[i];
+        const float norm = sqrtf(norm_sq);
+
+        /* Step 2: normalize */
+        float normalized[TURBO_D];
+        if (norm > 1e-10f) {
+            const float inv = 1.0f / norm;
+            for (int i = 0; i < d; i++) normalized[i] = src[i] * inv;
+        } else {
+            memset(normalized, 0, d * sizeof(float));
+        }
+
+        /* Step 3: forward FWHT rotation */
+        float rotated[TURBO_D];
+        matvec(turbo_rotation, normalized, rotated, d);
+
+        /* Step 4: per-block absmax → uniform 64-level grid */
+        float absmax = 0.0f;
+        for (int i = 0; i < d; i++) {
+            const float a = fabsf(rotated[i]);
+            if (a > absmax) absmax = a;
+        }
+        const float scale     = absmax > 1e-10f ? absmax : 1e-10f;
+        const float inv_scale = 1.0f / scale;
+        memset(y[block].qs, 0, sizeof(y[block].qs));
+        memset(y[block].qh, 0, sizeof(y[block].qh));
+        for (int i = 0; i < d; i++) {
+            int idx = (int)lrintf(rotated[i] * inv_scale * 31.5f + 31.5f);
+            idx = idx < 0 ? 0 : (idx > 63 ? 63 : idx);
+            y[block].qs[i / 2] |= (uint8_t)((idx & 0xF) << ((i & 1) * 4));
+            y[block].qh[i / 4] |= (uint8_t)(((idx >> 4) & 0x3) << ((i & 3) * 2));
+        }
+
+        /* Step 5: stored norm folds in the absmax scale (decode = centroid*norm) */
+        y[block].norm = GGML_FP32_TO_FP16(norm * scale);
+    }
+}
+
+void dequantize_row_turboq6_0(const block_turboq6_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    turbo_init_rotation();
+
+    assert(k % QK_TURBOQ6 == 0);
+    const int nb = k / QK_TURBOQ6;
+    const int d  = QK_TURBOQ6;
+
+    for (int block = 0; block < nb; block++) {
+        const float norm = GGML_FP16_TO_FP32(x[block].norm);
+
+        /* Reconstruct in rotated domain via the uniform 64-level grid */
+        float rotated_recon[TURBO_D];
+        for (int i = 0; i < d; i++) {
+            const uint8_t lo  = (x[block].qs[i / 2] >> ((i & 1) * 4)) & 0xF;
+            const uint8_t hi  = (x[block].qh[i / 4] >> ((i & 3) * 2)) & 0x3;
+            const int     idx = lo | (hi << 4);
+            rotated_recon[i]  = ((float)idx - 31.5f) * (1.0f / 31.5f);
+        }
+
+        /* Inverse rotate, then scale by stored norm */
+        float * dst = y + block * d;
+        matvec(turbo_rotation_t, rotated_recon, dst, d);
+        for (int i = 0; i < d; i++) dst[i] *= norm;
+    }
+}
+
+size_t quantize_turboq6_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                          int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBOQ6 == 0);
+
+    size_t row_size = (n_per_row / QK_TURBOQ6) * sizeof(block_turboq6_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_turboq6_0_ref(
+            src + row * n_per_row,
+            (block_turboq6_0 *)((char *)dst + row * row_size),
+            n_per_row
+        );
+    }
+    return nrows * row_size;
+}
+
 /* ================================================================== */
 /* WHT3_0 / WHT4_0: WHT-rotated weight quantization                  */
 /* ================================================================== */

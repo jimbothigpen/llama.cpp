@@ -778,6 +778,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_turboq8_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turboq8_0_ref,
     },
+    [GGML_TYPE_TURBOQ5_0] = {
+        .type_name                = "turboq5",
+        .blck_size                = QK_TURBOQ5,
+        .type_size                = sizeof(block_turboq5_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turboq5_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turboq5_0_ref,
+    },
+    [GGML_TYPE_TURBOQ6_0] = {
+        .type_name                = "turboq6",
+        .blck_size                = QK_TURBOQ6,
+        .type_size                = sizeof(block_turboq6_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turboq6_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_turboq6_0_ref,
+    },
     [GGML_TYPE_TURBOQ2_TCQ] = {
         .type_name                = "turboq2_tcq",
         .blck_size                = QK_TURBOQ2_TCQ,
@@ -8115,6 +8131,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBOQ3_0: result = quantize_turboq3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ4_0: result = quantize_turboq4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ8_0: result = quantize_turboq8_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBOQ5_0: result = quantize_turboq5_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TURBOQ6_0: result = quantize_turboq6_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ2_TCQ: result = quantize_turboq2_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ3_TCQ: result = quantize_turboq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_KV_OSCAR_INT2: result = quantize_kv_oscar_int2(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

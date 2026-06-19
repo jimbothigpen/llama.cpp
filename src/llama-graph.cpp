@@ -2265,7 +2265,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         // TurboQuant: inverse WHT on FA output when V values are WHT-rotated.
         // The FA kernel does inline V dequant but does NOT un-rotate; that's done here.
-        if (v->type == GGML_TYPE_TURBOQ2_0 || v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0 || v->type == GGML_TYPE_TURBOQ8_0 || v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ) {
+        if (v->type == GGML_TYPE_TURBOQ2_0 || v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0 || v->type == GGML_TYPE_TURBOQ8_0 || v->type == GGML_TYPE_TURBOQ5_0 || v->type == GGML_TYPE_TURBOQ6_0 || v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ) {
             if (cur->ne[0] % 128 == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
                 cur = ggml_turbo_wht(ctx0, cur, 1);  // 1 = inverse
@@ -2339,7 +2339,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cb(kqv, "kqv", il);
 
         // TurboQuant: inverse WHT on attention output (non-FA path)
-        if (v->type == GGML_TYPE_TURBOQ2_0 || v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0 || v->type == GGML_TYPE_TURBOQ8_0 || v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ) {
+        if (v->type == GGML_TYPE_TURBOQ2_0 || v->type == GGML_TYPE_TURBOQ3_0 || v->type == GGML_TYPE_TURBOQ4_0 || v->type == GGML_TYPE_TURBOQ8_0 || v->type == GGML_TYPE_TURBOQ5_0 || v->type == GGML_TYPE_TURBOQ6_0 || v->type == GGML_TYPE_TURBOQ2_TCQ || v->type == GGML_TYPE_TURBOQ3_TCQ) {
             if (kqv->ne[0] % 128 == 0) {
                 if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
                 kqv = ggml_turbo_wht(ctx0, kqv, 1);
@@ -2569,7 +2569,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // TurboQuant pre-rotate-queries: O(d log d) WHT rotation via custom op
     // When K is WHT-rotated (turboq3/turboq4), Q must also be rotated for
     // <Q_rot, K_rot> = <Q, K> to hold and produce correct attention scores.
-    if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ8_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ) {
+    if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ8_0 || k->type == GGML_TYPE_TURBOQ5_0 || k->type == GGML_TYPE_TURBOQ6_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ) {
         if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
         // InnerQ×TCQ hybrid: for TCQ K types, when InnerQ is ACTIVE the TCQ encode
         // pre-scales K[j] by d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by

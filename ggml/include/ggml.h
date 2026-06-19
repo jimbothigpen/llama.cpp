@@ -434,7 +434,8 @@ extern "C" {
         GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 4-bit PolarQuant (default TURBOQ4_USE_4BIT=1; legacy 3-bit+QJL mode via TURBOQ4_USE_4BIT=0)
         GGML_TYPE_TURBOQ8_0 = 63, // TurboQuant 8-bit KV cache: FWHT + uniform 256-level grid + per-block absmax, no QJL (source: buun TURBO8_0)
-        // slots 64–65 reserved for yggdrasil future TurboQuant variants — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_TURBOQ5_0 = 64, // TurboQuant 5-bit KV cache: FWHT + uniform 32-level grid + per-block absmax, no QJL (invented ygg TODO 250)
+        GGML_TYPE_TURBOQ6_0 = 65, // TurboQuant 6-bit KV cache: FWHT + uniform 64-level grid + per-block absmax, no QJL (invented ygg TODO 250)
         GGML_TYPE_TURBOQ2_TCQ = 66, // TurboQuant 2-bit KV cache: TCQ (k=2, L=8, 256 states) — source: buun TURBO2_TCQ
         GGML_TYPE_TURBOQ3_TCQ = 67, // TurboQuant 3-bit KV cache: TCQ (k=3, L=9, 512 states, Viterbi) — source: buun TURBO3_TCQ
         // slots 68-70 retired/reserved — were GGML_TYPE_TURBOQ2_INNERQ/TURBOQ3_INNERQ/TURBOQ4_INNERQ (InnerQ K-cache
