@@ -3165,7 +3165,24 @@ private:
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa - (has_new_tokens ? 0 : 1));
 
-                            if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
+                            // [TODO 242] When the whole cached prompt matches the request
+                            // (n_past == slot.prompt.n_tokens() == slot.task->n_tokens()), the
+                            // [TAG_PROMPT_LOGITS] guard below still decrements n_past to force
+                            // re-evaluating at least one token. On a FULL seq-rm context
+                            // (hybrid/recurrent with n_rs_seq == 0) that 1-token rollback cannot be
+                            // served by llama_memory_seq_rm — the recurrent state can only be rewound
+                            // from a full-state checkpoint — so the truncation seq_rm below returns
+                            // false and common_context_seq_rm() GGML_ABORTs the whole server (seen
+                            // under agentic-worker load that re-sends identical contexts). Enter the
+                            // checkpoint-restore / reset path in that case too; the pos_min_thold "-1"
+                            // above already anticipates the decrement. Non-recurrent (PART) and
+                            // RS/SWA contexts are unaffected (condition unchanged for them).
+                            const bool full_match_needs_rewind =
+                                n_past == slot.task->n_tokens() &&
+                                (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                 ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+
+                            if (n_past > 0 && (n_past < slot.prompt.n_tokens() || full_match_needs_rewind)) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
