@@ -1628,9 +1628,15 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    // MTP-aware: ctx_type_to_embd_inp() returns the per-ctx-type input dim and falls back to
-    // hparams.n_embd_inp() for DEFAULT, which now also covers eagle3/DFlash encoder-feature input.
-    const int64_t n_embd  = ctx_type_to_embd_inp(hparams, cparams.ctx_type);
+    // Encoder input dim. MTP hook contexts feed h_nextn rows, so they use n_embd_out()
+    // (our self-spec divergence). All other contexts use mainline's n_embd_inp_enc(), which
+    // returns eagle3's concatenated 3-layer feature dim (set in eagle3.cpp via
+    // n_embd_inp_enc_impl) and falls back to n_embd_inp() for plain encoder models / DFlash.
+    // NOTE: only the encode() path needs the enc dim — the decode() path below keeps
+    // ctx_type_to_embd_inp() (token-embedding dim) since eagle3's feature input arrives via encode.
+    const int64_t n_embd  = (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP)
+        ? (int64_t) hparams.n_embd_out()
+        : (int64_t) hparams.n_embd_inp_enc();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
