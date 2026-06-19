@@ -7863,6 +7863,7 @@ static const ggml_type all_types[] = {
     GGML_TYPE_IQ4_NL, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_XS,
     GGML_TYPE_WHT3_0, GGML_TYPE_WHT4_0,
     GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ4_0,
+    GGML_TYPE_TURBOQ5_0, GGML_TYPE_TURBOQ6_0,
 };
 
 static const ggml_type base_types[] = {

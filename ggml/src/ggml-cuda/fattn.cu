@@ -409,6 +409,21 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ8_0, GGML_TYPE_TURBOQ3_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ8_0, GGML_TYPE_TURBOQ2_0)
 
+    // TurboQuant5/6 KV cache types (5-/6-bit uniform-grid + absmax, invented ygg TODO 250)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ5_0, GGML_TYPE_TURBOQ5_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ5_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,       GGML_TYPE_TURBOQ5_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ5_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ5_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ6_0, GGML_TYPE_TURBOQ6_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ6_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_F16,       GGML_TYPE_TURBOQ6_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ6_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q8_0,      GGML_TYPE_TURBOQ6_0)
+    // Asymmetric K=turboq6 × turboq5 V (K-bpw ≥ V-bpw)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ6_0, GGML_TYPE_TURBOQ5_0)
+    FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_TURBOQ5_0, GGML_TYPE_TURBOQ6_0)
+
     // Mixed Q5 K + TURBOQ V
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q5_1, GGML_TYPE_TURBOQ4_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q5_1, GGML_TYPE_TURBOQ3_0)
@@ -607,7 +622,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         // Allow mixed KV types for turbo + q8_0/f16/bf16 (FA template instances compiled in).
         auto is_kv_compat = [](ggml_type t) {
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
-                || t == GGML_TYPE_TURBOQ8_0
+                || t == GGML_TYPE_TURBOQ8_0 || t == GGML_TYPE_TURBOQ5_0 || t == GGML_TYPE_TURBOQ6_0
                 || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
                 || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
                 || t == GGML_TYPE_KV_OSCAR_INT2
@@ -638,11 +653,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:
         case GGML_TYPE_TURBOQ8_0:
+        case GGML_TYPE_TURBOQ5_0:
+        case GGML_TYPE_TURBOQ6_0:
         case GGML_TYPE_TURBOQ2_TCQ:
         case GGML_TYPE_TURBOQ3_TCQ:
         case GGML_TYPE_TURBOQ2_INNERQ:
         case GGML_TYPE_TURBOQ3_INNERQ:
-            // TURBOQ{2,3,4,8}_0 VEC kernels instantiated for D in {64, 128, 256, 512};
+            // TURBOQ{2,3,4,8,5,6}_0 VEC kernels instantiated for D in {64, 128, 256, 512};
             // TCQ and INNERQ top at D=256.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
@@ -668,7 +685,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // for turbo KV falls through to NONE (per buun 0d52fe00e bug #4).
     auto is_turbo_type = [](ggml_type t) {
         return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
-            || t == GGML_TYPE_TURBOQ8_0
+            || t == GGML_TYPE_TURBOQ8_0 || t == GGML_TYPE_TURBOQ5_0 || t == GGML_TYPE_TURBOQ6_0
             || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
             || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
             || t == GGML_TYPE_KV_OSCAR_INT2;  // OScaR INT2: VEC-only (Phase 1)

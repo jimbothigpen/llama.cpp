@@ -540,6 +540,12 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "turboq8") {
         return GGML_TYPE_TURBOQ8_0;
     }
+    if (s == "turboq5") {
+        return GGML_TYPE_TURBOQ5_0;
+    }
+    if (s == "turboq6") {
+        return GGML_TYPE_TURBOQ6_0;
+    }
     if (s == "turboq2_tcq") {
         return GGML_TYPE_TURBOQ2_TCQ;
     }

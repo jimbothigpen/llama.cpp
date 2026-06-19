@@ -385,6 +385,33 @@ typedef struct {
 } block_turboq8_0;                      // 130 bytes total
 static_assert(sizeof(block_turboq8_0) == sizeof(ggml_half) + QK_TURBOQ8, "wrong turboq8_0 block size/padding");
 static_assert(QK_TURBOQ8 == 128, "turboq8 kernels assume QK_TURBOQ8 == 128");
+
+// TURBOQ5_0: 5-bit, uniform 32-level grid centroid[i]=(i-15.5)/15.5 + per-block absmax scale, no QJL.
+// Invented ygg TODO 250. Same FWHT+absmax design as turboq8, lower bit-width via a 5-bit index split
+// (q5_0-style lo/hi packing for cheap single-element device decode): low 4 bits in qs, high 1 bit in qh.
+// Per block: norm(fp16) + qs(64 bytes, low nibble) + qh(16 bytes, 1 hi bit, 8/byte)
+// = 82 bytes per 128 values = 5.125 bits/value.
+#define QK_TURBOQ5 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: grp_norm * per-block absmax scale
+    uint8_t    qs[QK_TURBOQ5 / 2];      // 64 bytes: low 4 bits of the 5-bit index (nibble packed)
+    uint8_t    qh[QK_TURBOQ5 / 8];      // 16 bytes: high 1 bit of the 5-bit index (8 per byte)
+} block_turboq5_0;                      // 82 bytes total
+static_assert(sizeof(block_turboq5_0) == sizeof(ggml_half) + QK_TURBOQ5/2 + QK_TURBOQ5/8, "wrong turboq5_0 block size/padding");
+static_assert(QK_TURBOQ5 == 128, "turboq5 kernels assume QK_TURBOQ5 == 128");
+
+// TURBOQ6_0: 6-bit, uniform 64-level grid centroid[i]=(i-31.5)/31.5 + per-block absmax scale, no QJL.
+// Invented ygg TODO 250. Same design as turboq5; 6-bit index split: low 4 bits in qs, high 2 bits in qh.
+// Per block: norm(fp16) + qs(64 bytes, low nibble) + qh(32 bytes, 2 hi bits, 4/byte)
+// = 98 bytes per 128 values = 6.125 bits/value.
+#define QK_TURBOQ6 128
+typedef struct {
+    ggml_half  norm;                    //  2 bytes: grp_norm * per-block absmax scale
+    uint8_t    qs[QK_TURBOQ6 / 2];      // 64 bytes: low 4 bits of the 6-bit index (nibble packed)
+    uint8_t    qh[QK_TURBOQ6 / 4];      // 32 bytes: high 2 bits of the 6-bit index (4 per byte)
+} block_turboq6_0;                      // 98 bytes total
+static_assert(sizeof(block_turboq6_0) == sizeof(ggml_half) + QK_TURBOQ6/2 + QK_TURBOQ6/4, "wrong turboq6_0 block size/padding");
+static_assert(QK_TURBOQ6 == 128, "turboq6 kernels assume QK_TURBOQ6 == 128");
 // WHT3_0: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max for N(0,1))
 // Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
 // Per block: d0(fp16) + d1(fp16) + 3-bit indices packed (12 bytes) = 16 bytes per 32 values
