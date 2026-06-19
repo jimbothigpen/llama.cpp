@@ -63,6 +63,46 @@ cost proportional to the window size.
 
 ---
 
+## Streaming & K-shift safety
+
+OScaR stores K in the **FWHT-rotated** domain. The KV-cache **K-shift** path —
+the RoPE-on-cache that fires when a context window slides or cells are removed
+during long/streaming generation — must therefore *not* RoPE the rotated K
+directly. The shift graph for `kv_oscar_int2` layers does:
+
+```
+dequant (raw INT2 block → f32, still rotated)
+  → inverse-WHT   (mul_mat by the Hadamard H, H²=I)
+  → RoPE delta
+  → forward-WHT   (mul_mat by the same H)
+  → requant       (raw INT2 block, no WHT)
+```
+
+The Hadamard `H` is the normalized Sylvester matrix (`ggml_gen_hadamard`,
+`H² = I`) sized to `n_embd_head_k`; it is exactly the inverse of the per-head
+FWHT applied at encode time, so un-rotate → RoPE → re-rotate is correct. Dequant
+and requant are pure min-max INT2 block codecs and apply **no** WHT of their own
+(`dequantize_row_kv_oscar_int2` / `quantize_row_kv_oscar_int2_ref`). This is
+wired in `llama-kv-cache.cpp` (`k_oscar_rot`, `build_rope_shift`).
+
+**Current behavior for the OScaR target model (Qwen3.5).** Qwen3.5 / Qwen3.5-MoE
+use interleaved multi-axis RoPE (`LLAMA_ROPE_TYPE_IMROPE`, `n_pos_per_embd() ==
+4`). The cache reports `get_can_shift() == false` for any model with
+`n_pos_per_embd() > 1`, so **KV-cache shifting is disabled** for these archs:
+when the context fills, generation **stops** ("context full and context shift is
+disabled => stopping") rather than rope-shifting the cache. Consequently the
+OScaR K-shift path **cannot be reached** on Qwen3.5, and there is **no K-shift
+corruption risk** — streaming is safe by construction.
+
+The un-rotate/re-rotate shift code above is therefore **dormant** for IMROPE/MROPE
+models. It remains present and correct for NEOX-rope models whose `head_dim` is a
+power of two within the OScaR WHT envelope (≤ 256). It is **not** exercised by any
+current shipping model (Qwen3.5 = IMROPE; Step-3.x = `STEP35` which also returns
+`get_can_shift() == false`; Gemma4 = NEOX but `head_dim` 512 exceeds the 256-pt
+WHT cap).
+
+---
+
 ## PPL results
 
 **Qwen3.5-9B-Q4_K_M** (Phase 1 gate, gfx1150, wikitext-2-raw-test):
