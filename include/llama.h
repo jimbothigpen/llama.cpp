@@ -475,6 +475,49 @@ extern "C" {
         const char * content;
     } llama_chat_message;
 
+    // KV cache compaction (Attention Matching).
+    // Ported from jandhyala-dev/modelai-llama.cpp. Build-gated behind the
+    // LLAMA_KV_COMPACTION CMake option (default OFF in this fork). When the
+    // feature is compiled out, the functions below resolve to stubs (see
+    // llama-kv-compact-stubs.cpp). First-landing slice exposes SELECT only;
+    // SOLVER/OMP/NONUNIFORM/CHUNKED are accepted by the API but not yet
+    // implemented and return failure.
+    enum llama_compact_method {
+        LLAMA_COMPACT_METHOD_SELECT     = 0, // keep earliest N, zero beta; FA-compatible
+        LLAMA_COMPACT_METHOD_SOLVER     = 1, // score-based selection + beta/C_v fitting
+        LLAMA_COMPACT_METHOD_OMP        = 2, // orthogonal matching pursuit + solver
+        LLAMA_COMPACT_METHOD_NONUNIFORM = 3, // per-head budget allocation + solver
+        LLAMA_COMPACT_METHOD_CHUNKED    = 4, // chunked solver for long contexts
+    };
+
+    typedef struct llama_compact_params {
+        enum llama_compact_method method;
+        int32_t   target_tokens;      // explicit token budget (> 0), else derived from ratio
+        float     ratio;              // compaction ratio when target_tokens <= 0
+        int32_t   live_suffix_tokens; // most-recent tokens to keep live (uncompacted)
+        llama_pos p0;                 // first position eligible for compaction
+        uint32_t  max_queries;        // solver query budget (unused by SELECT)
+        int32_t   nnls_iters;         // solver NNLS iterations (unused by SELECT)
+        float     lambda;             // solver ridge term (unused by SELECT)
+        bool      reclaim;            // reclaim the live KV cells covered by the compaction
+    } llama_compact_params;
+
+    LLAMA_API struct llama_compact_params llama_compact_default_params(void);
+
+    // Compact the prefix of sequence seq_id. Returns the compacted-prefix token
+    // count, or -1 on failure / unsupported configuration.
+    LLAMA_API int32_t llama_kv_cache_compact(
+            struct llama_context * ctx,
+            llama_seq_id seq_id,
+            struct llama_compact_params params);
+
+    // Enable auto-compaction: when the KV cache fills during decode, automatically
+    // compact and retry. Set ratio <= 0 to disable.
+    LLAMA_API void llama_kv_cache_set_auto_compact(
+            struct llama_context * ctx,
+            float ratio,
+            struct llama_compact_params params);
+
     // lora adapter
     struct llama_adapter_lora;
 

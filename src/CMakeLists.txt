@@ -64,6 +64,22 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+# KV cache compaction (Attention Matching) — ported from jandhyala-dev/modelai-llama.cpp.
+# First-landing slice: SELECT method only. The deferred SOLVER/OMP/NONUNIFORM/CHUNKED
+# implementation files (solver/query/budget/select/self-study/on-policy/prefill-q/exec)
+# and the Darwin-only Metal/LAPACK linkage are intentionally NOT compiled here yet.
+# When OFF (default), only the stubs TU is built and the default build is byte-unaffected.
+if (LLAMA_KV_COMPACTION)
+    target_sources(llama PRIVATE
+        llama-kv-compacted-prefix.cpp
+        llama-kv-compact-api.cpp
+        llama-kv-compact-pipeline.cpp
+    )
+    target_compile_definitions(llama PUBLIC LLAMA_KV_COMPACTION)
+else()
+    target_sources(llama PRIVATE llama-kv-compact-stubs.cpp)
+endif()
+
 # TriAttention Phase C: GPU GQA scoring kernel (HIP).
 # Compiled only for ROCm/HIP builds; enables the TRIA_HIP_BACKEND path in
 # triattention-backend.c so g_tria_backend resolves to the real GPU kernels.

@@ -272,7 +272,30 @@ struct llama_context {
             int64_t                          ndata_in_loop,
             int64_t                          t_loop_start);
 
+#ifdef LLAMA_KV_COMPACTION
+    // KV cache compaction (Attention Matching) auto-compaction state. Set via
+    // llama_kv_cache_set_auto_compact(); consulted by the decode path (deferred
+    // follow-up — the first-landing slice stores but does not yet act on it).
+    bool                                auto_compact_enabled() const { return auto_compact_.enabled; }
+    float                               auto_compact_ratio()   const { return auto_compact_.ratio;   }
+    const struct llama_compact_params & auto_compact_params()  const { return auto_compact_.params;  }
+
+    void set_auto_compact(bool enabled, float ratio, struct llama_compact_params params) {
+        auto_compact_.enabled = enabled;
+        auto_compact_.ratio   = ratio;
+        auto_compact_.params  = params;
+    }
+#endif // LLAMA_KV_COMPACTION
+
 private:
+#ifdef LLAMA_KV_COMPACTION
+    struct {
+        bool                       enabled = false;
+        float                      ratio   = 0.0f;
+        struct llama_compact_params params  = llama_compact_default_params();
+    } auto_compact_;
+#endif // LLAMA_KV_COMPACTION
+
     //
     // output
     //

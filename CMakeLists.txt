@@ -122,6 +122,12 @@ option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when availab
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
+# KV cache compaction (Attention Matching) — ported from jandhyala-dev/modelai-llama.cpp.
+# Default OFF in this fork: when OFF the default build is byte-unaffected (only
+# llama-kv-compact-stubs.cpp is compiled, supplying no-op C-API symbols). When ON,
+# the first-landing slice compiles the SELECT pipeline (no LAPACK/Metal required).
+option(LLAMA_KV_COMPACTION "llama: enable KV cache compaction (SELECT first-landing slice)" OFF)
+
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)

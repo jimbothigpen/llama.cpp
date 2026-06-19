@@ -1,12 +1,24 @@
 #pragma once
 
 #include "llama-batch.h"
+#ifdef LLAMA_KV_COMPACTION
+#include "llama-kv-compacted-prefix.h"
+#endif
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
 
 #include <unordered_map>
 #include <vector>
+#ifdef LLAMA_KV_COMPACTION
+#include <string>
+#endif
+
+#ifdef LLAMA_KV_COMPACTION
+// KV cache compaction (Attention Matching) — forward decl of the pipeline stats
+// struct (defined in llama-kv-compact-pipeline.h).
+struct llama_kv_compact_pipeline_stats;
+#endif
 
 struct llama_cparams;
 struct llama_hparams;
@@ -113,9 +125,80 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share
+#ifdef LLAMA_KV_COMPACTION
+        ,                bool   enable_compacted_prefix = true
+#endif
+        );
 
     ~llama_kv_cache() = default;
+
+#ifdef LLAMA_KV_COMPACTION
+    //
+    // KV cache compaction (Attention Matching) — first-landing slice (SELECT only).
+    // Ported from jandhyala-dev/modelai-llama.cpp. The graph-execution path
+    // (set_input_compacted_prefix_*, resolve_compacted_prefix_exec) and the
+    // SOLVER/OMP/NONUNIFORM/CHUNKED methods are deferred follow-ups; the latter
+    // are declared here so the public C API dispatch links, but return false.
+    //
+
+    bool supports_compaction() const;
+    std::string compaction_unsupported_reason() const;
+
+    const llama_compacted_prefix_store * get_compacted_prefix() const { return &compacted_prefix; }
+    llama_compacted_prefix_store *       get_compacted_prefix()       { return &compacted_prefix; }
+
+    bool has_compacted_prefix() const;
+    const std::string & compacted_prefix_method() const;
+
+    bool compacted_prefix_configure(
+            llama_seq_id seq_id,
+            uint32_t logical_token_count,
+            const std::vector<llama_pos> & logical_positions,
+            llama_pos live_suffix_pos0);
+
+    void compacted_prefix_clear(llama_seq_id seq_id = -1, bool data = true);
+    bool compacted_prefix_enabled(llama_seq_id seq_id) const;
+    bool compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled);
+    bool compacted_prefix_execution_enabled(llama_seq_id seq_id) const;
+
+    bool compacted_prefix_reclaim_live_kv(llama_seq_id seq_id);
+
+    // SELECT: keep earliest target_tokens, zero beta (FA-compatible).
+    bool compacted_prefix_select_from_live_kv(
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0);
+
+    // Deferred solver-based methods (return false in this slice).
+    bool compacted_prefix_fit_from_live_kv(
+            llama_seq_id seq_id, uint32_t target_tokens, llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr, llama_pos p0 = 0,
+            uint32_t max_queries = 256, int nnls_iters = 2, float lambda = 1e-6f);
+    bool compacted_prefix_omp_from_live_kv(
+            llama_seq_id seq_id, uint32_t target_tokens, llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr, llama_pos p0 = 0,
+            uint32_t max_queries = 256, int nnls_iters = 2, float lambda = 1e-6f);
+    bool compacted_prefix_nonuniform_from_live_kv(
+            llama_seq_id seq_id, uint32_t target_tokens, llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr, uint32_t max_queries = 256,
+            int nnls_iters = 2, float lambda = 1e-6f, llama_pos p0 = 0);
+    bool compacted_prefix_chunked_from_live_kv(
+            llama_seq_id seq_id, uint32_t target_tokens, llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr, llama_pos p0 = 0,
+            uint32_t max_queries = 256, int nnls_iters = 2, float lambda = 1e-6f);
+
+    // Data access used by the SELECT pipeline.
+    bool compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const;
+    bool compacted_prefix_seq_positions(llama_seq_id seq_id, llama_pos p0, llama_pos p1,
+            std::vector<llama_pos> & out) const;
+    bool compacted_prefix_copy_k_head_f32(int32_t il, llama_seq_id seq_id, uint32_t head_kv,
+            const std::vector<llama_pos> & positions, std::vector<float> & out) const;
+    bool compacted_prefix_copy_v_head_f32(int32_t il, llama_seq_id seq_id, uint32_t head_kv,
+            const std::vector<llama_pos> & positions, std::vector<float> & out) const;
+#endif // LLAMA_KV_COMPACTION
 
     //
     // llama_memory_i
@@ -318,6 +401,18 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+#ifdef LLAMA_KV_COMPACTION
+    // KV cache compaction (Attention Matching) state + private helpers.
+    llama_compacted_prefix_store compacted_prefix;
+    uint64_t                     compacted_prefix_version_counter = 0;
+    std::string                  compacted_prefix_last_method     = "none";
+
+    bool compacted_prefix_runtime_supported() const;
+    bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id,
+            std::vector<uint32_t> & live_cell_idxs) const;
+    void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & keep_idxs);
+#endif // LLAMA_KV_COMPACTION
 
     size_t total_size() const;
 
