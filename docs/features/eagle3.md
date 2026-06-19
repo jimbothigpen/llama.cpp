@@ -288,3 +288,73 @@ absence of 3.1 checkpoint weights. Monitor upstream vLLM and EAGLE3 repositories
 | **Re-check trigger** | When EAGLE 3.1 checkpoint weights exist for Qwen3.5-9B (or current validated target) — compact-vocab loader (formerly tracked) is now RESOLVED (`b2766ef47`) |
 | **Cross-reference** | PR #18039 LANDED `b2766ef47` (compact-vocab, 2026-05-31); see §2 for ceiling explanation |
 | **Next step** | Monitor SafeAILab EAGLE and vLLM repositories for weight releases; import when available + validate accept on Qwen3.5-9B |
+
+---
+
+## §6 Model store — drafter GGUFs (TODO 239, 2026-06-19)
+
+All BF16 GGUFs rebuilt 2026-06-14 from new-schema converter (PR #18039 path A — keys
+`eagle3.target_layers` / `eagle3.target_hidden_size` / `eagle3.norm_before_residual`, no double
+prefix). Quant ladders rebuilt 2026-06-19 from those new-schema BF16s. Build: `819 (3ff8220f3)` on
+ai01 (gfx1103 ROCm). IQ3_M produced without imatrix — architecturally impossible for standalone
+eagle3 GGUFs (no `token_embd.weight` → llama-imatrix fails at tensor count check).
+
+### H1 — Qwen3.6-35B-A3B (EAGLE3.1 head, n_embd_tgt=2048)
+
+Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-eagle3-<q>.gguf`
+
+| Quant   | Size | BPW   | Magic      | Built      |
+|---------|------|-------|------------|------------|
+| BF16    | 408M | 16.00 | 47475546   | 2026-06-14 |
+| Q8_0    | 222M |  8.51 | 47475546   | 2026-06-19 |
+| Q4_K_M  | 148M |  3.67 | 47475546   | 2026-06-19 |
+| Q3_K_M  | 127M |  3.12 | 47475546   | 2026-06-19 |
+| IQ3_M   | 122M |  3.01 | 47475546   | 2026-06-19 |
+| Q2_K    | 112M |  2.76 | 47475546   | 2026-06-19 |
+
+Has `fc_norm.weight` tensor (EAGLE3.1 FC normalization). 15 tensors total.
+
+### H2 — Qwen3.5-9B (EAGLE3 head, n_embd_tgt=4096, compact-vocab d2t)
+
+Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.5-9B/Qwen3.5-9B-eagle3-<q>.gguf`
+
+| Quant   | Size | BPW   | Magic      | Built      |
+|---------|------|-------|------------|------------|
+| BF16    | 773M | 16.00 | 47475546   | 2026-06-14 |
+| Q8_0    | 416M |  8.51 | 47475546   | 2026-06-19 |
+| Q4_K_M  | 272M |  5.58 | 47475546   | 2026-06-19 |
+| Q3_K_M  | 234M |  4.69 | 47475546   | 2026-06-19 |
+| IQ3_M   | 227M |  4.54 | 47475546   | 2026-06-19 |
+| Q2_K    | 206M |  4.10 | 47475546   | 2026-06-19 |
+
+Has `d2t` tensor (compact-vocab 32K→248320 mapping). 14 tensors total.
+
+### H3 — Qwen3.5-35B-A3B (EAGLE3 head, n_embd_tgt=2048)
+
+Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-eagle3-<q>.gguf`
+
+| Quant  | Size | BPW   | Magic    | Built      |
+|--------|------|-------|----------|------------|
+| BF16   | 464M | 16.00 | 47475546 | 2026-06-14 |
+
+No quant ladder yet — target Qwen3.5-35B-A3B is not in active use; build on demand.
+
+### PRISM — Qwen3.6-27B (Ex0bit PRISM drafter, n_embd_tgt=2048, compact-vocab d2t)
+
+Path: `/mnt/cephfs/0/Container/models/Ex0bit/Qwen3.6-27B-PRISM-EAGLE3/Qwen3.6-27B-eagle3-<q>.gguf`
+
+| Quant  | Size | BPW   | Magic    | Built      |
+|--------|------|-------|----------|------------|
+| BF16   | 1.1G | 16.00 | 47475546 | 2026-06-14 |
+| Q8_0   | 569M |  8.51 | 47475546 | 2026-06-19 |
+| Q4_K_M | 368M |  5.51 | 47475546 | 2026-06-19 |
+| IQ3_M  | 303M |  4.54 | 47475546 | 2026-06-19 |
+
+Has `d2t` tensor (compact-vocab). 14 tensors total. Only 3-quant ladder (no Q3_K_M/Q2_K) — lower
+priority drafter.
+
+### Load-test results (2026-06-19, build 819)
+
+All 4 BF16 heads loaded successfully under `llama-gguf r` + `llama-quantize --dry-run`. New-schema
+keys confirmed present (`eagle3.target_layers`, `eagle3.target_hidden_size`,
+`eagle3.norm_before_residual`). No old double-prefix keys (`eagle3.eagle3.*`) detected.
