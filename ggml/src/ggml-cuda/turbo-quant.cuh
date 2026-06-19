@@ -75,6 +75,14 @@ static __device__ float TURBO_MID_2BIT[3] = {
     -0.086728f, 0.0f, 0.086728f
 };
 
+// TODO-243 Task 1 SPIKE: Turbo×OSCAR INT2 hybrid gate flag.
+// When non-zero, OScaR INT2 K (kv_oscar_int2) swaps its per-block min-max uniform
+// quantizer for the TurboQuant 2-bit PolarQuant centroids above (rotation front-end
+// kept identical). Defined in set-rows.cu; set once from env OSCAR_HYBRID_CENTROIDS.
+// Cross-TU symbol resolves via CUDA_SEPARABLE_COMPILATION (RDC). Flag off = byte-identical
+// plain OSCAR. SPIKE-only; productionization would use a distinct GGML_TYPE.
+extern __device__ int g_oscar_hybrid_centroids;
+
 // ---- 3-bit centroids (Lloyd-Max for N(0, 1/128)) ----
 
 static __device__ float TURBO_CENTROIDS_3BIT[8] = {

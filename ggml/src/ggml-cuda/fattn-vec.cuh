@@ -59,20 +59,39 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_oscar_int2(
 #pragma unroll
     for (int i = 0; i < D; i++) x[i] *= inv_sqrt_D;
 
-    // Step 3: For each QK_OSCAR_INT2-sized sub-block, dequant K and accumulate dot product
+    // Step 3: For each QK_OSCAR_INT2-sized sub-block, dequant K and accumulate dot product.
+    // TODO-243 Task 1 SPIKE: when g_oscar_hybrid_centroids is set the K back-end uses
+    // TurboQuant PolarQuant centroids (centroid[q]*d, m unused) instead of min-max (m + d*q).
+    // The Q rotation above is identical for both. Flag off = byte-identical min-max decode.
     float sum = 0.0f;
+    if (g_oscar_hybrid_centroids) {
 #pragma unroll
-    for (int ib = 0; ib < D/QK_OSCAR_INT2; ib++) {
-        const float bd = __half2float(blks[ib].d);
-        const float bm = __half2float(blks[ib].m);
+        for (int ib = 0; ib < D/QK_OSCAR_INT2; ib++) {
+            const float bd = __half2float(blks[ib].d);
 #pragma unroll
-        for (int i = 0; i < QK_OSCAR_INT2/4; i++) {
-            const uint8_t qs = blks[ib].qs[i];
-            const int base = ib * QK_OSCAR_INT2 + 4*i;
-            sum += x[base+0] * (bm + bd * (float)((qs >> 0) & 0x3));
-            sum += x[base+1] * (bm + bd * (float)((qs >> 2) & 0x3));
-            sum += x[base+2] * (bm + bd * (float)((qs >> 4) & 0x3));
-            sum += x[base+3] * (bm + bd * (float)((qs >> 6) & 0x3));
+            for (int i = 0; i < QK_OSCAR_INT2/4; i++) {
+                const uint8_t qs = blks[ib].qs[i];
+                const int base = ib * QK_OSCAR_INT2 + 4*i;
+                sum += x[base+0] * (TURBO_CENTROIDS_2BIT[(qs >> 0) & 0x3] * bd);
+                sum += x[base+1] * (TURBO_CENTROIDS_2BIT[(qs >> 2) & 0x3] * bd);
+                sum += x[base+2] * (TURBO_CENTROIDS_2BIT[(qs >> 4) & 0x3] * bd);
+                sum += x[base+3] * (TURBO_CENTROIDS_2BIT[(qs >> 6) & 0x3] * bd);
+            }
+        }
+    } else {
+#pragma unroll
+        for (int ib = 0; ib < D/QK_OSCAR_INT2; ib++) {
+            const float bd = __half2float(blks[ib].d);
+            const float bm = __half2float(blks[ib].m);
+#pragma unroll
+            for (int i = 0; i < QK_OSCAR_INT2/4; i++) {
+                const uint8_t qs = blks[ib].qs[i];
+                const int base = ib * QK_OSCAR_INT2 + 4*i;
+                sum += x[base+0] * (bm + bd * (float)((qs >> 0) & 0x3));
+                sum += x[base+1] * (bm + bd * (float)((qs >> 2) & 0x3));
+                sum += x[base+2] * (bm + bd * (float)((qs >> 4) & 0x3));
+                sum += x[base+3] * (bm + bd * (float)((qs >> 6) & 0x3));
+            }
         }
     }
     return sum;

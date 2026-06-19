@@ -2155,6 +2155,11 @@ static __global__ void k_set_rows_oscar_int2(
     __shared__ float warp_max[256 / WARP_SIZE];
     __shared__ float s_min[2]; // per-sub-block global min/max
     __shared__ float s_max[2];
+    // Hybrid (centroid) scratch: per-sub-block sum-of-squares of rotated x and of recon centroids.
+    __shared__ float warp_ss[256 / WARP_SIZE];
+    __shared__ float warp_rs[256 / WARP_SIZE];
+    __shared__ float s_ss[2];
+    __shared__ float s_rs[2];
 
     float v = x[j];
     float vmin = v, vmax = v;
@@ -2186,8 +2191,58 @@ static __global__ void k_set_rows_oscar_int2(
     const float bd    = (range > 1e-10f) ? range / 3.0f : 1.0f;
     const float inv_d = 1.0f / bd;
 
-    // Step 4: Quantize element j to 2-bit
-    const int q = min(3, max(0, (int)(__float2int_rn((x[j] - bmin) * inv_d))));
+    // Step 4: Quantize element j to a 2-bit code. Two back-ends share the rotation above:
+    //   (default)  min-max uniform: q = round((x-min)/d), decode m + d*q.
+    //   (hybrid)   TODO-243 spike: assign the rotated element to the nearest TurboQuant
+    //              PolarQuant centroid; store a per-sub-block reconstruction-corrected norm
+    //              in d (m=0), decode centroid[q]*d. Branch is on a uniform device global
+    //              so __syncthreads/__shfl below stay in convergent control flow.
+    int   q;       // 2-bit code (min-max level or centroid index)
+    float out_d;   // stored d
+    float out_m;   // stored m
+    if (g_oscar_hybrid_centroids) {
+        // (a) per-sub-block L2 norm of the rotated values via sum-of-squares reduction.
+        float ss = x[j] * x[j];
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+            ss += __shfl_xor_sync(0xffffffff, ss, offset, WARP_SIZE);
+        }
+        if (j % WARP_SIZE == 0) warp_ss[j / WARP_SIZE] = ss;
+        __syncthreads();
+        if (jb == 0) {
+            const int w_start = ib * n_warps_per_sb;
+            float t = 0.0f;
+            for (int w = 0; w < n_warps_per_sb; w++) t += warp_ss[w_start + w];
+            s_ss[ib] = t;
+        }
+        __syncthreads();
+        const float gnorm = sqrtf(s_ss[ib]);
+        const float invn  = (gnorm > 1e-10f) ? 1.0f / gnorm : 0.0f;
+        // (b) nearest centroid of the unit-normalized element (centroids are Lloyd-Max for N(0,1/128)).
+        const int   idx = (int)turbo_nearest_centroid_2bit(x[j] * invn);
+        const float c   = TURBO_CENTROIDS_2BIT[idx];
+        // (c) reconstruction norm correction: scale so ||centroid[idx]*d|| ~ ||rotated sub-block||.
+        float rs = c * c;
+        for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+            rs += __shfl_xor_sync(0xffffffff, rs, offset, WARP_SIZE);
+        }
+        if (j % WARP_SIZE == 0) warp_rs[j / WARP_SIZE] = rs;
+        __syncthreads();
+        if (jb == 0) {
+            const int w_start = ib * n_warps_per_sb;
+            float t = 0.0f;
+            for (int w = 0; w < n_warps_per_sb; w++) t += warp_rs[w_start + w];
+            s_rs[ib] = t;
+        }
+        __syncthreads();
+        const float rnorm = sqrtf(s_rs[ib]);
+        q     = idx;
+        out_d = (rnorm > 1e-10f) ? gnorm / rnorm : gnorm;
+        out_m = 0.0f;
+    } else {
+        q     = min(3, max(0, (int)(__float2int_rn((x[j] - bmin) * inv_d))));
+        out_d = bd;
+        out_m = bmin;
+    }
 
     // Step 5: Pack 4 elements per byte using warp shuffle (within sub-block, lane = jb % WARP_SIZE)
     // Output block index: i_group * (D/QK_OSCAR_INT2) + ib (stride by blocks-per-group per head)
@@ -2203,13 +2258,32 @@ static __global__ void k_set_rows_oscar_int2(
 
     // Step 6: Write per-sub-block d and m (first thread in each sub-block)
     if (jb == 0) {
-        dst_row_ptr[blk_base + ib].d = __float2half(bd);
-        dst_row_ptr[blk_base + ib].m = __float2half(bmin);
+        dst_row_ptr[blk_base + ib].d = __float2half(out_d);
+        dst_row_ptr[blk_base + ib].m = __float2half(out_m);
     }
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);
     GGML_UNUSED(v);
+}
+
+// TODO-243 Task 1 SPIKE: single cross-TU definition of the hybrid flag declared
+// (extern) in turbo-quant.cuh. Resolved across the fattn-vec decode TUs via RDC
+// (CUDA_SEPARABLE_COMPILATION). Published once from env OSCAR_HYBRID_CENTROIDS before
+// the first OScaR encode, so every later decode reads the committed value.
+__device__ int g_oscar_hybrid_centroids = 0;
+
+static void oscar_hybrid_init() {
+    static bool done = false;
+    if (done) {
+        return;
+    }
+    done = true;
+    const char * env = getenv("OSCAR_HYBRID_CENTROIDS");
+    const int v = (env && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0')) ? 1 : 0;
+    CUDA_CHECK(cudaMemcpyToSymbol(g_oscar_hybrid_centroids, &v, sizeof(int)));
+    fprintf(stderr, "[OScaR INT2] hybrid centroid quantizer: %s\n",
+            v ? "ON (FHT + PolarQuant centroids)" : "off (min-max uniform)");
 }
 
 template<typename idx_t>
@@ -2218,6 +2292,8 @@ static void set_rows_cuda_oscar_int2(
         const ggml_tensor * src0,
         const ggml_tensor * src1,
         ggml_tensor * dst) {
+
+    oscar_hybrid_init();
 
     const float * src0_d = (const float *)src0->data;
     const idx_t * src1_d = (const idx_t *)src1->data;
