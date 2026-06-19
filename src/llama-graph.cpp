@@ -2561,8 +2561,22 @@ ggml_tensor * llm_graph_context::build_attn(
         // not land on the exact graph tensor, Q is zeroed → ~2x PPL). Gating on TURBO_INNERQ (the
         // same env that arms the encode-side d_innerq_scale) makes the default path call plain
         // ggml_turbo_wht — byte-identical to the non-hybrid baseline (verified: no regression).
+        // TODO 236 (2026-06-18): the env gate is INSUFFICIENT. When TURBO_INNERQ is set but
+        // calibration auto-disables (channels already balanced, turbo-quant.cuh:276) or has not
+        // yet finalized, turbo_innerq_publish() is never called → the scale_inv tensor is never
+        // synced and is zeroed by the per-chunk ggml_backend_buffer_clear → Q×0 → ~2.5x PPL
+        // (measured 7.07→15.6 on Qwen3.5-9B turboq3_tcq, TURBO_INNERQ=64). Gate additionally on
+        // g_innerq_finalized — set true ONLY by a successful publish, never on auto-disable — so
+        // the Q-rotation reads the real per-channel scale_inv (and K is actually pre-scaled) or
+        // falls back to plain ggml_turbo_wht (K unscaled, exact baseline).
         const char * iq_env   = getenv("TURBO_INNERQ");
-        const bool   innerq_on = iq_env && atoi(iq_env) != 0;
+        bool         innerq_on = iq_env && atoi(iq_env) != 0;
+#ifdef GGML_USE_CUDA
+        extern bool g_innerq_finalized;
+        innerq_on = innerq_on && g_innerq_finalized;
+#else
+        innerq_on = false;
+#endif
         const bool   k_is_tcq  = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
         ggml_tensor * iq_scale_inv = (k_is_tcq && innerq_on) ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
         if (iq_scale_inv) {
