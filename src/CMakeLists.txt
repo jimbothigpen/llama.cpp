@@ -65,17 +65,43 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 target_link_libraries(llama PUBLIC ggml)
 
 # KV cache compaction (Attention Matching) — ported from jandhyala-dev/modelai-llama.cpp.
-# First-landing slice: SELECT method only. The deferred SOLVER/OMP/NONUNIFORM/CHUNKED
-# implementation files (solver/query/budget/select/self-study/on-policy/prefill-q/exec)
-# and the Darwin-only Metal/LAPACK linkage are intentionally NOT compiled here yet.
+# SELECT (first-landing slice) + SOLVER (score-based selection + NNLS beta/V least-squares).
+# The solver TU and its supporting math files (solver/budget/select/query) are compiled
+# when LLAMA_KV_COMPACT_FULL_METHODS is defined, which un-gates the SOLVER/OMP/NONUNIFORM/
+# CHUNKED branches inside llama-kv-compact-pipeline.cpp. The self-study/on-policy/prefill-q
+# and graph-execution (prefix-exec) follow-ups remain deferred (not compiled).
 # When OFF (default), only the stubs TU is built and the default build is byte-unaffected.
 if (LLAMA_KV_COMPACTION)
     target_sources(llama PRIVATE
         llama-kv-compacted-prefix.cpp
         llama-kv-compact-api.cpp
         llama-kv-compact-pipeline.cpp
+        llama-kv-compact-solver.cpp
+        llama-kv-compact-budget.cpp
+        llama-kv-compact-select.cpp
+        llama-kv-compact-query.cpp
     )
     target_compile_definitions(llama PUBLIC LLAMA_KV_COMPACTION)
+    target_compile_definitions(llama PRIVATE LLAMA_KV_COMPACT_FULL_METHODS)
+
+    # Tier-1 solver recovery on Linux: the NNLS beta/V solver's best-conditioned path
+    # uses LAPACK sgels (QR, condition number kappa). On Apple this comes from Accelerate;
+    # elsewhere we link system LAPACK (OpenBLAS) when available. Without it the solver
+    # falls back to the Cholesky path (kappa^2). Optional — guarded so the build still
+    # succeeds (Cholesky fallback) when no LAPACK is installed.
+    if (APPLE)
+        target_link_libraries(llama PRIVATE "-framework Accelerate")
+        target_compile_definitions(llama PRIVATE LLAMA_KV_COMPACT_HAS_LAPACK=1)
+    else()
+        find_package(LAPACK QUIET)
+        if (LAPACK_FOUND)
+            target_link_libraries(llama PRIVATE ${LAPACK_LIBRARIES})
+            target_compile_definitions(llama PRIVATE LLAMA_KV_COMPACT_HAS_LAPACK=1)
+            message(STATUS "KV compaction: LAPACK found — solver Tier-1 (sgels QR) enabled")
+        else()
+            message(STATUS "KV compaction: LAPACK not found — solver uses Cholesky fallback (kappa^2)")
+        endif()
+    endif()
 else()
     target_sources(llama PRIVATE llama-kv-compact-stubs.cpp)
 endif()

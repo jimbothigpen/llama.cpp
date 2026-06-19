@@ -3590,16 +3590,37 @@ static bool llama_kv_compact_method_not_ported(const char * method) {
     return false;
 }
 
+// SOLVER (score-based selection + NNLS beta/V least-squares). Ported 2026-06-19.
+// NOTE: the solver writes fitted K/V and per-token beta into the compacted-prefix store;
+// at present only the token *selection* (score top-k) reaches decode via reclaim_live_kv —
+// the beta/fitted-V graph-execution path (kq_b injection) remains a deferred follow-up, so
+// the beta residual is computed but not yet consumed at decode.
 bool llama_kv_cache::compacted_prefix_fit_from_live_kv(
-        llama_seq_id, uint32_t, llama_pos, llama_kv_compact_pipeline_stats *, llama_pos,
-        uint32_t, int, float) {
-    return llama_kv_compact_method_not_ported("solver");
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda) {
+    const bool ok = llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    if (ok) { compacted_prefix_last_method = "fit"; }
+    return ok;
 }
 
 bool llama_kv_cache::compacted_prefix_omp_from_live_kv(
-        llama_seq_id, uint32_t, llama_pos, llama_kv_compact_pipeline_stats *, llama_pos,
-        uint32_t, int, float) {
-    return llama_kv_compact_method_not_ported("omp");
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda) {
+    const bool ok = llama_kv_compact_omp_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    if (ok) { compacted_prefix_last_method = "omp"; }
+    return ok;
 }
 
 bool llama_kv_cache::compacted_prefix_nonuniform_from_live_kv(
