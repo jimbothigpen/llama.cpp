@@ -145,6 +145,7 @@ enum llm_arch {
     LLM_ARCH_EAGLE3,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_MELLUM,
+    LLM_ARCH_LAGUNA,
     LLM_ARCH_UNKNOWN,
 };
 

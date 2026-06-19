@@ -140,6 +140,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_EAGLE3,           "eagle3"           },
     { LLM_ARCH_DFLASH_DRAFT,     "dflash-draft"     },
     { LLM_ARCH_MELLUM,           "mellum"           },
+    { LLM_ARCH_LAGUNA,           "laguna"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
