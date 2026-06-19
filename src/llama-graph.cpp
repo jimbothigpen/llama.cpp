@@ -2600,7 +2600,16 @@ ggml_tensor * llm_graph_context::build_attn(
         innerq_on = false;
 #endif
         const bool   k_is_tcq  = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
-        ggml_tensor * iq_scale_inv = (k_is_tcq && innerq_on) ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
+        // Phase X-5 (TODO 249): the standalone TURBOQ2/3_INNERQ types (68/69) carry pure
+        // per-channel equalization on top of the plain turboq2/3 WHT — no TCQ trellis. They
+        // share the same global encode-side pre-scale (set-rows.cu: x[ch]*=d_innerq_scale[ch],
+        // gated on d_innerq_active) as the TCQ hybrid, so the Q-rotation MUST read the real
+        // scale_inv for them too — otherwise dot(Q, K_scaled_rot) != dot(Q,K) (K pre-scaled,
+        // Q uncompensated → corruption). Before X-5 this gate was k_is_tcq-only, so 68/69 fell
+        // to plain ggml_turbo_wht and were byte-identical to turboq2/3_0 (InnerQ never engaged).
+        // Same g_innerq_finalized guard (see above): env unset → identity → exact baseline.
+        const bool   k_is_innerq = (k->type == GGML_TYPE_TURBOQ2_INNERQ || k->type == GGML_TYPE_TURBOQ3_INNERQ);
+        ggml_tensor * iq_scale_inv = ((k_is_tcq || k_is_innerq) && innerq_on) ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
         if (iq_scale_inv) {
             q = ggml_turbo_wht_innerq(ctx0, q, 0, iq_scale_inv);
         } else {
