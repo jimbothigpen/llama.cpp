@@ -206,8 +206,24 @@ the getter to accept I64, or export d2t as I32 in `conversion/eagle3.py`.
 | Qwen3.5-9B + eagle3-draft-9b, gfx1150 Vulkan, *n_draft*=2 | **50.000 %** | 101/202; 1/*n_draft* ceiling |
 | Qwen3.5-9B + eagle3-draft-9b, gfx1150 Vulkan, *n_draft*=3 | **33.333 %** | 65/195; 1/*n_draft* ceiling |
 
-Throughput (tokens/s vs. no-spec baseline) is TBD — the speedup depends on draft overhead relative
-to the target decode; at *n_draft*=1 the overhead is minimal. Benchmark pending.
+### Draft head quantization — accept% is quant-insensitive (Kaggle 2×T4, 2026-06-19, TODO 239)
+
+Measured: Qwen3.6-27B-Q4_K_M target + PRISM eagle3 drafter (27B head, compact-vocab), CUDA sm_75,
+greedy (`--temp 0`), default `n_draft`. 36 cells across Q8_0 / Q4_K_M / IQ3_M × 3 contexts × 4
+TriAttn/PFlash quadrants (binary `d66c1886e`; matrix-234 K-eagle3 chunk).
+
+| Draft quant | Head size | Accept %      | TG TPS (ctx4096, noTri/noPf) | Notes |
+|-------------|-----------|---------------|-------------------------------|-------|
+| Q8_0        | 569 M     | **73.333 %**  | 7.93 t/s                      | 176/240 |
+| Q4_K_M      | 368 M     | **73.333 %**  | 7.64 t/s                      | 176/240 |
+| IQ3_M       | 303 M     | **73.333 %**  | 7.94 t/s                      | 176/240 |
+
+Accept% is bit-for-bit identical across all 36 cells — the target model's verification outcome is
+entirely independent of draft head quantization. TG TPS variation (~5%, non-monotonic) is within
+measurement noise; the 17 GB target dominates over the 300–570 MB drafter. **Recommended minimum:
+IQ3_M** (−47% VRAM vs Q8_0, identical accept%). Q2_K and Q3_K_M are untested but safe to assume
+given IQ3_M = Q8_0. Applies to any EAGLE3.0 head (d0 seeded from target hidden state; target always
+verifies its own projection → accept is target-determined, not draft-quality-determined).
 
 ---
 
