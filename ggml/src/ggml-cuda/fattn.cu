@@ -451,6 +451,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_INNERQ, GGML_TYPE_TURBOQ2_INNERQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_TURBOQ3_INNERQ)
 
+    // Phase X-5 (TODO 249): InnerQ K cache × plain F16 V — the clean K-only A/B
+    // vehicle (V untouched, so no V-side inverse-WHT compensation is required).
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_INNERQ, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_F16)
+
     // Asymmetric INNERQ HIGH: mainline/turbo K × INNERQ V, within-INNERQ K>V
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,            GGML_TYPE_TURBOQ2_INNERQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,            GGML_TYPE_TURBOQ3_INNERQ)
