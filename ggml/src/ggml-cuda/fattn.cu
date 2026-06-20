@@ -974,6 +974,143 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     return f16_extra.end - (uintptr_t) dst->data;
 }
 
+// Turbo-KV MMA prefill  (lifted from spiritbuun/buun-llama-cpp @ 87c351d28a)
+//
+// On our tree, turbo KV (TURBOQ*) only had a CUDA VEC flash-attn path; tensor-core
+// MMA was force-disabled for turbo in ggml_cuda_get_best_fattn_kernel. For PREFILL
+// (Q->ne[1] > 1) at head_dim <= 256 on Turing+ that leaves the much faster MMA path
+// unused. Here we bulk-dequant the turbo K/V cache into an f16 scratch buffer and run
+// the existing, proven MMA-F16 kernel on it. Decode (Q->ne[1] == 1) stays on VEC.
+//
+// Domain handling — chosen to reproduce our VEC reference EXACTLY (so PPL is preserved):
+//   * Our turbo K is stored WHT-rotated and the GRAPH pre-rotates Q (llama-graph.cpp
+//     ~2569). So K is dequanted in the ROTATED domain (plain centroid*norm, NO inverse
+//     FWHT) and the MMA dots it against the already-rotated Q.
+//   * Our turbo V is stored WHT-rotated and the GRAPH inverse-WHTs the FA OUTPUT
+//     (llama-graph.cpp ~2266). So V is likewise dequanted in the ROTATED domain.
+// Hence NO Q rotation and NO graph change are needed here: the f16 buffers carry exactly
+// what the VEC kernel would have produced inline. InnerQ needs no handling either — it is
+// baked into the stored K (centroid*norm) and compensated in Q by the graph, identically
+// for both paths. Scope: symmetric turboq4_0 K/V (the validated subset).
+
+static half  * g_turbo_pf_k_buf   [GGML_CUDA_MAX_DEVICES] = {};
+static size_t  g_turbo_pf_k_buf_sz[GGML_CUDA_MAX_DEVICES] = {};
+static half  * g_turbo_pf_v_buf   [GGML_CUDA_MAX_DEVICES] = {};
+static size_t  g_turbo_pf_v_buf_sz[GGML_CUDA_MAX_DEVICES] = {};
+
+// Plain turboq4_0 -> f16 dequant in the rotated domain. One block per (token, head,
+// stream); ne0 threads (head_dim). Uses OUR block_turboq4_0 layout {norm, rnorm, qs[64]}
+// and the same TURBO_CENTROIDS_4BIT[idx]*norm the VEC kernel uses. The output index
+// (head_dim fastest, then kv-head, then token) matches the strides set on the f16 shadow
+// tensor below, i.e. the native f16 KV-cache layout the MMA-F16 kernel expects.
+static __global__ void k_turboq4_dequant_f16(
+        const char * __restrict__ src, half * __restrict__ dst,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2,
+        const size_t nb1, const size_t nb2, const size_t nb3) {
+    const int64_t row  = blockIdx.x; // token
+    const int64_t head = blockIdx.y; // kv head
+    const int64_t strm = blockIdx.z;
+    const int j = threadIdx.x;       // element within head_dim
+    if (j >= ne0) return;
+
+    const char * src_row = src + strm * nb3 + head * nb2 + row * nb1;
+    const int blk_idx  = j / QK_TURBOQ4;
+    const int j_in_blk = j % QK_TURBOQ4;
+    const block_turboq4_0 * blk = (const block_turboq4_0 *) src_row + blk_idx;
+
+    const float   norm = __half2float(blk->norm);
+    const uint8_t idx  = (j_in_blk & 1) ? (blk->qs[j_in_blk / 2] >> 4) : (blk->qs[j_in_blk / 2] & 0xF);
+    const float   val  = TURBO_CENTROIDS_4BIT[idx] * norm;
+
+    dst[strm * (ne1 * ne2 * ne0) + row * (ne2 * ne0) + head * ne0 + j] = __float2half(val);
+}
+
+static void ggml_cuda_turbo_prefill_attend(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    cudaStream_t stream = ctx.stream();
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    const int device = ctx.device;
+
+    // --- K: dequant turboq4_0 -> f16 (rotated domain) ---
+    const ggml_tensor * k_root = K;
+    while (k_root->view_src) k_root = k_root->view_src;
+    const size_t k_size = (size_t) k_root->ne[0] * k_root->ne[1] * k_root->ne[2] * sizeof(half);
+    if (k_size > g_turbo_pf_k_buf_sz[device]) {
+        if (g_turbo_pf_k_buf[device]) CUDA_CHECK(cudaFree(g_turbo_pf_k_buf[device]));
+        CUDA_CHECK(cudaMalloc(&g_turbo_pf_k_buf[device], k_size));
+        g_turbo_pf_k_buf_sz[device] = k_size;
+    }
+    half * k_fp16 = g_turbo_pf_k_buf[device];
+    dim3 grid_k(K->ne[1], K->ne[2], K->ne[3]);
+    k_turboq4_dequant_f16<<<grid_k, K->ne[0], 0, stream>>>(
+        (const char *) K->data, k_fp16, K->ne[0], K->ne[1], K->ne[2], K->nb[1], K->nb[2], K->nb[3]);
+
+    // --- V: dequant turboq4_0 -> f16 (rotated domain; graph un-rotates the FA output) ---
+    const ggml_tensor * v_root = V;
+    while (v_root->view_src) v_root = v_root->view_src;
+    const size_t v_size = (size_t) v_root->ne[0] * v_root->ne[1] * v_root->ne[2] * sizeof(half);
+    if (v_size > g_turbo_pf_v_buf_sz[device]) {
+        if (g_turbo_pf_v_buf[device]) CUDA_CHECK(cudaFree(g_turbo_pf_v_buf[device]));
+        CUDA_CHECK(cudaMalloc(&g_turbo_pf_v_buf[device], v_size));
+        g_turbo_pf_v_buf_sz[device] = v_size;
+    }
+    half * v_fp16 = g_turbo_pf_v_buf[device];
+    dim3 grid_v(V->ne[1], V->ne[2], V->ne[3]);
+    k_turboq4_dequant_f16<<<grid_v, V->ne[0], 0, stream>>>(
+        (const char *) V->data, v_fp16, V->ne[0], V->ne[1], V->ne[2], V->nb[1], V->nb[2], V->nb[3]);
+
+    // Build f16 shadow tensors with native-cache strides and swap them in for the MMA launch.
+    ggml_tensor K_f16 = *K;
+    K_f16.type  = GGML_TYPE_F16;
+    K_f16.data  = k_fp16;
+    K_f16.nb[0] = sizeof(half);
+    K_f16.nb[1] = K->ne[0] * K->ne[2] * sizeof(half); // row stride: head_dim * n_head_kv
+    K_f16.nb[2] = K->ne[0] * sizeof(half);            // head stride: head_dim
+    K_f16.nb[3] = K->ne[0] * K->ne[1] * K->ne[2] * sizeof(half);
+
+    ggml_tensor V_f16 = *V;
+    V_f16.type  = GGML_TYPE_F16;
+    V_f16.data  = v_fp16;
+    V_f16.nb[0] = sizeof(half);
+    V_f16.nb[1] = V->ne[0] * V->ne[2] * sizeof(half);
+    V_f16.nb[2] = V->ne[0] * sizeof(half);
+    V_f16.nb[3] = V->ne[0] * V->ne[1] * V->ne[2] * sizeof(half);
+
+    ggml_tensor * orig_k = dst->src[1];
+    ggml_tensor * orig_v = dst->src[2];
+    dst->src[1] = &K_f16;
+    dst->src[2] = &V_f16;
+
+    ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+
+    dst->src[1] = orig_k;
+    dst->src[2] = orig_v;
+    // f16 scratch buffers are persistent (grow-only) — not freed here.
+}
+
+// Runs the turbo-KV MMA prefill path and returns true iff this op is eligible. Returns
+// false (fall through to normal dispatch) for decode, unsupported D, pre-Turing, HIP,
+// non-turboq4_0, or when TURBO_PREFILL_VEC forces the VEC path.
+static bool ggml_cuda_turbo_prefill_try(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+#if defined(GGML_USE_HIP)
+    GGML_UNUSED(ctx); GGML_UNUSED(dst);
+    return false; // ROCm deliberately stays on VEC (unified-memory rationale; out of scope).
+#else
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    if (K->type != GGML_TYPE_TURBOQ4_0 || V->type != GGML_TYPE_TURBOQ4_0) return false; // validated subset
+    if (Q->ne[1] <= 1)                       return false; // prefill only; decode stays VEC
+    if (Q->ne[0] > 256 || (Q->ne[0] % 128))  return false; // D in {128,256}; WHT groups of 128
+    if (Q->ne[0] != V->ne[0])                return false;
+    if (getenv("TURBO_PREFILL_VEC"))         return false; // A/B + escape hatch -> force VEC
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (!turing_mma_available(cc))           return false; // MMA needs Turing+ (sm_75)
+    ggml_cuda_turbo_prefill_attend(ctx, dst);
+    return true;
+#endif
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     ggml_cuda_set_device(ctx.device);
@@ -1029,6 +1166,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 if (K->type == GGML_TYPE_Q5_1 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return; }
             }
         }
+    if (ggml_cuda_turbo_prefill_try(ctx, dst)) {
+        return;
     }
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
