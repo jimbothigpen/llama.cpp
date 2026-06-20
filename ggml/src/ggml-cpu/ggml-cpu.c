@@ -228,6 +228,9 @@ static void ggml_vec_dot_wht3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
 static void ggml_vec_dot_wht4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_kv_oscar_int2_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
@@ -458,8 +461,10 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
     },
     [GGML_TYPE_KV_OSCAR_INT2] = {
+        // from_float is the plain (no-WHT) re-encode (K-shift ggml_cpy); fresh-token SET_ROWS
+        // applies the WHT via quantize_row_kv_oscar_int2_wht (see ggml_compute_forward_set_rows_f32).
         .from_float               = (ggml_from_float_t) quantize_row_kv_oscar_int2_ref,
-        .vec_dot                  = NULL,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_kv_oscar_int2_f32,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
@@ -3583,6 +3588,59 @@ enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct g
     cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
 
     return ggml_graph_compute(cgraph, &cplan);
+}
+
+// OScaR INT2 K flash-attention dot product (CPU). K is stored INT2 in the WHT-rotated domain
+// (quantize_row_kv_oscar_int2_wht); apply the matching full-dim D-pt Walsh-Hadamard transform to
+// Q (1/sqrt(D)-normalized), then accumulate against the dequantized K sub-blocks. This is the
+// exact CPU mirror of the CUDA decode (vec_dot_fattn_vec_KQ_oscar_int2 in fattn-vec.cuh); the two
+// 1/sqrt(D) factors and H_D^T H_D = D*I cancel to recover q·k. n == head_dim (128 or 256).
+static void ggml_vec_dot_kv_oscar_int2_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+    GGML_ASSERT(n % QK_OSCAR_INT2 == 0 && n <= 2 * QK_OSCAR_INT2);
+
+    const int D = n;
+    const block_kv_oscar_int2 * blks = (const block_kv_oscar_int2 *) vx;
+    const float *               q    = (const float *) vy;
+
+    float x[2 * QK_OSCAR_INT2]; // max D = 256
+    for (int j = 0; j < D; j++) {
+        x[j] = q[j];
+    }
+    // In-place full-dim D-pt Walsh-Hadamard transform, then 1/sqrt(D) normalize.
+    for (int h = 1; h < D; h <<= 1) {
+        for (int i = 0; i < D; i += 2 * h) {
+            for (int j = i; j < i + h; j++) {
+                const float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+    const float inv_sqrt_D = 1.0f / sqrtf((float)D);
+    for (int j = 0; j < D; j++) {
+        x[j] *= inv_sqrt_D;
+    }
+
+    float sum = 0.0f;
+    const int n_sb = D / QK_OSCAR_INT2;
+    for (int ib = 0; ib < n_sb; ib++) {
+        const float bd = GGML_CPU_FP16_TO_FP32(blks[ib].d);
+        const float bm = GGML_CPU_FP16_TO_FP32(blks[ib].m);
+        const int   base = ib * QK_OSCAR_INT2;
+        for (int i = 0; i < QK_OSCAR_INT2 / 4; i++) {
+            const uint8_t qs = blks[ib].qs[i];
+            const int     b4 = base + 4 * i;
+            sum += x[b4 + 0] * (bm + bd * (float)((qs >> 0) & 0x3));
+            sum += x[b4 + 1] * (bm + bd * (float)((qs >> 2) & 0x3));
+            sum += x[b4 + 2] * (bm + bd * (float)((qs >> 4) & 0x3));
+            sum += x[b4 + 3] * (bm + bd * (float)((qs >> 6) & 0x3));
+        }
+    }
+    *s = sum;
 }
 
 // TurboQuant2 vec_dot: dequantize turboq2 block to f32, then dot with f32 operand.

@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h" // block_kv_oscar_int2 + quantize_row_kv_oscar_int2_wht (OScaR SET_ROWS WHT encode)
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -5057,6 +5058,10 @@ static void ggml_compute_forward_set_rows_f32(
         turboq3_cpu_wht_group_size = (gs == 64 || gs == 128) ? gs : 0;
     }
 
+    // OScaR INT2 fresh-token K write: must apply the full-dim WHT rotation (the plain from_float
+    // ref is the no-WHT re-encode used only by the K-shift ggml_cpy path). Mirrors set-rows.cu.
+    const bool is_oscar = (dst->type == GGML_TYPE_KV_OSCAR_INT2);
+
     for (int64_t i03 = 0; i03 < ne03; ++i03) {
         for (int64_t i02 = 0; i02 < ne02; ++i02) {
             for (int64_t i = ir0; i < ir1; ++i) {
@@ -5068,9 +5073,14 @@ static void ggml_compute_forward_set_rows_f32(
 
                 GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                from_float(
-                        (const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                                        ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                const float * src_row = (const float *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03);
+                char *        dst_row =                  ((char *)  dst->data + i1*nb1 + i02*nb2  + i03*nb3);
+
+                if (is_oscar) {
+                    quantize_row_kv_oscar_int2_wht(src_row, (block_kv_oscar_int2 *) dst_row, nc);
+                } else {
+                    from_float(src_row, dst_row, nc);
+                }
             }
         }
     }

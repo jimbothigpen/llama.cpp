@@ -127,6 +127,8 @@ GGML_API size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGM
 
 // OScaR KV INT2: FHT + per-block min-max uniform 2-bit quantization — Phase 1 CUDA prototype (arXiv:2605.19660)
 GGML_API void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k);
+// WHT-rotating SET_ROWS encode (fresh-token K writes); mirrors the CUDA k_set_rows_oscar_int2 kernel.
+GGML_API void quantize_row_kv_oscar_int2_wht(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_kv_oscar_int2(const block_kv_oscar_int2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_kv_oscar_int2(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 

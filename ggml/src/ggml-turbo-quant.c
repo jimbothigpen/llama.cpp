@@ -566,6 +566,66 @@ void quantize_row_kv_oscar_int2_ref(const float * GGML_RESTRICT x, block_kv_osca
     }
 }
 
+// SET_ROWS encode for fresh-token K writes: full-dim Walsh-Hadamard rotation + per-128-subblock
+// uniform min-max INT2. This is the CPU/Vulkan-portable mirror of the CUDA k_set_rows_oscar_int2
+// kernel (set-rows.cu); the matching D-pt WHT is applied to Q at decode by the flash-attention
+// vec_dot (ggml-cpu: ggml_vec_dot_kv_oscar_int2_f32). K is stored in the WHT-rotated domain.
+//   wht_group D = 256 when the combined-GQA row width is a multiple of 256, else 128 — this
+//   matches the CUDA dispatch heuristic exactly (set_rows_cuda_oscar_int2: ne00 % 256 == 0).
+//   H_D is normalized by 1/sqrt(D) so it is orthonormal (H_D^T H_D = I), preserving the q·k dot.
+// NOTE: distinct from quantize_row_kv_oscar_int2_ref above, which is the plain (no-WHT) re-encode
+// used by the K-shift ggml_cpy path (whose input is already WHT-rotated by the shift graph).
+void quantize_row_kv_oscar_int2_wht(const float * GGML_RESTRICT x, block_kv_oscar_int2 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_OSCAR_INT2 == 0);
+    const int D        = (k % (2 * QK_OSCAR_INT2) == 0) ? (2 * QK_OSCAR_INT2) : QK_OSCAR_INT2;
+    const int n_groups = (int)(k / D);
+    const int n_sb     = D / QK_OSCAR_INT2; // sub-blocks per group: 1 (D=128) or 2 (D=256)
+    const float inv_sqrt_D = 1.0f / sqrtf((float)D);
+
+    for (int g = 0; g < n_groups; g++) {
+        float xr[2 * QK_OSCAR_INT2]; // max D = 256
+        for (int j = 0; j < D; j++) {
+            xr[j] = x[(int64_t)g * D + j];
+        }
+
+        // In-place full-dim D-pt Walsh-Hadamard transform, then 1/sqrt(D) normalize.
+        for (int h = 1; h < D; h <<= 1) {
+            for (int i = 0; i < D; i += 2 * h) {
+                for (int j = i; j < i + h; j++) {
+                    const float a = xr[j], b = xr[j + h];
+                    xr[j]     = a + b;
+                    xr[j + h] = a - b;
+                }
+            }
+        }
+        for (int j = 0; j < D; j++) {
+            xr[j] *= inv_sqrt_D;
+        }
+
+        // Per-128 sub-block uniform min-max INT2.
+        for (int ib = 0; ib < n_sb; ib++) {
+            const float * blk = xr + ib * QK_OSCAR_INT2;
+            float mn = blk[0], mx = blk[0];
+            for (int j = 1; j < QK_OSCAR_INT2; j++) {
+                if (blk[j] < mn) mn = blk[j];
+                if (blk[j] > mx) mx = blk[j];
+            }
+            const float range = mx - mn;
+            const float d  = (range > 1e-10f) ? range / 3.0f : 1.0f;
+            const float id = 1.0f / d;
+            block_kv_oscar_int2 * out = &y[(int64_t)g * n_sb + ib];
+            out->d = GGML_FP32_TO_FP16(d);
+            out->m = GGML_FP32_TO_FP16(mn);
+            memset(out->qs, 0, QK_OSCAR_INT2 / 4);
+            for (int j = 0; j < QK_OSCAR_INT2; j++) {
+                int q = (int)lrintf((blk[j] - mn) * id);
+                q = q < 0 ? 0 : (q > 3 ? 3 : q);
+                out->qs[j / 4] |= (uint8_t)(q << (2 * (j % 4)));
+            }
+        }
+    }
+}
+
 void dequantize_row_kv_oscar_int2(const block_kv_oscar_int2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_OSCAR_INT2 == 0);
     const int nb = k / QK_OSCAR_INT2;
