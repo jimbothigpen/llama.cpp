@@ -365,6 +365,17 @@ public:
 
 class llm_graph_input_attn_kv : public llm_graph_input_i {
 public:
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption: per-layer compacted-prefix graph inputs (β / fitted-V).
+    struct compacted_prefix_layer_input {
+        int32_t il = -1;
+        ggml_tensor * k = nullptr;    // [n_embd_head_k, n_head_kv, n_prefix, 1]
+        ggml_tensor * v = nullptr;    // [n_embd_head_v, n_head_kv, n_prefix, 1]
+        ggml_tensor * kq_b = nullptr; // [n_prefix, n_tokens, n_head, 1] (null when zero-beta)
+        bool layer_zero_beta = false; // per-layer zero-beta flag for flash eligibility
+    };
+#endif
+
     llm_graph_input_attn_kv(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
@@ -384,11 +395,39 @@ public:
 
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
 
+#ifdef LLAMA_KV_COMPACTION
+    ggml_tensor * get_compacted_kq_mask() const { return compacted_kq_mask; }
+    bool has_compacted_prefix() const { return compacted_prefix_active; }
+
+    compacted_prefix_layer_input * ensure_compacted_prefix_layer(
+            ggml_context * ctx,
+            int32_t il,
+            ggml_type type_k,
+            ggml_type type_v,
+            int64_t n_embd_head_k,
+            int64_t n_embd_head_v,
+            int64_t n_tokens,
+            int64_t n_head,
+            int64_t n_head_kv,
+            bool layer_zero_beta = false);
+
+    const compacted_prefix_layer_input * get_compacted_prefix_layer(int32_t il) const;
+#endif
+
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+
+#ifdef LLAMA_KV_COMPACTION
+    bool     compacted_prefix_active       = false;
+    bool     compacted_prefix_is_zero_beta = false;
+    uint32_t compacted_prefix_n_tokens     = 0;
+
+    ggml_tensor * compacted_kq_mask = nullptr; // F32 [n_prefix, n_batch/n_stream, 1, n_stream]
+    std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
+#endif
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;

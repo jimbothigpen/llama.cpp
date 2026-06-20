@@ -3,6 +3,7 @@
 #include "llama-batch.h"
 #ifdef LLAMA_KV_COMPACTION
 #include "llama-kv-compacted-prefix.h"
+#include "llama-kv-compacted-prefix-exec.h"
 #endif
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
@@ -201,6 +202,22 @@ public:
             const std::vector<llama_pos> & positions, std::vector<float> & out) const;
     bool compacted_prefix_copy_v_head_f32(int32_t il, llama_seq_id seq_id, uint32_t head_kv,
             const std::vector<llama_pos> & positions, std::vector<float> & out) const;
+
+    // ---- GRAPH-EXEC consumption path (graphexec port 2026-06-20) ----
+    // Resolve whether the current single-seq ubatch may attend over the compacted
+    // prefix (β / fitted-V) instead of live KV, and produce an exec candidate.
+    bool resolve_compacted_prefix_exec(
+            const llama_ubatch & ubatch,
+            llama_compacted_prefix_exec_candidate & out) const;
+
+    // Per-(seq,layer) zero-beta query for flash-attention eligibility at decode.
+    bool compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const;
+
+    // Materialize the compacted-prefix mask / K / V / β(kq_b) into graph input tensors.
+    void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 #endif // LLAMA_KV_COMPACTION
 
     //
@@ -420,6 +437,85 @@ private:
     bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id,
             std::vector<uint32_t> & live_cell_idxs) const;
     void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & keep_idxs);
+
+    // ---- GRAPH-EXEC consumption staging cache (graphexec port 2026-06-20) ----
+    // Per-layer materialized K/V/β bytes, reused across the per-layer set_input
+    // calls of one decode so we don't re-do the strided host copy every layer.
+    // Mask is NOT cached (depends on ubatch.pos which changes each decode).
+    // Invalidated by a version bump (configure/clear/seq-ops mutate the store).
+    // 64-byte aligned so the bytes can back a stack-local ggml_tensor copy that is
+    // then uploaded via ggml_backend_tensor_set (backend-agnostic; Vulkan-safe).
+    struct aligned_byte_buffer {
+        void * ptr = nullptr;
+        size_t len = 0;
+
+        aligned_byte_buffer() = default;
+        ~aligned_byte_buffer() { clear(); }
+
+        aligned_byte_buffer(const aligned_byte_buffer &) = delete;
+        aligned_byte_buffer & operator=(const aligned_byte_buffer &) = delete;
+        aligned_byte_buffer(aligned_byte_buffer && o) noexcept : ptr(o.ptr), len(o.len) {
+            o.ptr = nullptr;
+            o.len = 0;
+        }
+        aligned_byte_buffer & operator=(aligned_byte_buffer && o) noexcept {
+            if (this != &o) {
+                clear();
+                ptr = o.ptr;
+                len = o.len;
+                o.ptr = nullptr;
+                o.len = 0;
+            }
+            return *this;
+        }
+
+        void resize(size_t n) {
+            if (n == len && ptr) {
+                return;
+            }
+            clear();
+            if (n > 0) {
+#ifdef _WIN32
+                ptr = _aligned_malloc(n, 64);
+                GGML_ASSERT(ptr && "aligned_byte_buffer: allocation failed");
+#else
+                int ret = posix_memalign(&ptr, 64, n);
+                GGML_ASSERT(ret == 0 && ptr && "aligned_byte_buffer: allocation failed");
+#endif
+                len = n;
+            }
+        }
+        void clear() {
+            if (ptr) {
+#ifdef _WIN32
+                _aligned_free(ptr);
+#else
+                free(ptr);
+#endif
+                ptr = nullptr;
+            }
+            len = 0;
+        }
+        uint8_t *       data()       { return (uint8_t *)ptr; }
+        const uint8_t * data() const { return (const uint8_t *)ptr; }
+        size_t          size() const { return len; }
+        bool           empty() const { return len == 0; }
+    };
+
+    struct cp_tensor_cache_t {
+        uint64_t     version = 0;
+        llama_seq_id seq_id  = -1;
+
+        std::vector<aligned_byte_buffer> k_bytes;
+        std::vector<aligned_byte_buffer> v_bytes;
+        std::vector<aligned_byte_buffer> beta_bytes;
+        uint32_t beta_n_tps = 0;  // shape guard for beta
+
+        void invalidate() { version = 0; }
+    };
+    mutable cp_tensor_cache_t cp_cache;
+
+    void compacted_prefix_bump_version() { ++compacted_prefix_version_counter; cp_cache.invalidate(); }
 #endif // LLAMA_KV_COMPACTION
 
     size_t total_size() const;
@@ -549,6 +645,22 @@ public:
 
     ggml_tensor * get_turbo_innerq_scale_inv() const;
 
+#ifdef LLAMA_KV_COMPACTION
+    // ---- GRAPH-EXEC consumption path (graphexec port 2026-06-20) ----
+    // Resolved once per ubatch in apply(); the graph reads these to decide whether
+    // to concat the compacted prefix (β / fitted-V) into the attention.
+    bool compacted_prefix_active() const;
+    llama_seq_id compacted_prefix_seq_id() const;
+    uint32_t compacted_prefix_n_tokens() const;
+    bool compacted_prefix_zero_beta() const;
+    bool compacted_prefix_layer_zero_beta(int32_t il) const;
+
+    void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il) const;
+    void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il) const;
+    void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const;
+#endif // LLAMA_KV_COMPACTION
+
 private:
     llama_memory_status status;
 
@@ -585,4 +697,9 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption: resolved candidate for the current ubatch (seq_id<0 => inactive)
+    llama_compacted_prefix_exec_candidate compacted_exec;
+#endif
 };

@@ -525,6 +525,23 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption: materialize the compacted-prefix mask + per-layer
+    // K / V / β(kq_b) into their graph input tensors so β reaches the attention.
+    if (compacted_prefix_active) {
+        GGML_ASSERT(compacted_kq_mask);
+        mctx->set_input_compacted_prefix_mask(compacted_kq_mask, ubatch, cparams.causal_attn);
+
+        for (auto & layer : compacted_prefix_layers) {
+            mctx->set_input_compacted_prefix_k(layer.k, layer.il);
+            mctx->set_input_compacted_prefix_v(layer.v, layer.il);
+            if (layer.kq_b) {
+                mctx->set_input_compacted_prefix_kq_b(layer.kq_b, layer.il);
+            }
+        }
+    }
+#endif
+
     if (self_k_rot) {
         mctx->set_input_k_rot(self_k_rot);
     }
@@ -539,6 +556,14 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+#ifdef LLAMA_KV_COMPACTION
+    // The compacted-prefix mask depends on ubatch positions (and the active set can
+    // change between ubatches), so never reuse a graph that involves compaction.
+    if (compacted_prefix_active || mctx->compacted_prefix_active()) {
+        return false;
+    }
+#endif
+
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
@@ -548,6 +573,60 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     return res;
 }
+
+#ifdef LLAMA_KV_COMPACTION
+llm_graph_input_attn_kv::compacted_prefix_layer_input * llm_graph_input_attn_kv::ensure_compacted_prefix_layer(
+        ggml_context * ctx,
+        int32_t il,
+        ggml_type type_k,
+        ggml_type type_v,
+        int64_t n_embd_head_k,
+        int64_t n_embd_head_v,
+        int64_t n_tokens,
+        int64_t n_head,
+        int64_t n_head_kv,
+        bool layer_zero_beta) {
+    for (auto & layer : compacted_prefix_layers) {
+        if (layer.il == il) {
+            return &layer;
+        }
+    }
+
+    // per-layer flash eligibility: skip β if the whole seq or this layer is zero-beta.
+    const bool effective_zero_beta = compacted_prefix_is_zero_beta || layer_zero_beta;
+
+    ggml_tensor * kq_b_tensor = nullptr;
+    if (!effective_zero_beta) {
+        kq_b_tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1);
+    }
+
+    compacted_prefix_layers.push_back({
+        /* .il              = */ il,
+        /* .k               = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .v               = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .kq_b            = */ kq_b_tensor,
+        /* .layer_zero_beta = */ effective_zero_beta,
+    });
+
+    auto & layer = compacted_prefix_layers.back();
+    ggml_set_input(layer.k);
+    ggml_set_input(layer.v);
+    if (layer.kq_b) {
+        ggml_set_input(layer.kq_b);
+    }
+
+    return &layer;
+}
+
+const llm_graph_input_attn_kv::compacted_prefix_layer_input * llm_graph_input_attn_kv::get_compacted_prefix_layer(int32_t il) const {
+    for (const auto & layer : compacted_prefix_layers) {
+        if (layer.il == il) {
+            return &layer;
+        }
+    }
+    return nullptr;
+}
+#endif // LLAMA_KV_COMPACTION
 
 void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
@@ -2425,6 +2504,110 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+#ifdef LLAMA_KV_COMPACTION
+// GRAPH-EXEC consumption: concatenate the compacted-prefix K/V/mask/β(kq_b) tensors
+// in front of the live KV so a compacted sequence attends over
+// (compacted-prefix + β·fitted-V) ++ live-suffix instead of only the live KV.
+// Returns the combined {k, v, kq_b, kq_mask} to feed build_attn_mha.
+struct compacted_prefix_concat_result {
+    ggml_tensor * k;
+    ggml_tensor * v;
+    ggml_tensor * kq_b_combined;
+    ggml_tensor * kq_mask_combined;
+};
+
+static compacted_prefix_concat_result build_compacted_prefix_concat(
+        const llm_graph_context & gctx,
+        llm_graph_input_attn_kv * inp,
+        bool layer_zb,
+        bool zero_beta,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * kq_b,
+        ggml_tensor * kq_mask,
+        int il) {
+    ggml_context * ctx0 = gctx.ctx0;
+    const auto & hparams = gctx.hparams;
+    const auto & cparams = gctx.cparams;
+    const int64_t n_tokens = gctx.n_tokens;
+
+    const int64_t live_n_kv = k->ne[2];
+
+    const auto * compacted = inp->ensure_compacted_prefix_layer(
+            ctx0,
+            il,
+            k->type,
+            v->type,
+            hparams.n_embd_head_k(il),
+            hparams.n_embd_head_v(il),
+            n_tokens,
+            hparams.n_head(il),
+            hparams.n_head_kv(il),
+            layer_zb);
+
+    GGML_ASSERT(compacted != nullptr);
+
+    // Prepend the compacted-prefix tokens along the KV (dim-2) axis.
+    k = ggml_concat(ctx0, compacted->k, k, 2);
+
+    // The live V may be stored transposed; un-transpose before concat so it matches
+    // the compacted V layout [n_embd_head_v, n_head_kv, n_prefix, 1].
+    if (v->nb[1] > v->nb[2]) {
+        v = ggml_cont(ctx0, ggml_permute(ctx0, v, 2, 1, 0, 3));
+        gctx.cb(v, "v_live_nontrans", il);
+    }
+    v = ggml_concat(ctx0, compacted->v, v, 2);
+
+    // The live self mask may be F16 (flash path) while the compacted mask is always F32.
+    // ggml_concat needs matching types — normalize the live mask to the compacted type.
+    ggml_tensor * compacted_kq_mask = inp->get_compacted_kq_mask();
+    ggml_tensor * live_kq_mask = kq_mask;
+    if (live_kq_mask->type != compacted_kq_mask->type) {
+        live_kq_mask = ggml_cast(ctx0, live_kq_mask, compacted_kq_mask->type);
+    }
+
+    ggml_tensor * kq_mask_combined = ggml_concat(ctx0, compacted_kq_mask, live_kq_mask, 0);
+    ggml_tensor * kq_b_combined = kq_b;
+
+    if (zero_beta) {
+        // Zero-beta: no kq_b needed; keep flash attention eligible by casting the
+        // combined mask to F16 when flash attention will actually be used.
+        if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
+            kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
+        }
+    } else if (kq_b) {
+        GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
+        GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
+        GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
+        kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
+    } else {
+        // No live kq_b but the compacted prefix has β: create a zero bias for the live portion.
+        ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
+                ctx0,
+                GGML_TYPE_F32,
+                live_n_kv,
+                compacted->kq_b->ne[1],
+                compacted->kq_b->ne[2],
+                compacted->kq_b->ne[3]);
+        ggml_tensor * zero_scalar = ggml_scale(
+                ctx0,
+                ggml_view_1d(ctx0, compacted->kq_b, 1, 0),
+                0.0f);
+        ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
+        kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
+    }
+
+    gctx.cb(k, "k_compacted_plus_live", il);
+    gctx.cb(v, "v_compacted_plus_live", il);
+    gctx.cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
+    if (kq_b_combined) {
+        gctx.cb(kq_b_combined, "kq_b_compacted_plus_live", il);
+    }
+
+    return { k, v, kq_b_combined, kq_mask_combined };
+}
+#endif // LLAMA_KV_COMPACTION
+
 static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
            ggml_context * ctx0,
      const llama_ubatch & ubatch,
@@ -2441,6 +2624,26 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+
+#ifdef LLAMA_KV_COMPACTION
+        // GRAPH-EXEC consumption: when this ubatch attends over a compacted prefix,
+        // allocate the compacted-prefix mask graph input (per-layer K/V/β are created
+        // lazily in build_attn via ensure_compacted_prefix_layer).
+        if (mctx_cur->compacted_prefix_active()) {
+            const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            GGML_ASSERT(n_stream == 1 && "compacted-prefix execution currently supports a single attention stream");
+
+            inp->compacted_prefix_active       = true;
+            inp->compacted_prefix_is_zero_beta = mctx_cur->compacted_prefix_zero_beta();
+            inp->compacted_prefix_n_tokens     = mctx_cur->compacted_prefix_n_tokens();
+
+            inp->compacted_kq_mask = ggml_new_tensor_4d(
+                    ctx0, GGML_TYPE_F32,
+                    inp->compacted_prefix_n_tokens, ubatch.n_tokens / n_stream, 1, n_stream);
+            ggml_set_input(inp->compacted_kq_mask);
+        }
+#endif
+
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
@@ -2586,7 +2789,29 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption: prepend the compacted prefix (β / fitted-V) so this
+    // sequence attends over (compacted-prefix + β) ++ live-suffix. When β is non-zero
+    // build_attn_mha drops to the non-FA path (use_flash_attn = flash_attn && kq_b==null)
+    // and applies kq = kq + kq_b; zero-beta layers keep flash attention.
+    ggml_tensor * kq_b_combined    = kq_b;
+    ggml_tensor * kq_mask_combined = kq_mask;
+    if (inp->has_compacted_prefix()) {
+        GGML_ASSERT(k_res == nullptr && "OScaR residual window is incompatible with compacted-prefix execution");
+        const bool layer_zb  = inp->mctx->compacted_prefix_layer_zero_beta(il);
+        const bool zero_beta = inp->compacted_prefix_is_zero_beta || layer_zb;
+
+        const auto r = build_compacted_prefix_concat(*this, inp, layer_zb, zero_beta, k, v, kq_b, kq_mask, il);
+        k                = r.k;
+        v                = r.v;
+        kq_b_combined    = r.kq_b_combined;
+        kq_mask_combined = r.kq_mask_combined;
+    }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b_combined, kq_mask_combined, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);
+#else
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);
+#endif
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {

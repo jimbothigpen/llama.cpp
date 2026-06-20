@@ -74,6 +74,7 @@ target_link_libraries(llama PUBLIC ggml)
 if (LLAMA_KV_COMPACTION)
     target_sources(llama PRIVATE
         llama-kv-compacted-prefix.cpp
+        llama-kv-compacted-prefix-exec.cpp
         llama-kv-compact-api.cpp
         llama-kv-compact-pipeline.cpp
         llama-kv-compact-solver.cpp

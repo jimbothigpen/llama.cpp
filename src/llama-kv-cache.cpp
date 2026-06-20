@@ -974,7 +974,21 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
 
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption (F-M-01): include compacted-prefix bounds so a sequence
+    // whose live prefix was reclaimed still reports its logical span — otherwise the
+    // next decode position resets to 0 and falls below live_suffix_pos0.
+    {
+        const llama_pos live_min   = cells.seq_pos_min(seq_id);
+        const llama_pos prefix_min = compacted_prefix.seq_pos_min(seq_id);
+        if (prefix_min >= 0) {
+            return (live_min >= 0) ? std::min(live_min, prefix_min) : prefix_min;
+        }
+        return live_min;
+    }
+#else
     return cells.seq_pos_min(seq_id);
+#endif
 }
 
 llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
@@ -987,7 +1001,21 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
 
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption (F-M-01): include compacted-prefix bounds so a sequence
+    // whose live prefix was reclaimed still reports its logical max — otherwise the
+    // next decode position resets to 0 and falls below live_suffix_pos0.
+    {
+        const llama_pos live_max   = cells.seq_pos_max(seq_id);
+        const llama_pos prefix_max = compacted_prefix.seq_pos_max(seq_id);
+        if (prefix_max >= 0) {
+            return (live_max >= 0) ? std::max(live_max, prefix_max) : prefix_max;
+        }
+        return live_max;
+    }
+#else
     return cells.seq_pos_max(seq_id);
+#endif
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
@@ -3209,6 +3237,18 @@ bool llama_kv_cache_context::apply() {
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur], mtp_op_type);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
+#ifdef LLAMA_KV_COMPACTION
+    // GRAPH-EXEC consumption: resolve whether this ubatch attends over the
+    // compacted prefix (β / fitted-V) instead of the (now reclaimed) live prefix.
+    compacted_exec = {};
+    kv->resolve_compacted_prefix_exec(ubatches[i_cur], compacted_exec);
+    if (getenv("LLAMA_COMPACT_DEBUG") && compacted_exec.seq_id >= 0) {
+        LLAMA_LOG_INFO("%s: compacted-exec ACTIVE seq=%d n_prefix=%u zero_beta=%d live_n_kv=%d\n",
+                       __func__, compacted_exec.seq_id, compacted_exec.n_tokens,
+                       (int) compacted_exec.zero_beta, n_kv);
+    }
+#endif
+
     return true;
 }
 
@@ -3315,6 +3355,44 @@ void llama_kv_cache_context::set_input_v_rot(ggml_tensor * dst) const {
 }
 
 #ifdef LLAMA_KV_COMPACTION
+// ---- GRAPH-EXEC consumption path context wrappers (graphexec port 2026-06-20) ----
+bool llama_kv_cache_context::compacted_prefix_active() const {
+    return compacted_exec.seq_id >= 0 && compacted_exec.n_tokens > 0;
+}
+
+llama_seq_id llama_kv_cache_context::compacted_prefix_seq_id() const {
+    return compacted_exec.seq_id;
+}
+
+uint32_t llama_kv_cache_context::compacted_prefix_n_tokens() const {
+    return compacted_exec.n_tokens;
+}
+
+bool llama_kv_cache_context::compacted_prefix_zero_beta() const {
+    return compacted_exec.zero_beta;
+}
+
+bool llama_kv_cache_context::compacted_prefix_layer_zero_beta(int32_t il) const {
+    return kv->compacted_prefix_layer_zero_beta(compacted_exec.seq_id, il);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+    kv->set_input_compacted_prefix_mask(dst, ubatch, causal_attn, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_k(dst, il, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_v(dst, il, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_kq_b(dst, il, compacted_exec.seq_id);
+}
+
+
 //
 // KV cache compaction (Attention Matching) — first-landing slice (SELECT only).
 // Ported from jandhyala-dev/modelai-llama.cpp. The graph-execution path and the
@@ -3391,18 +3469,27 @@ bool llama_kv_cache::compacted_prefix_configure(
     const bool is_imrope = (hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE);
     const bool ok = compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0, is_imrope);
     if (ok) {
-        ++compacted_prefix_version_counter;
+        compacted_prefix_bump_version();
+    }
+    if (getenv("LLAMA_COMPACT_DEBUG")) {
+        const auto * st = compacted_prefix.get_seq(seq_id);
+        LLAMA_LOG_INFO("cp_configure: kv=%p seq=%d ok=%d -> state=%p enabled=%d lsp0=%d\n",
+                       (void*) this, seq_id, (int) ok, (const void*) st,
+                       st ? (int) st->enabled : -1, st ? (int) st->live_suffix_pos0 : -999);
     }
     return ok;
 }
 
 void llama_kv_cache::compacted_prefix_clear(llama_seq_id seq_id, bool data) {
+    if (getenv("LLAMA_COMPACT_DEBUG")) {
+        LLAMA_LOG_INFO("cp_clear: kv=%p seq=%d data=%d  <-- STORE CLEARED\n", (void*) this, seq_id, (int) data);
+    }
     if (seq_id < 0) {
         compacted_prefix.clear(data);
     } else {
         compacted_prefix.clear_seq(seq_id, data);
     }
-    ++compacted_prefix_version_counter;
+    compacted_prefix_bump_version();
 }
 
 bool llama_kv_cache::compacted_prefix_enabled(llama_seq_id seq_id) const {
@@ -3567,6 +3654,194 @@ bool llama_kv_cache::compacted_prefix_reclaim_live_kv(llama_seq_id seq_id) {
 
     v_heads[strm] = keep_idxs.size();
     return true;
+}
+
+// ========================================================================
+// GRAPH-EXEC consumption path (graphexec port 2026-06-20)
+// Make the compacted-prefix store (β / fitted-V) actually feed the decode
+// graph: resolve the per-ubatch exec candidate, expose zero-beta state for
+// flash eligibility, and materialize mask / K / V / β(kq_b) into graph inputs.
+// ========================================================================
+
+bool llama_kv_cache::resolve_compacted_prefix_exec(
+        const llama_ubatch & ubatch,
+        llama_compacted_prefix_exec_candidate & out) const {
+    out = {};
+
+    const bool dbg = getenv("LLAMA_COMPACT_DEBUG") != nullptr;
+
+    if (!compacted_prefix_runtime_supported()) {
+        if (dbg) LLAMA_LOG_INFO("resolve_cp_exec: bail — runtime not supported\n");
+        return false;
+    }
+
+    if (ubatch.n_seqs_unq != 1 || ubatch.seq_id_unq == nullptr) {
+        if (dbg) LLAMA_LOG_INFO("resolve_cp_exec: bail — n_seqs_unq=%u seq_id_unq=%p\n",
+                                ubatch.n_seqs_unq, (void*) ubatch.seq_id_unq);
+        return false;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id_unq[0];
+    const auto * state = compacted_prefix.get_seq(seq_id);
+
+    if (dbg) {
+        const llama_pos p0 = ubatch.n_tokens > 0 && ubatch.pos ? ubatch.pos[0] : -999;
+        LLAMA_LOG_INFO("resolve_cp_exec: kv=%p seq=%d state=%p enabled=%d exec_en=%d lsp0=%d n_tokens=%u pos0=%d\n",
+                       (const void*) this, seq_id, (const void*) state,
+                       state ? (int) state->enabled : -1,
+                       state ? (int) state->is_execution_enabled() : -1,
+                       state ? (int) state->live_suffix_pos0 : -999,
+                       ubatch.n_tokens, p0);
+    }
+
+    const bool ok = llama_compacted_prefix_can_execute(seq_id, state, ubatch, &out);
+    if (dbg && !ok) LLAMA_LOG_INFO("resolve_cp_exec: can_execute=false\n");
+    return ok;
+}
+
+bool llama_kv_cache::compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (!state || !state->is_execution_enabled()) {
+        return true;
+    }
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) {
+        return true;
+    }
+    const int32_t ikv = it->second;
+    if ((size_t) ikv >= state->layers.size()) {
+        return true;
+    }
+    return state->layers[ikv].is_zero_beta();
+}
+
+void llama_kv_cache::set_input_compacted_prefix_mask(
+        ggml_tensor * dst,
+        const llama_ubatch * ubatch,
+        bool causal_attn,
+        llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix mask requested without an active execution state");
+    }
+
+    llama_compacted_prefix_set_input_mask(dst, *state, *ubatch, hparams, causal_attn);
+}
+
+// Shared helper — ensure the cp_cache staging vectors are sized for the current
+// compacted-prefix version and sequence. Mirrors the upstream init block.
+template <typename Cache>
+static void cp_cache_ensure_init(
+        Cache & cache,
+        uint64_t ver,
+        llama_seq_id seq_id,
+        size_t n_layers) {
+    if (cache.version != ver || cache.seq_id != seq_id) {
+        cache.version = ver;
+        cache.seq_id  = seq_id;
+        cache.k_bytes.clear();
+        cache.v_bytes.clear();
+        cache.beta_bytes.clear();
+        cache.k_bytes.resize(n_layers);
+        cache.v_bytes.resize(n_layers);
+        cache.beta_bytes.resize(n_layers);
+    }
+}
+
+void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix K requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
+
+    if (cp_cache.k_bytes[ikv].size() == nbytes) {
+        ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
+        return;
+    }
+
+    cp_cache.k_bytes[ikv].resize(nbytes);
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.k_bytes[ikv].data();
+    llama_compacted_prefix_set_input_k(&tmp, state->layers[ikv]);
+    ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
+}
+
+void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix V requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
+
+    if (cp_cache.v_bytes[ikv].size() == nbytes) {
+        ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
+        return;
+    }
+
+    cp_cache.v_bytes[ikv].resize(nbytes);
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.v_bytes[ikv].data();
+    llama_compacted_prefix_set_input_v(&tmp, state->layers[ikv]);
+    ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
+}
+
+void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix bias requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+    const uint32_t n_tps = (uint32_t) dst->ne[1];
+
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
+
+    if (cp_cache.beta_bytes[ikv].size() == nbytes && cp_cache.beta_n_tps == n_tps) {
+        ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
+        return;
+    }
+
+    cp_cache.beta_bytes[ikv].resize(nbytes);
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.beta_bytes[ikv].data();
+    llama_compacted_prefix_set_input_beta(&tmp, state->layers[ikv], hparams.n_head(il));
+    ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
+    cp_cache.beta_n_tps = n_tps;
+
+    if (il == 0 && getenv("LLAMA_COMPACT_DEBUG")) {
+        const auto & src = state->layers[ikv].beta_data;   // raw stored beta [n_head_kv * n_tokens]
+        double bmin = 1e300, bmax = -1e300; size_t nnan = 0, ninf = 0;
+        for (float b : src) {
+            if (std::isnan(b)) { nnan++; continue; }
+            if (std::isinf(b)) { ninf++; continue; }
+            if (b < bmin) bmin = b; if (b > bmax) bmax = b;
+        }
+        const float * exp = (const float *) cp_cache.beta_bytes[ikv].data();
+        double emin = 1e300, emax = -1e300; size_t ennan = 0;
+        const size_t ne = nbytes / sizeof(float);
+        for (size_t i = 0; i < ne; ++i) { float e = exp[i]; if (std::isnan(e)||std::isinf(e)) ennan++; else { if (e<emin) emin=e; if (e>emax) emax=e; } }
+        LLAMA_LOG_INFO("cp_beta[il=0]: stored n=%zu min=%.4g max=%.4g nan=%zu inf=%zu | expanded ne=%zu min=%.4g max=%.4g bad=%zu\n",
+                       src.size(), bmin, bmax, nnan, ninf, ne, emin, emax, ennan);
+    }
 }
 
 bool llama_kv_cache::compacted_prefix_select_from_live_kv(
