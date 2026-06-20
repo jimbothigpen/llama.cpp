@@ -43,6 +43,12 @@ layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq da
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } k_packed_turboq3_tcq;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_TCQ { block_turboq3_tcq data[]; } v_packed_turboq3_tcq;
 
+// OScaR INT2 (36-byte block_kv_oscar_int2). K and V both decode as plain min-max
+// INT2 (val = m + d*level). The K cache is stored WHT-rotated, so the matching
+// head-dim WHT is applied to Q at decode (see flash_attn.comp); V is un-rotated.
+layout (binding = 1) readonly buffer K_PACKED_KV_OSCAR_INT2 { block_kv_oscar_int2 data[]; } k_packed_kv_oscar_int2;
+layout (binding = 2) readonly buffer V_PACKED_KV_OSCAR_INT2 { block_kv_oscar_int2 data[]; } v_packed_kv_oscar_int2;
+
 // BF16 read as u16vec4 blocks (mainline layout): 4 brain-float16 values per block,
 // decoded via bf16_to_fp32(uvec4(...)) in types.glsl. No struct needed.
 layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
@@ -155,6 +161,20 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     return FLOAT_TYPE(BUF.data[a_offset + ib].norm) * c;                                          \
 }
 
+// OScaR INT2: plain per-block min-max uniform 2-bit dequant (val = m + d*level).
+// Identical for K and V; the head-dim WHT lives on the Q side (see flash_attn.comp).
+#define FA_DEQUANT4_KV_OSCAR_INT2(BUF) {                                                          \
+    const uint qb0 = uint(BUF.data[a_offset + ib].qs[(iqs    ) / 4]);                             \
+    const uint l0 = (qb0 >> (((iqs    ) % 4) * 2u)) & 0x3u;                                       \
+    const uint l1 = (qb0 >> (((iqs + 1) % 4) * 2u)) & 0x3u;                                       \
+    const uint l2 = (qb0 >> (((iqs + 2) % 4) * 2u)) & 0x3u;                                       \
+    const uint l3 = (qb0 >> (((iqs + 3) % 4) * 2u)) & 0x3u;                                       \
+    const FLOAT_TYPE bd = FLOAT_TYPE(BUF.data[a_offset + ib].d);                                  \
+    const FLOAT_TYPE bm = FLOAT_TYPE(BUF.data[a_offset + ib].m);                                  \
+    return FLOAT_TYPEV4(bm + bd * FLOAT_TYPE(l0), bm + bd * FLOAT_TYPE(l1),                        \
+                        bm + bd * FLOAT_TYPE(l2), bm + bd * FLOAT_TYPE(l3));                       \
+}
+
 // TCQ: 16-bit sliding-window bit extraction over qs[]. The trailing pad byte
 // in block_turboq{2,3}_tcq makes `qs[byte_idx + 1]` safe on the last symbol.
 // V-side decode-time alpha is hardcoded 1.0f for L2 (no-op); a tunable
@@ -225,6 +245,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (k_packed_turboq3_tcq)
+            case FA_TYPE_KV_OSCAR_INT2: FA_DEQUANT4_KV_OSCAR_INT2(k_packed_kv_oscar_int2)
             case FA_TYPE_BF16:         FA_DEQUANT4_BF16          (k_packed_bf16)
         }
     } else {
@@ -240,6 +261,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (v_packed_turboq3_tcq)
+            case FA_TYPE_KV_OSCAR_INT2: FA_DEQUANT4_KV_OSCAR_INT2(v_packed_kv_oscar_int2)
             case FA_TYPE_BF16:         FA_DEQUANT4_BF16          (v_packed_bf16)
         }
     }

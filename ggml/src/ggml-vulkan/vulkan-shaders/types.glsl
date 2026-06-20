@@ -323,6 +323,29 @@ struct block_turboq2_tcq
 #define A_TYPE block_turboq2_tcq
 #endif
 
+// OScaR INT2 KV cache (yggdrasil Phase 1, arXiv:2605.19660).
+// Block layout matches ggml-common.h block_kv_oscar_int2: 2-byte d + 2-byte m
+// + 32-byte 2-bit indices = 36 bytes per 128 values (2.25 bpv). The K cache is
+// stored in the WHT-rotated domain (encode applies the full head-dim WHT); the
+// V cache is plain min-max INT2 (no WHT). Both decode identically as min-max
+// INT2 (val = m + d*level); the K-side WHT is re-applied to Q at FA decode time.
+#define QUANT_K_KV_OSCAR_INT2 128
+#define QUANT_R_KV_OSCAR_INT2 1
+
+struct block_kv_oscar_int2
+{
+    float16_t d;
+    float16_t m;
+    uint8_t   qs[QUANT_K_KV_OSCAR_INT2 / 4];
+};
+
+#if defined(DATA_A_KV_OSCAR_INT2)
+#define QUANT_K QUANT_K_KV_OSCAR_INT2
+#define QUANT_R QUANT_R_KV_OSCAR_INT2
+#define QUANT_AUXF 1
+#define A_TYPE block_kv_oscar_int2
+#endif
+
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 

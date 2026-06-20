@@ -5129,7 +5129,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_0], "set_rows_turboq3_0" #itype, set_rows_turboq3_0 ## itype ## _len, set_rows_turboq3_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ4_0], "set_rows_turboq4_0" #itype, set_rows_turboq4_0 ## itype ## _len, set_rows_turboq4_0 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
         ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ2_TCQ], "set_rows_turboq2_tcq" #itype, set_rows_turboq2_tcq ## itype ## _len, set_rows_turboq2_tcq ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
-        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_TCQ], "set_rows_turboq3_tcq" #itype, set_rows_turboq3_tcq ## itype ## _len, set_rows_turboq3_tcq ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_TURBOQ3_TCQ], "set_rows_turboq3_tcq" #itype, set_rows_turboq3_tcq ## itype ## _len, set_rows_turboq3_tcq ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true); \
+        ggml_vk_create_pipeline(device, device->pipeline_set_rows ## itype [GGML_TYPE_KV_OSCAR_INT2], "set_rows_kv_oscar_int2" #itype, set_rows_kv_oscar_int2 ## itype ## _len, set_rows_kv_oscar_int2 ## itype ## _data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {1}, 1, true);
 
     SET_ROWS(_i32)
     SET_ROWS(_i64)
@@ -11740,6 +11741,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 ne = CEIL_DIV(ne, ggml_blck_size(dst->type));
             } else if (dst->type == GGML_TYPE_WHT4_0 || dst->type == GGML_TYPE_WHT3_0) {
                 ne = ne / 32;
+            } else if (dst->type == GGML_TYPE_KV_OSCAR_INT2) {
+                // OScaR SET_ROWS: one 256-thread workgroup per head-dim group of 256
+                // elements (= 2 sub-blocks); the 256-pt WHT needs workgroup-wide reduction.
+                ne = CEIL_DIV(ne, 256);
             } else if (ggml_is_quantized(dst->type)) {
                 // quants run 32 threads each doing QUANT_K elements
                 ne = CEIL_DIV(ne, 32 * ggml_blck_size(dst->type));
@@ -12528,7 +12533,8 @@ static void ggml_vk_set_rows(ggml_backend_vk_context * ctx, vk_context& subctx, 
         (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
         (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
         0,
-        0.0f, 0.0f, 0,
+        // param3 carries op_params[0] for KV_OSCAR_INT2 SET_ROWS: 1 = K write (apply WHT), 0 = V write (plain INT2).
+        0.0f, 0.0f, dst->op_params[0],
     });
 }
 
@@ -17472,6 +17478,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_TURBOQ2_INNERQ:
                     case GGML_TYPE_TURBOQ3_INNERQ:
                         return true;
+                    // OScaR INT2: scalar-only FA (struct bindings + Q-side WHT in
+                    // flash_attn.comp). Routed to FA_SCALAR in ggml_vk_flash_attn.
+                    case GGML_TYPE_KV_OSCAR_INT2:
+                        return !coopmat2;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
                     default:
@@ -17561,6 +17571,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     // plain turbo set_rows pipelines. WHT4_0/WHT3_0 remain unimplemented.
                     case GGML_TYPE_TURBOQ2_INNERQ:
                     case GGML_TYPE_TURBOQ3_INNERQ:
+                    // OScaR INT2 KV cache: K writes (op_params[0]=1) apply the head-dim
+                    // WHT, V writes (op_params[0]=0) are plain INT2 — gated in-shader.
+                    case GGML_TYPE_KV_OSCAR_INT2:
                         return true;
                     default:
                         return false;
