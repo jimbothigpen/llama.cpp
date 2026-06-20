@@ -2100,7 +2100,8 @@ static __global__ void k_set_rows_oscar_int2(
         const int64_t s12,
         const int64_t s1,
         const int64_t s2,
-        const int64_t s3) {
+        const int64_t s3,
+        const bool apply_wht) {
 
     const int j = threadIdx.x; // 0..wht_group-1
     const int D = (int)blockDim.x; // = wht_group (256 or 128)
@@ -2131,17 +2132,24 @@ static __global__ void k_set_rows_oscar_int2(
     // Step 2: Full-dim D-pt WHT (no sign matrices — OScaR uses standard Hadamard).
     // For D=128: 7 stages (h=1..64). For D=256: 8 stages (h=1..128).
     // Each butterfly: thread (j/h)%2==0 mixes x[j] and x[j+h].
-    for (int h = 1; h < D; h <<= 1) {
-        if ((j / h) % 2 == 0) {
-            float a = x[j], b = x[j + h];
-            x[j]     = a + b;
-            x[j + h] = a - b;
+    // V cache (apply_wht=false) is plain INT2 — skip WHT+normalize entirely; K cache
+    // (apply_wht=true) is WHT-rotated. Mirrors the CPU/Vulkan op_params[0] gate
+    // (CPU fix c52607674c: gate WHT on op_param flag, not destination type). apply_wht is
+    // block-uniform (all threads share blockDim/op_params), so the inner __syncthreads()
+    // are reached uniformly; the trailing barrier stays unconditional.
+    if (apply_wht) {
+        for (int h = 1; h < D; h <<= 1) {
+            if ((j / h) % 2 == 0) {
+                float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+            __syncthreads();
         }
-        __syncthreads();
-    }
 
-    // Normalize: 1/sqrt(D) so H_D is orthonormal (H_D^T * H_D = I).
-    x[j] *= rsqrtf((float)D);
+        // Normalize: 1/sqrt(D) so H_D is orthonormal (H_D^T * H_D = I).
+        x[j] *= rsqrtf((float)D);
+    }
     __syncthreads();
 
     // Steps 3-6: Per-sub-block min/max reduction and quantize.
@@ -2241,11 +2249,13 @@ static void set_rows_cuda_oscar_int2(
         const int64_t wht_group = (ne00 % OSCAR_WHT_FULL_DIM == 0) ? OSCAR_WHT_FULL_DIM : QK_OSCAR_INT2;
         const int64_t n_groups  = ne00 / wht_group; // groups per row (= n_kv_heads for head_dim=256)
         const int64_t ne_total  = n_groups * ne01 * ne02 * ne03;
+        // op_params[0]: 1 = K write (apply WHT rotation), 0 = V write (plain INT2).
+        const bool apply_wht = (dst->op_params[0] != 0);
         k_set_rows_oscar_int2<idx_t><<<(int)ne_total, (int)wht_group, 0, stream>>>(
             src0_d, src1_d, (block_kv_oscar_int2 *)dst->data,
             ne00, ne01, ne10, ne11, ne12, ne13,
             s01, s02, s03, s10, s11, s12,
-            nb1, nb2, nb3);
+            nb1, nb2, nb3, apply_wht);
     }
 }
 
