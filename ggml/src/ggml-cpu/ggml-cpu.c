@@ -474,21 +474,8 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
-    // InnerQ CPU traits — vec_dot is NON-NULL (InnerQ is KV-runtime quant, not GPU-only;
-    // CPU mul_mat and test-backend-ops compare path work via aliased turboq{2,3,4}_0 functions).
-    [GGML_TYPE_TURBOQ2_INNERQ] = {
-        .from_float               = (ggml_from_float_t) quantize_row_turboq2_0_ref,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turboq2_0_f32,
-        .vec_dot_type             = GGML_TYPE_F32,
-        .nrows                    = 1,
-    },
-    [GGML_TYPE_TURBOQ3_INNERQ] = {
-        .from_float               = (ggml_from_float_t) quantize_row_turboq3_0_ref,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turboq3_0_f32,
-        .vec_dot_type             = GGML_TYPE_F32,
-        .nrows                    = 1,
-    },
-    // slots 70-71, 72-75 retired/reserved — designated-initializer gaps are intentional
+    // slots 68-71, 72-75 retired/reserved — designated-initializer gaps are intentional
+    // (68/69 were turboq2/3_innerq, retired 2026-06-20)
     [GGML_TYPE_WHT3_0] = {
         .from_float               = (ggml_from_float_t) quantize_row_wht3_0_ref,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_wht3_0_q8_0,

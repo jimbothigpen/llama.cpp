@@ -2374,12 +2374,6 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
         set_rows_cuda_turboq2_tcq<idx_t>(ctx, src0, src1, dst);
     } else if (dst->type == GGML_TYPE_KV_OSCAR_INT2) {
         set_rows_cuda_oscar_int2<idx_t>(ctx, src0, src1, dst);
-    } else if (dst->type == GGML_TYPE_TURBOQ2_INNERQ) {
-        // set_rows_cuda_turboq2 does not call turbo_innerq_check_finalize; must call explicitly.
-        turbo_innerq_check_finalize(QK_TURBOQ2, ne00);
-        set_rows_cuda_turboq2<idx_t>(ctx, src0, src1, dst);
-    } else if (dst->type == GGML_TYPE_TURBOQ3_INNERQ) {
-        set_rows_cuda_turboq3<idx_t>(ctx, src0, src1, dst);  // calls turbo_innerq_check_finalize internally
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }

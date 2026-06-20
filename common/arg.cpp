@@ -365,8 +365,6 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_TURBOQ8_0,
     GGML_TYPE_TURBOQ2_TCQ,
     GGML_TYPE_TURBOQ3_TCQ,
-    GGML_TYPE_TURBOQ2_INNERQ,
-    GGML_TYPE_TURBOQ3_INNERQ,
     GGML_TYPE_KV_OSCAR_INT2,
 };
 

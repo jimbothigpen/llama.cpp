@@ -1509,10 +1509,6 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_turboq2_tcq<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ3_TCQ) {
         return vec_dot_fattn_vec_KQ_turboq3_tcq<D, nthreads>;
-    } else if constexpr (type_K == GGML_TYPE_TURBOQ2_INNERQ) {
-        return vec_dot_fattn_vec_KQ_turboq2_0<D, nthreads>;  // InnerQ wire format == TURBOQ2_0
-    } else if constexpr (type_K == GGML_TYPE_TURBOQ3_INNERQ) {
-        return vec_dot_fattn_vec_KQ_turboq3_0<D, nthreads>;  // InnerQ wire format == TURBOQ3_0
     } else if constexpr (type_K == GGML_TYPE_KV_OSCAR_INT2) {
         // OScaR INT2: handled via the K_is_turbo inline branch in flash_attn_ext_vec;
         // vec_dot_KQ function pointer is never called for this type.
@@ -1555,10 +1551,6 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_turboq2_tcq<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ3_TCQ) {
         return dequantize_V_turboq3_tcq<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_TURBOQ2_INNERQ) {
-        return dequantize_V_turboq2_0<T, ne>;  // InnerQ wire format == TURBOQ2_0
-    } else if constexpr (type_V == GGML_TYPE_TURBOQ3_INNERQ) {
-        return dequantize_V_turboq3_0<T, ne>;  // InnerQ wire format == TURBOQ3_0
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;

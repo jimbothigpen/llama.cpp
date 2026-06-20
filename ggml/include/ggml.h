@@ -437,9 +437,11 @@ extern "C" {
         // slots 64–65 reserved for yggdrasil future TurboQuant variants — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_TURBOQ2_TCQ = 66, // TurboQuant 2-bit KV cache: TCQ (k=2, L=8, 256 states) — source: buun TURBO2_TCQ
         GGML_TYPE_TURBOQ3_TCQ = 67, // TurboQuant 3-bit KV cache: TCQ (k=3, L=9, 512 states, Viterbi) — source: buun TURBO3_TCQ
-        GGML_TYPE_TURBOQ2_INNERQ = 68, // 2-bit + InnerQ K-cache equalization; block_turboq2_0 (34 bytes, QK=128)
-        GGML_TYPE_TURBOQ3_INNERQ = 69, // 3-bit + InnerQ K-cache equalization; block_turboq3_0 (50 bytes, QK=128)
-        // slot 70 retired/reserved — was GGML_TYPE_TURBOQ4_INNERQ (4-bit InnerQ alias of TURBOQ4_0; InnerQ equalization regresses quality at 4-bit, PPL 9.08 vs 7.47, ft2 ccfe39d675)
+        // slots 68-70 retired/reserved — were GGML_TYPE_TURBOQ2_INNERQ/TURBOQ3_INNERQ/TURBOQ4_INNERQ (InnerQ K-cache
+        // equalization aliases of TURBOQ{2,3,4}_0). InnerQ engages but cannot rescue the WHT/no-QK-norm incompatibility
+        // (<0.25% PPL within σ), so the dedicated KV types were retired (do NOT reuse these slots). The InnerQ×TCQ
+        // equalization mechanism (scale_inv Q-rotation for TCQ types) is unaffected and remains. Evidence branch:
+        // feature/innerq-fix-hd128-engage-2026-06-19 (58ea5fa2f3). 4-bit was already retired (PPL 9.08 vs 7.47, ft2 ccfe39d675).
         GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype (arXiv:2605.19660)
         // slots 72-75 reserved (RQ_PLANAR3_0/RQ_PLANAR4_0/RQ_ISO3_0/RQ_ISO4_0 removed — zero-rotation scalar dup, strictly dominated)
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md

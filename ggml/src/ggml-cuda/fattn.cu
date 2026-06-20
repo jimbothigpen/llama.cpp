@@ -447,30 +447,6 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,         GGML_TYPE_TURBOQ2_TCQ)
 
-    // TURBOQ_INNERQ KV cache types (wire format == 0-tier; InnerQ scale applied at graph level, Phase X-4)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_INNERQ, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_TURBOQ3_INNERQ)
-
-    // Asymmetric INNERQ HIGH: mainline/turbo K × INNERQ V, within-INNERQ K>V
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,            GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,            GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16,           GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16,           GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,           GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,           GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_INNERQ, GGML_TYPE_TURBOQ2_INNERQ)
-
-    // Phase X-InnerQ-s2: TURBOQ/TCQ K × INNERQ V + Q4/Q5 K × INNERQ V
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0,   GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ4_0,   GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0,   GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_0,   GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ3_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBOQ2_INNERQ)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBOQ2_INNERQ)
     // Q4_1 K × TURBOQ_0 V (X-2b-s2)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ4_0)
     FATTN_VEC_CASES_ALL_D_512(GGML_TYPE_Q4_1, GGML_TYPE_TURBOQ3_0)
@@ -609,7 +585,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return t == GGML_TYPE_TURBOQ2_0 || t == GGML_TYPE_TURBOQ3_0 || t == GGML_TYPE_TURBOQ4_0
                 || t == GGML_TYPE_TURBOQ8_0
                 || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
-                || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
                 || t == GGML_TYPE_KV_OSCAR_INT2
                 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16
                 || t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 || t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1
@@ -640,10 +615,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case GGML_TYPE_TURBOQ8_0:
         case GGML_TYPE_TURBOQ2_TCQ:
         case GGML_TYPE_TURBOQ3_TCQ:
-        case GGML_TYPE_TURBOQ2_INNERQ:
-        case GGML_TYPE_TURBOQ3_INNERQ:
             // TURBOQ{2,3,4,8}_0 VEC kernels instantiated for D in {64, 128, 256, 512};
-            // TCQ and INNERQ top at D=256.
+            // TCQ tops at D=256.
             if (K->ne[0] % 64 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -670,15 +643,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return t == GGML_TYPE_TURBOQ2_0   || t == GGML_TYPE_TURBOQ3_0   || t == GGML_TYPE_TURBOQ4_0
             || t == GGML_TYPE_TURBOQ8_0
             || t == GGML_TYPE_TURBOQ2_TCQ || t == GGML_TYPE_TURBOQ3_TCQ
-            || t == GGML_TYPE_TURBOQ2_INNERQ || t == GGML_TYPE_TURBOQ3_INNERQ
             || t == GGML_TYPE_KV_OSCAR_INT2;  // OScaR INT2: VEC-only (Phase 1)
     };
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
         const bool tcq_kv = K->type == GGML_TYPE_TURBOQ2_TCQ || K->type == GGML_TYPE_TURBOQ3_TCQ ||
                             V->type == GGML_TYPE_TURBOQ2_TCQ || V->type == GGML_TYPE_TURBOQ3_TCQ;
-        const bool innerq_kv = K->type == GGML_TYPE_TURBOQ2_INNERQ || K->type == GGML_TYPE_TURBOQ3_INNERQ ||
-                               V->type == GGML_TYPE_TURBOQ2_INNERQ || V->type == GGML_TYPE_TURBOQ3_INNERQ;
-        int d_limit = (tcq_kv || innerq_kv) ? 256 : 512;
+        int d_limit = tcq_kv ? 256 : 512;
         // TODO 135: on pre-Ampere (sm_60/sm_70/sm_75) the turbo VEC kernel at D=512 needs
         // >48 KB static shared memory and is compiled as NO_DEVICE_CODE there (see
         // fattn-vec.cuh). Cap to D=256 so we never launch a stubbed kernel; D<=256 turbo
