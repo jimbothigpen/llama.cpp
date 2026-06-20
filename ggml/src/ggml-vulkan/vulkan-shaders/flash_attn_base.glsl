@@ -104,6 +104,7 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define FA_TYPE_TURBOQ4_0 62u
 #define FA_TYPE_TURBOQ2_TCQ 66u
 #define FA_TYPE_TURBOQ3_TCQ 67u
+#define FA_TYPE_KV_OSCAR_INT2 71u
 
 #if defined(BFLOAT16)
 #define O_TYPE float
@@ -133,6 +134,7 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_TURBOQ4_0: return uint(QUANT_K_TURBOQ4_0);
         case FA_TYPE_TURBOQ2_TCQ:  return uint(QUANT_K_TURBOQ2_TCQ);
         case FA_TYPE_TURBOQ3_TCQ:  return uint(QUANT_K_TURBOQ3_TCQ);
+        case FA_TYPE_KV_OSCAR_INT2: return uint(QUANT_K_KV_OSCAR_INT2);
         default:               return 1u;
     }
 }

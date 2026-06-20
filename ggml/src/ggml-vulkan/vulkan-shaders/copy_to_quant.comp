@@ -11,6 +11,14 @@
 // pre/post norm and a barrier-driven butterfly.
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 128;
+#elif defined(SET_ROWS) && defined(DATA_A_KV_OSCAR_INT2)
+// OScaR INT2 SET_ROWS: one workgroup encodes one head-dim group of 256 elements
+// (= 2 sub-blocks of 128). K writes (op_params[0]!=0) run the full 256-pt forward
+// Walsh-Hadamard transform (1/sqrt(256) normalized) first; V writes (op_params[0]==0)
+// skip it. Both then do per-128-subblock min-max uniform INT2. Mirrors the CPU
+// quantize_row_kv_oscar_int2_{wht,ref} and the CUDA k_set_rows_oscar_int2 kernel.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+const uint BLOCK_SIZE = 256;
 #elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_TCQ)
 // TCQ3 encoder: 512 Viterbi states processed in parallel; 128-element input block per workgroup.
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
@@ -684,6 +692,88 @@ void main() {
         for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t4[w];
         float rn = sqrt(total);
         data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t4 / rn) : gnrm_t4);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_KV_OSCAR_INT2)
+// OScaR INT2 SET_ROWS encode. One 256-thread workgroup handles one head-dim group
+// (256 elements = 2 sub-blocks of QK_OSCAR_INT2=128). For K writes (op_params[0]!=0)
+// run the full 256-pt forward Walsh-Hadamard (1/sqrt(256) normalized); V writes skip
+// it. Then per-128-subblock min-max uniform INT2 (level = round((x-min)/d), d=range/3).
+// Mirrors quantize_row_kv_oscar_int2_{wht,ref} (CPU) and k_set_rows_oscar_int2 (CUDA).
+shared float oscar_x[256];
+shared float oscar_min[2];
+shared float oscar_max[2];
+shared uint  oscar_lvl[256];
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;          // 0..255
+    const uint g   = gl_WorkGroupID.z * 262144u + gl_WorkGroupID.y * 512u + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 256u;                   // 256-element groups per row
+
+    if (gpr == 0u) return;
+    if (g >= p.ne / 256u) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 256u, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+
+    const bool apply_wht = (p.param3 != 0);           // K (1) → WHT; V (0) → plain
+
+    oscar_x[t] = data_s[sb + t];
+    barrier();
+
+    if (apply_wht) {
+        // Full 256-pt in-place Walsh-Hadamard butterfly.
+        [[unroll]] for (uint h = 1u; h < 256u; h <<= 1) {
+            if ((t % (2u * h)) < h) {
+                float a = oscar_x[t];
+                float b = oscar_x[t + h];
+                oscar_x[t]     = a + b;
+                oscar_x[t + h] = a - b;
+            }
+            barrier();
+        }
+        oscar_x[t] *= 0.0625;                         // 1 / sqrt(256)
+        barrier();
+    }
+
+    // Per-128-subblock min/max (sub-block leaders scan their 128 elements).
+    const uint ib = t / 128u;                         // sub-block 0 or 1
+    const uint jb = t % 128u;                         // lane within sub-block
+    if (jb == 0u) {
+        float mn = oscar_x[t];
+        float mx = oscar_x[t];
+        for (uint j = 1u; j < 128u; ++j) {
+            float v = oscar_x[t + j];
+            mn = min(mn, v);
+            mx = max(mx, v);
+        }
+        oscar_min[ib] = mn;
+        oscar_max[ib] = mx;
+    }
+    barrier();
+
+    const float bmin  = oscar_min[ib];
+    const float range = oscar_max[ib] - bmin;
+    const float bd    = (range > 1e-10) ? (range / 3.0) : 1.0;
+    oscar_lvl[t] = uint(clamp(int(round((oscar_x[t] - bmin) / bd)), 0, 3));
+    barrier();
+
+    // Destination block index: head-group ig maps to blocks [ig*2, ig*2+1].
+    const uint db = dst_idx(ig * 2u + ib, i1, i02, i03) + get_doffset();
+
+    if (jb % 4u == 0u) {
+        uint b = oscar_lvl[t] | (oscar_lvl[t + 1u] << 2u) | (oscar_lvl[t + 2u] << 4u) | (oscar_lvl[t + 3u] << 6u);
+        data_q[db].qs[jb / 4u] = uint8_t(b);
+    }
+    if (jb == 0u) {
+        data_q[db].d = float16_t(bd);
+        data_q[db].m = float16_t(bmin);
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_TURBOQ3_TCQ)

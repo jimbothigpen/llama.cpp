@@ -148,6 +148,46 @@ void main() {
     }
     barrier();
 
+#ifndef MMQ
+    // OScaR INT2 K cache is stored in the head-dim Walsh-Hadamard domain. Apply the
+    // matching D-pt WHT (1/sqrt(D) normalized) to Q in shared memory so the FA dot
+    // Qf·dequant(K) recovers q·k (H_D^T H_D = D*I; the two 1/sqrt(D) factors cancel).
+    // Mirrors ggml_vec_dot_kv_oscar_int2_f32 (CPU) / vec_dot_fattn_vec_KQ_oscar_int2.
+    // FaTypeK is a spec constant, so this whole block folds away for other K types.
+    if (FaTypeK == FA_TYPE_KV_OSCAR_INT2) {
+        const uint32_t Dwht = HSK;
+        if (tid < Br && i * Br + tid < N) {
+            float xw[HSK];
+            for (uint32_t d4 = 0; d4 < Dwht / 4; ++d4) {
+                FLOAT_TYPEV4 v = Qf[tid * qf_stride + d4];
+                xw[d4 * 4 + 0] = float(v.x);
+                xw[d4 * 4 + 1] = float(v.y);
+                xw[d4 * 4 + 2] = float(v.z);
+                xw[d4 * 4 + 3] = float(v.w);
+            }
+            for (uint32_t h = 1u; h < Dwht; h <<= 1) {
+                for (uint32_t base = 0u; base < Dwht; base += 2u * h) {
+                    for (uint32_t j = base; j < base + h; ++j) {
+                        float a = xw[j];
+                        float b = xw[j + h];
+                        xw[j]     = a + b;
+                        xw[j + h] = a - b;
+                    }
+                }
+            }
+            const float inv_sqrt_D = inversesqrt(float(Dwht));
+            for (uint32_t d4 = 0; d4 < Dwht / 4; ++d4) {
+                Qf[tid * qf_stride + d4] = FLOAT_TYPEV4(
+                    xw[d4 * 4 + 0] * inv_sqrt_D,
+                    xw[d4 * 4 + 1] * inv_sqrt_D,
+                    xw[d4 * 4 + 2] * inv_sqrt_D,
+                    xw[d4 * 4 + 3] * inv_sqrt_D);
+            }
+        }
+        barrier();
+    }
+#endif
+
     FLOAT_TYPEV4 Of[rows_per_thread][HSV_per_thread / 4];
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
