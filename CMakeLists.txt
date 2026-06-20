@@ -128,6 +128,13 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 # the first-landing slice compiles the SELECT pipeline (no LAPACK/Metal required).
 option(LLAMA_KV_COMPACTION "llama: enable KV cache compaction (SELECT first-landing slice)" OFF)
 
+# EpiCache P1: block-wise prefill peak-mem bounding (arXiv 2509.17396, FA-safe decomposition).
+# Reuses TriAttention's proxy scorer + physical compaction; when enabled at runtime
+# (LLAMA_EPICACHE_PREFILL=1) the server/cli/ppl prefill evicts each n_batch block down to a fixed
+# token budget (LLAMA_EPICACHE_BUDGET) so resident KV stays bounded during prefill.
+# Default OFF: when OFF every new line is #ifdef'd out and the default build is byte-unaffected.
+option(LLAMA_EPICACHE "llama: enable EpiCache P1 block-wise prefill peak-mem bounding (TriAttn scorer reuse)" OFF)
+
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)

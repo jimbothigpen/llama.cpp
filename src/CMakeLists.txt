@@ -80,6 +80,13 @@ else()
     target_sources(llama PRIVATE llama-kv-compact-stubs.cpp)
 endif()
 
+# EpiCache P1: block-wise prefill peak-mem bounding. No new translation units — the logic lives
+# inside #ifdef LLAMA_EPICACHE in the already-compiled TriAttention runtime + llama-context. When
+# OFF (default) the macro is undefined and the build is byte-unaffected.
+if (LLAMA_EPICACHE)
+    target_compile_definitions(llama PUBLIC LLAMA_EPICACHE)
+endif()
+
 # TriAttention Phase C: GPU GQA scoring kernel (HIP).
 # Compiled only for ROCm/HIP builds; enables the TRIA_HIP_BACKEND path in
 # triattention-backend.c so g_tria_backend resolves to the real GPU kernels.

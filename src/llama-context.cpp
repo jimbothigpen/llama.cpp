@@ -4472,6 +4472,19 @@ int32_t llama_decode(
             batch.n_tokens == 1) {
         tria_maybe_score(g_tria_rt, ctx);
     }
+#ifdef LLAMA_EPICACHE
+    // EpiCache P1: block-wise prefill peak-mem bounding. The server/cli/ppl prefill is fed in
+    // n_batch-sized blocks, one llama_decode() per block (batch.n_tokens > 1). After each prefill
+    // block is written to KV, score keys with TriAttention's FA-safe proxy and evict down to a
+    // fixed budget so the resident KV never exceeds budget + window + block during prefill.
+    // Reuses tria_maybe_score + tria_compact_kv (position-preserving). Guarded out when OFF.
+    else if (ret == 0 && g_tria_rt &&
+            ctx->get_cparams().mtp_op_type == MTP_OP_NONE &&
+            batch.n_tokens > 1 &&
+            epicache_prefill_enabled(g_tria_rt)) {
+        epicache_prefill_evict(g_tria_rt, ctx);
+    }
+#endif
 
     return ret;
 }

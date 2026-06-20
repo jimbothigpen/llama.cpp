@@ -116,6 +116,24 @@ struct tria_runtime * tria_runtime_init(
         return NULL;
     }
 
+#ifdef LLAMA_EPICACHE
+    /* EpiCache P1 block-wise prefill bounding — opt-in at runtime via env. */
+    {
+        const char * e = getenv("LLAMA_EPICACHE_PREFILL");
+        rt->epicache_prefill = (e && e[0] == '1') ? 1 : 0;
+        const char * b = getenv("LLAMA_EPICACHE_BUDGET");
+        rt->prefill_evict_budget = b ? atoi(b) : 0;
+        rt->epicache_prefill_active = 0;
+        if (rt->epicache_prefill) {
+            fprintf(stderr,
+                "epicache: P1 block-wise prefill bounding ENABLED "
+                "(prefill_evict_budget=%d tokens, window=%d, sink=%d) — resident KV bounded to "
+                "budget+window+block during prefill\n",
+                rt->prefill_evict_budget, rt->window, rt->sink);
+        }
+    }
+#endif
+
     return rt;
 }
 
@@ -176,7 +194,12 @@ int tria_maybe_score(
     }
 
     /* Check if we should score */
-    if (n_kv - rt->n_scored < rt->interval) return 0;
+    if (n_kv - rt->n_scored < rt->interval
+#ifdef LLAMA_EPICACHE
+        /* EpiCache prefill: evict after every block regardless of the decode-time interval. */
+        && !rt->epicache_prefill_active
+#endif
+       ) return 0;
     if (n_used <= rt->window) return 0;
 
     int nl  = rt->stats->num_layers;
@@ -221,6 +244,15 @@ int tria_maybe_score(
         const char * bt = getenv("TRIA_BUDGET_TOKENS");
         if (bt) { budget = atoi(bt); absolute_budget = 1; }
     }
+#ifdef LLAMA_EPICACHE
+    /* EpiCache P1: during block-wise prefill bounding evict to the fixed prefill budget M,
+     * overriding the decode-time pct/window budget. This caps the resident KV at
+     * M + window during prefill (the next block adds at most M_block before the next evict). */
+    if (rt->epicache_prefill_active && rt->prefill_evict_budget > 0) {
+        budget = rt->prefill_evict_budget;
+        absolute_budget = 1;
+    }
+#endif
     if (budget <= 0) budget = 1;
 
     /* Exponential ramp eviction (opt-in via TRIA_RAMP_START_PCT).
@@ -996,3 +1028,34 @@ int tria_get_evict_mask(
 
     return 1;
 }
+
+#ifdef LLAMA_EPICACHE
+/* ---- EpiCache P1: block-wise prefill peak-mem bounding ---- */
+
+int epicache_prefill_enabled(const struct tria_runtime * rt) {
+    return (rt && rt->epicache_prefill) ? 1 : 0;
+}
+
+int epicache_prefill_evict(struct tria_runtime * rt, void * ctx) {
+    if (!rt || !rt->epicache_prefill || !ctx) return 0;
+
+    int n_used_before = tria_get_used_n_kv(ctx);
+
+    /* Force the fixed prefill budget + bypass the decode-time interval gate for this pass. */
+    rt->epicache_prefill_active = 1;
+    int pruned = tria_maybe_score(rt, ctx);
+    rt->epicache_prefill_active = 0;
+
+    int n_used_after = tria_get_used_n_kv(ctx);
+    int evicted = n_used_before - n_used_after;   /* resident cells reclaimed this block */
+    if (evicted < 0) evicted = 0;
+    /* Per-block proof line: resident KV vs budget. With M = prefill_evict_budget and a block of
+     * M_block tokens, n_used_after stays <= M + window, so peak resident <= M + window + M_block. */
+    fprintf(stderr,
+        "epicache_prefill: block evicted %d tokens — resident KV %d -> %d (budget M=%d, window=%d)\n",
+        evicted, n_used_before, n_used_after, rt->prefill_evict_budget, rt->window);
+
+    (void) pruned;
+    return evicted;
+}
+#endif /* LLAMA_EPICACHE */

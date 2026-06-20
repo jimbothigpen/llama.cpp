@@ -47,6 +47,16 @@ struct tria_runtime {
 
     /* RoPE layout: 1 = NEOX/IMROPE (split-half), 0 = NORMAL (interleaved) */
     int     rope_neox;
+
+#ifdef LLAMA_EPICACHE
+    /* EpiCache P1: block-wise prefill peak-mem bounding (arXiv 2509.17396, FA-safe).
+     * Reuses this runtime's proxy scorer + tria_compact_kv, but fires during prefill
+     * (multi-token batches) instead of only AR decode, evicting each block down to a
+     * fixed token budget so resident KV stays bounded. Set from env at init. */
+    int     epicache_prefill;        /* 1 = prefill bounding enabled (LLAMA_EPICACHE_PREFILL=1) */
+    int     prefill_evict_budget;    /* fixed resident token budget M (LLAMA_EPICACHE_BUDGET) */
+    int     epicache_prefill_active; /* transient: 1 while an epicache prefill evict is in flight */
+#endif
 };
 
 /*
@@ -108,6 +118,17 @@ int tria_compact_kv(
     struct tria_runtime * rt,
     void * ctx  /* llama_context* */
 );
+
+#ifdef LLAMA_EPICACHE
+/* EpiCache P1: returns non-zero if block-wise prefill bounding is enabled for this runtime. */
+int epicache_prefill_enabled(const struct tria_runtime * rt);
+
+/* EpiCache P1: score + evict the resident KV down to prefill_evict_budget after a prefill block.
+ * Thin wrapper around tria_maybe_score that forces the fixed prefill budget for the duration of
+ * the call. Returns the number of tokens pruned (>=0). Safe to call mid-prefill: tria_compact_kv
+ * preserves each kept cell's original RoPE position. */
+int epicache_prefill_evict(struct tria_runtime * rt, void * ctx /* llama_context* */);
+#endif
 
 #ifdef __cplusplus
 }
