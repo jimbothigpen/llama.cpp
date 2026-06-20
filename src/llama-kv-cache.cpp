@@ -1850,7 +1850,13 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     }
 
     // store the current K values into the cache
-    return ggml_set_rows(ctx, k, k_cur, k_idxs);
+    // For KV_OSCAR_INT2: flag op_params[0]=1 so set_rows applies WHT during K encode.
+    // V writes (cpy_v) leave op_params[0]=0 → plain ref encoding, no WHT.
+    ggml_tensor * k_set = ggml_set_rows(ctx, k, k_cur, k_idxs);
+    if (k->type == GGML_TYPE_KV_OSCAR_INT2) {
+        k_set->op_params[0] = 1;
+    }
+    return k_set;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k_res(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {

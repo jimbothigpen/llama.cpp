@@ -5060,7 +5060,8 @@ static void ggml_compute_forward_set_rows_f32(
 
     // OScaR INT2 fresh-token K write: must apply the full-dim WHT rotation (the plain from_float
     // ref is the no-WHT re-encode used only by the K-shift ggml_cpy path). Mirrors set-rows.cu.
-    const bool is_oscar = (dst->type == GGML_TYPE_KV_OSCAR_INT2);
+    // op_params[0] == 1 means "apply WHT" (set by cpy_k); V writes leave it 0 → plain ref encode.
+    const bool is_oscar = (dst->type == GGML_TYPE_KV_OSCAR_INT2) && (dst->op_params[0] != 0);
 
     for (int64_t i03 = 0; i03 < ne03; ++i03) {
         for (int64_t i02 = 0; i02 < ne02; ++i02) {
