@@ -336,6 +336,9 @@ struct cmd_params {
     std::vector<ggml_type>           type_k_low;
     std::vector<ggml_type>           type_v_low;
     std::vector<int>                 n_layers_high_precision;
+    std::vector<ggml_type>           type_k_swa;
+    std::vector<ggml_type>           type_v_swa;
+    std::vector<int>                 oscar_residual_window;
     std::vector<int>                 n_threads;
     std::vector<std::string>         cpu_mask;
     std::vector<bool>                cpu_strict;
@@ -366,6 +369,9 @@ struct cmd_params {
     std::vector<std::string>         pflash_scorer_path;
     std::vector<float>               pflash_keep_ratio;
     std::vector<float>               pflash_alpha;
+    std::vector<int>                 pflash_min_tokens;
+    std::vector<int>                 pflash_scorer_cache_size;
+    std::vector<std::string>         pflash_cache_dir;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -394,6 +400,9 @@ static const cmd_params cmd_params_defaults = {
     /* type_k_low           */ { GGML_TYPE_COUNT },
     /* type_v_low           */ { GGML_TYPE_COUNT },
     /* n_layers_high_prec   */ { 0 },
+    /* type_k_swa           */ { GGML_TYPE_COUNT },
+    /* type_v_swa           */ { GGML_TYPE_COUNT },
+    /* oscar_residual_window*/ { 0 },
     /* n_threads            */ { common_cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
@@ -422,6 +431,9 @@ static const cmd_params cmd_params_defaults = {
     /* pflash_scorer_path      */ { "" },
     /* pflash_keep_ratio       */ { 0.05f },
     /* pflash_alpha            */ { 0.12f },
+    /* pflash_min_tokens       */ { 8192 },
+    /* pflash_scorer_cache_size*/ { 64 },
+    /* pflash_cache_dir        */ { "" },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -477,6 +489,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --cache-type-k-low <t>                      KV K type for bottom layers; requires --n-layers-high-precision (default: disabled)\n");
     printf("  --cache-type-v-low <t>                      KV V type for bottom layers; requires --n-layers-high-precision (default: disabled)\n");
     printf("  --n-layers-high-precision <n>               number of top layers kept at full KV precision (default: 0)\n");
+    printf("  -ctks, --cache-type-k-swa <t>              KV cache type for K in SWA layers (default: same as -ctk)\n");
+    printf("  -ctvs, --cache-type-v-swa <t>              KV cache type for V in SWA layers (default: same as -ctv)\n");
+    printf("  --cache-oscar-residual-window <n>           OScaR INT2 KV residual window: keep N most-recent K tokens in F16 (default: 0=disabled)\n");
     printf("  -t, --threads <n>                           (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -C, --cpu-mask <hex,hex>                    (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
     printf("  --cpu-strict <0|1>                          (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
@@ -496,6 +511,12 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
+    printf("  --pflash-scorer <path>                      PFlash scorer model path (default: disabled)\n");
+    printf("  --pflash-keep-ratio <f>                     PFlash keep ratio (default: %.2f)\n", cmd_params_defaults.pflash_keep_ratio[0]);
+    printf("  --pflash-alpha <f>                          PFlash alpha (default: %.2f)\n", cmd_params_defaults.pflash_alpha[0]);
+    printf("  --pflash-min-tokens <n>                     minimum prompt tokens to trigger PFlash (default: %d)\n", cmd_params_defaults.pflash_min_tokens[0]);
+    printf("  --pflash-scorer-cache-size <n>              PFlash LRU scorer cache size (default: %d)\n", cmd_params_defaults.pflash_scorer_cache_size[0]);
+    printf("  --pflash-cache-dir <dir>                    directory for on-disk PFlash scorer cache (default: next to scorer model)\n");
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -723,6 +744,50 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.n_layers_high_precision = { std::stoi(argv[i]) };
+            } else if (arg == "-ctks" || arg == "--cache-type-k-swa") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                std::vector<ggml_type> types;
+                for (const auto & t : p) {
+                    ggml_type gt = ggml_type_from_name(t);
+                    if (gt == GGML_TYPE_COUNT) {
+                        invalid_param = true;
+                        break;
+                    }
+                    types.push_back(gt);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.type_k_swa.insert(params.type_k_swa.end(), types.begin(), types.end());
+            } else if (arg == "-ctvs" || arg == "--cache-type-v-swa") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                std::vector<ggml_type> types;
+                for (const auto & t : p) {
+                    ggml_type gt = ggml_type_from_name(t);
+                    if (gt == GGML_TYPE_COUNT) {
+                        invalid_param = true;
+                        break;
+                    }
+                    types.push_back(gt);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.type_v_swa.insert(params.type_v_swa.end(), types.begin(), types.end());
+            } else if (arg == "--cache-oscar-residual-window") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.oscar_residual_window = { std::stoi(argv[i]) };
             } else if (arg == "-dev" || arg == "--device") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1119,6 +1184,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             } else if (arg == "--pflash-alpha") {
                 if (++i >= argc) { invalid_param = true; break; }
                 params.pflash_alpha.push_back(std::stof(argv[i]));
+            } else if (arg == "--pflash-min-tokens") {
+                if (++i >= argc) { invalid_param = true; break; }
+                params.pflash_min_tokens.push_back(std::stoi(argv[i]));
+            } else if (arg == "--pflash-scorer-cache-size") {
+                if (++i >= argc) { invalid_param = true; break; }
+                params.pflash_scorer_cache_size.push_back(std::stoi(argv[i]));
+            } else if (arg == "--pflash-cache-dir") {
+                if (++i >= argc) { invalid_param = true; break; }
+                params.pflash_cache_dir.push_back(argv[i]);
             } else {
                 invalid_param = true;
                 break;
@@ -1196,6 +1270,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.n_layers_high_precision.empty()) {
         params.n_layers_high_precision = cmd_params_defaults.n_layers_high_precision;
+    }
+    if (params.type_k_swa.empty()) {
+        params.type_k_swa = cmd_params_defaults.type_k_swa;
+    }
+    if (params.type_v_swa.empty()) {
+        params.type_v_swa = cmd_params_defaults.type_v_swa;
+    }
+    if (params.oscar_residual_window.empty()) {
+        params.oscar_residual_window = cmd_params_defaults.oscar_residual_window;
     }
     if (params.n_gpu_layers.empty()) {
         params.n_gpu_layers = cmd_params_defaults.n_gpu_layers;
@@ -1281,6 +1364,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.pflash_alpha.empty()) {
         params.pflash_alpha = cmd_params_defaults.pflash_alpha;
     }
+    if (params.pflash_min_tokens.empty()) {
+        params.pflash_min_tokens = cmd_params_defaults.pflash_min_tokens;
+    }
+    if (params.pflash_scorer_cache_size.empty()) {
+        params.pflash_scorer_cache_size = cmd_params_defaults.pflash_scorer_cache_size;
+    }
+    if (params.pflash_cache_dir.empty()) {
+        params.pflash_cache_dir = cmd_params_defaults.pflash_cache_dir;
+    }
 
     return params;
 }
@@ -1297,6 +1389,9 @@ struct cmd_params_instance {
     ggml_type          type_k_low;
     ggml_type          type_v_low;
     int                n_layers_high_precision;
+    ggml_type          type_k_swa;
+    ggml_type          type_v_swa;
+    int                oscar_residual_window;
     int                n_threads;
     std::string        cpu_mask;
     bool               cpu_strict;
@@ -1327,6 +1422,9 @@ struct cmd_params_instance {
     std::string        pflash_scorer_path;
     float              pflash_keep_ratio;
     float              pflash_alpha;
+    int                pflash_min_tokens;
+    int                pflash_scorer_cache_size;
+    std::string        pflash_cache_dir;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1402,6 +1500,9 @@ struct cmd_params_instance {
         cparams.type_k_low              = type_k_low;
         cparams.type_v_low              = type_v_low;
         cparams.n_layers_high_precision = n_layers_high_precision;
+        cparams.type_k_swa              = type_k_swa;
+        cparams.type_v_swa              = type_v_swa;
+        cparams.oscar_residual_window   = (uint32_t) oscar_residual_window;
         cparams.offload_kqv     = !no_kv_offload;
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
@@ -1425,9 +1526,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & tria_win   : params.triattention_window)
     for (const auto & tria_intv  : params.triattention_interval)
     for (const auto & tria_sink  : params.triattention_sink)
-    for (const auto & pfl_scorer : params.pflash_scorer_path)
-    for (const auto & pfl_ratio  : params.pflash_keep_ratio)
-    for (const auto & pfl_alpha  : params.pflash_alpha)
+    for (const auto & pfl_scorer    : params.pflash_scorer_path)
+    for (const auto & pfl_ratio     : params.pflash_keep_ratio)
+    for (const auto & pfl_alpha     : params.pflash_alpha)
+    for (const auto & pfl_mintok    : params.pflash_min_tokens)
+    for (const auto & pfl_cachesize : params.pflash_scorer_cache_size)
+    for (const auto & pfl_cachedir  : params.pflash_cache_dir)
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
@@ -1442,11 +1546,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
-    for (const auto & tk : params.type_k)
-    for (const auto & tv : params.type_v)
-    for (const auto & tkl : params.type_k_low)
-    for (const auto & tvl : params.type_v_low)
+    for (const auto & tk   : params.type_k)
+    for (const auto & tv   : params.type_v)
+    for (const auto & tkl  : params.type_k_low)
+    for (const auto & tvl  : params.type_v_low)
     for (const auto & nlhp : params.n_layers_high_precision)
+    for (const auto & tks  : params.type_k_swa)
+    for (const auto & tvs  : params.type_v_swa)
+    for (const auto & orw  : params.oscar_residual_window)
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
     for (const auto & nt : params.n_threads)
@@ -1470,6 +1577,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k_low   = */ tkl,
                 /* .type_v_low   = */ tvl,
                 /* .n_layers_high_precision = */ nlhp,
+                /* .type_k_swa              = */ tks,
+                /* .type_v_swa              = */ tvs,
+                /* .oscar_residual_window   = */ orw,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1498,6 +1608,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .pflash_scorer_path      = */ pfl_scorer,
                 /* .pflash_keep_ratio       = */ pfl_ratio,
                 /* .pflash_alpha            = */ pfl_alpha,
+                /* .pflash_min_tokens       = */ pfl_mintok,
+                /* .pflash_scorer_cache_size= */ pfl_cachesize,
+                /* .pflash_cache_dir        = */ pfl_cachedir,
             };
             instances.push_back(instance);
         }
@@ -1518,6 +1631,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k_low   = */ tkl,
                 /* .type_v_low   = */ tvl,
                 /* .n_layers_high_precision = */ nlhp,
+                /* .type_k_swa              = */ tks,
+                /* .type_v_swa              = */ tvs,
+                /* .oscar_residual_window   = */ orw,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1546,6 +1662,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .pflash_scorer_path      = */ pfl_scorer,
                 /* .pflash_keep_ratio       = */ pfl_ratio,
                 /* .pflash_alpha            = */ pfl_alpha,
+                /* .pflash_min_tokens       = */ pfl_mintok,
+                /* .pflash_scorer_cache_size= */ pfl_cachesize,
+                /* .pflash_cache_dir        = */ pfl_cachedir,
             };
             instances.push_back(instance);
         }
@@ -1566,6 +1685,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k_low   = */ tkl,
                 /* .type_v_low   = */ tvl,
                 /* .n_layers_high_precision = */ nlhp,
+                /* .type_k_swa              = */ tks,
+                /* .type_v_swa              = */ tvs,
+                /* .oscar_residual_window   = */ orw,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1594,6 +1716,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .pflash_scorer_path      = */ pfl_scorer,
                 /* .pflash_keep_ratio       = */ pfl_ratio,
                 /* .pflash_alpha            = */ pfl_alpha,
+                /* .pflash_min_tokens       = */ pfl_mintok,
+                /* .pflash_scorer_cache_size= */ pfl_cachesize,
+                /* .pflash_cache_dir        = */ pfl_cachedir,
             };
             instances.push_back(instance);
         }
@@ -1623,6 +1748,9 @@ struct test {
     ggml_type                type_k_low;
     ggml_type                type_v_low;
     int                      n_layers_high_precision;
+    ggml_type                type_k_swa;
+    ggml_type                type_v_swa;
+    int                      oscar_residual_window;
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
@@ -1666,6 +1794,9 @@ struct test {
         type_k_low              = inst.type_k_low;
         type_v_low              = inst.type_v_low;
         n_layers_high_precision = inst.n_layers_high_precision;
+        type_k_swa              = inst.type_k_swa;
+        type_v_swa              = inst.type_v_swa;
+        oscar_residual_window   = inst.oscar_residual_window;
         n_gpu_layers   = inst.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
@@ -1737,6 +1868,7 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "type_k_low",    "type_v_low",     "n_layers_hp",
+            "type_k_swa",     "type_v_swa",     "oscar_res_win",
             "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
@@ -1755,7 +1887,7 @@ struct test {
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
             field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn" ||
-            field == "n_layers_hp") {
+            field == "n_layers_hp" || field == "oscar_res_win") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
@@ -1825,6 +1957,9 @@ struct test {
                                             ggml_type_name(type_k_low),
                                             ggml_type_name(type_v_low),
                                             std::to_string(n_layers_high_precision),
+                                            type_k_swa == GGML_TYPE_COUNT ? "disabled" : ggml_type_name(type_k_swa),
+                                            type_v_swa == GGML_TYPE_COUNT ? "disabled" : ggml_type_name(type_v_swa),
+                                            std::to_string(oscar_residual_window),
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
@@ -2140,6 +2275,15 @@ struct markdown_printer : public printer {
         }
         if (params.n_layers_high_precision.size() > 1 || params.n_layers_high_precision != cmd_params_defaults.n_layers_high_precision) {
             fields.emplace_back("n_layers_hp");
+        }
+        if (params.type_k_swa.size() > 1 || params.type_k_swa != cmd_params_defaults.type_k_swa) {
+            fields.emplace_back("type_k_swa");
+        }
+        if (params.type_v_swa.size() > 1 || params.type_v_swa != cmd_params_defaults.type_v_swa) {
+            fields.emplace_back("type_v_swa");
+        }
+        if (params.oscar_residual_window.size() > 1 || params.oscar_residual_window != cmd_params_defaults.oscar_residual_window) {
+            fields.emplace_back("oscar_res_win");
         }
         if (params.main_gpu.size() > 1 || params.main_gpu != cmd_params_defaults.main_gpu) {
             fields.emplace_back("main_gpu");
@@ -2576,7 +2720,7 @@ int llama_bench(int argc, char ** argv) {
         // All reps (including warmup) use the compressed sequence; t.n_prompt
         // is updated to the compressed length so tok/s is reported correctly.
         std::vector<int32_t> pflash_tokens;
-        if (!inst.pflash_scorer_path.empty() && t.n_prompt > 0) {
+        if (!inst.pflash_scorer_path.empty() && t.n_prompt > 0 && t.n_prompt >= inst.pflash_min_tokens) {
             const llama_vocab * vocab = llama_model_get_vocab(lmodel);
             const int n_vocab = llama_vocab_n_tokens(vocab);
             std::vector<int32_t> orig_tokens(t.n_prompt);
@@ -2585,9 +2729,12 @@ int llama_bench(int argc, char ** argv) {
                 orig_tokens[i] = std::rand() % n_vocab;
             }
             pflash_config cfg;
-            cfg.scorer_path = inst.pflash_scorer_path;
-            cfg.keep_ratio  = inst.pflash_keep_ratio;
-            cfg.alpha       = inst.pflash_alpha;
+            cfg.scorer_path       = inst.pflash_scorer_path;
+            cfg.keep_ratio        = inst.pflash_keep_ratio;
+            cfg.alpha             = inst.pflash_alpha;
+            cfg.min_tokens        = inst.pflash_min_tokens;
+            cfg.scorer_cache_size = inst.pflash_scorer_cache_size;
+            cfg.cache_dir         = inst.pflash_cache_dir;
             pflash_tokens = pflash_compress(orig_tokens, cfg);
             fprintf(stderr, "pflash: %d -> %d tokens\n",
                     (int)orig_tokens.size(), (int)pflash_tokens.size());
