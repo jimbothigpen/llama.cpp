@@ -10,5 +10,9 @@ results/*
 !results/qwopus35-4b.json
 !results/qwopus35-4b.md
 !results/livefleet-tier-report-2026-06-21.md
+!results/qwen35-122b.json
+!results/qwen35-122b.md
+!results/qwen36-35b-iq4ks.json
+!results/qwen36-35b-iq4ks.md
 __pycache__/
 *.pyc
