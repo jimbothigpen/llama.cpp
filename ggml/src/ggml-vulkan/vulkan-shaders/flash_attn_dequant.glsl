@@ -37,6 +37,9 @@ layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_0 { block_turboq3_0 data[]
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } v_packed_turboq3_0;
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } k_packed_turboq4_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } v_packed_turboq4_0;
+// turboq8_0: 130-byte block (2-byte norm + 128 single-byte uniform-grid indices).
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ8_0 { block_turboq8_0 data[]; } k_packed_turboq8_0;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ8_0 { block_turboq8_0 data[]; } v_packed_turboq8_0;
 
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } k_packed_turboq2_tcq;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ2_TCQ { block_turboq2_tcq data[]; } v_packed_turboq2_tcq;
@@ -227,6 +230,20 @@ const float T4C[16] = float[16](
                         T4C[(qb1)      & 0xFu], T4C[(qb1 >> 4) & 0xFu]);                          \
 }
 
+// turboq8_0: 8-bit uniform 256-level grid in the WHT-rotated domain. One byte per
+// value: centroid = (qs - 127.5)/127.5; recon = norm * centroid. The per-block
+// absmax scale is already folded into the stored norm. Stays rotated (no inverse
+// FWHT): the graph pre-rotates Q and inverse-WHTs the FA output, matching the
+// CPU/CUDA turboq8 vec path and the turboq3_0 Vulkan dequant above.
+#define FA_DEQUANT4_TURBOQ8_0(BUF) {                                                              \
+    const FLOAT_TYPE nm = FLOAT_TYPE(BUF.data[a_offset + ib].norm) * FLOAT_TYPE(1.0 / 127.5);     \
+    return nm * FLOAT_TYPEV4(                                                                      \
+        FLOAT_TYPE(uint(BUF.data[a_offset + ib].qs[iqs    ])) - FLOAT_TYPE(127.5),                \
+        FLOAT_TYPE(uint(BUF.data[a_offset + ib].qs[iqs + 1])) - FLOAT_TYPE(127.5),                \
+        FLOAT_TYPE(uint(BUF.data[a_offset + ib].qs[iqs + 2])) - FLOAT_TYPE(127.5),                \
+        FLOAT_TYPE(uint(BUF.data[a_offset + ib].qs[iqs + 3])) - FLOAT_TYPE(127.5));               \
+}
+
 // bf16_to_fp32(uvec4) is defined in types.glsl (mainline). BF16 block is u16vec4.
 #define FA_DEQUANT4_BF16(BUF) \
     return FLOAT_TYPEV4(bf16_to_fp32(uvec4(BUF.data[(a_offset + ib) / 4])));
@@ -243,6 +260,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(k_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(k_packed_turboq3_0)
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
+            case FA_TYPE_TURBOQ8_0: FA_DEQUANT4_TURBOQ8_0(k_packed_turboq8_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (k_packed_turboq3_tcq)
             case FA_TYPE_KV_OSCAR_INT2: FA_DEQUANT4_KV_OSCAR_INT2(k_packed_kv_oscar_int2)
@@ -259,6 +277,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(v_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(v_packed_turboq3_0)
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
+            case FA_TYPE_TURBOQ8_0: FA_DEQUANT4_TURBOQ8_0(v_packed_turboq8_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (v_packed_turboq3_tcq)
             case FA_TYPE_KV_OSCAR_INT2: FA_DEQUANT4_KV_OSCAR_INT2(v_packed_kv_oscar_int2)

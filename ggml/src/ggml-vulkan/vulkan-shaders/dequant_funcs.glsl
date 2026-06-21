@@ -877,6 +877,26 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TURBOQ8_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TURBOQ8_0: 8-bit uniform 256-level grid, 128 elements per block. Stays in
+    // the WHT-rotated domain (centroid * norm, no inverse rotation), matching the
+    // standalone dequant_turboq8_0.comp and the FA dequant path.
+    const float norm = float(data_a[a_offset + ib].norm) * (1.0 / 127.5);
+    const float c0 = float(uint(data_a[a_offset + ib].qs[iqs    ])) - 127.5;
+    const float c1 = float(uint(data_a[a_offset + ib].qs[iqs + 1])) - 127.5;
+    return vec2(c0 * norm, c1 * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1, 0);
+}
+#endif
+
 #if defined(DATA_A_TURBOQ3_TCQ)
 #include "tcq_codebook.glsl"
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {

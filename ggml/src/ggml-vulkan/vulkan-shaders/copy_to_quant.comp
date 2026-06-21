@@ -5,7 +5,7 @@
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #include "types.glsl"
 
-#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ2_0) || defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0))
+#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ2_0) || defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0) || defined(DATA_A_TURBOQ8_0))
 // TurboQuant SET_ROWS shaders run the full forward WHT (128 elements per
 // block) inside one workgroup, with subgroup-wide reductions for the
 // pre/post norm and a barrier-driven butterfly.
@@ -692,6 +692,112 @@ void main() {
         for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t4[w];
         float rn = sqrt(total);
         data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm_t4 / rn) : gnrm_t4);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ8_0)
+// TurboQuant 8-bit SET_ROWS: forward Walsh-Hadamard + per-block absmax uniform
+// 256-level grid (no QJL, no Lloyd-Max centroids). Same WHT pipeline as TURBOQ3/4,
+// but the rotated unit vector is quantized against a per-block absmax-scaled
+// uniform grid. Mirrors quantize_row_turboq8_0_ref (CPU) / the CUDA turboq8 encode:
+//   gnrm = L2(src); rv = WHT(src/gnrm); absmax = max|rv|;
+//   idx = clamp(round(rv/absmax*127.5 + 127.5), 0, 255); stored norm = gnrm*absmax.
+// One workgroup per 128-element block; 128 threads, 1 element each.
+const float TS1_T8[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T8[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T8 = 0.08838834764831845;  // 1 / sqrt(128)
+
+shared float wht_t8[128];
+shared float sg_acc_t8[16];
+shared float gnrm_t8;
+shared float absmax_t8;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t8[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t8[t] * wht_t8[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t8[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t8[w];
+        gnrm_t8 = sqrt(total);
+    }
+    barrier();
+
+    wht_t8[t] *= (gnrm_t8 > 1e-10) ? (1.0 / gnrm_t8) : 0.0;
+    barrier();
+
+    wht_t8[t] *= TS1_T8[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t8[t];
+            float b    = wht_t8[t + h];
+            wht_t8[t]     = a + b;
+            wht_t8[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t8[t] * TINV_T8 * TS2_T8[t];
+
+    // Per-block absmax over the rotated unit vector (workgroup-wide max reduction).
+    float am = subgroupMax(abs(rv));
+    if (gl_SubgroupInvocationID == 0) sg_acc_t8[gl_SubgroupID] = am;
+    barrier();
+    if (t == 0) {
+        float m = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) m = max(m, sg_acc_t8[w]);
+        absmax_t8 = max(m, 1e-10);
+    }
+    barrier();
+
+    // Uniform 256-level grid in the rotated domain: idx = round(rv/absmax*127.5 + 127.5).
+    int idx = int(round(rv / absmax_t8 * 127.5 + 127.5));
+    idx = clamp(idx, 0, 255);
+    data_q[db].qs[t] = uint8_t(uint(idx));
+
+    // Stored norm folds in the absmax scale (decode = (idx-127.5)/127.5 * norm).
+    if (t == 0u) {
+        data_q[db].norm = float16_t(gnrm_t8 * absmax_t8);
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_KV_OSCAR_INT2)

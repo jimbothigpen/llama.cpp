@@ -282,6 +282,26 @@ struct block_turboq4_0
 #define A_TYPE block_turboq4_0
 #endif
 
+// TurboQuant 8-bit uniform-grid KV cache (yggdrasil Phase 1).
+// Block layout matches ggml-common.h block_turboq8_0: 2-byte norm + 128-byte
+// 8-bit uniform-grid indices (1 per byte) = 130 bytes per 128 values.
+// norm = grp_L2 * per-block absmax scale; centroid[i] = (i-127.5)/127.5.
+#define QUANT_K_TURBOQ8_0 128
+#define QUANT_R_TURBOQ8_0 1
+
+struct block_turboq8_0
+{
+    float16_t norm;
+    uint8_t qs[QUANT_K_TURBOQ8_0];
+};
+
+#if defined(DATA_A_TURBOQ8_0)
+#define QUANT_K QUANT_K_TURBOQ8_0
+#define QUANT_R QUANT_R_TURBOQ8_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq8_0
+#endif
+
 // buun TCQ KV-cache types (Trellis-Coded Quantization, right-shift bitshift trellis).
 // turboq3_tcq: 9-bit state, 512-entry codebook, 3.25 bpv. 6 prefix bits + 128×3-bit symbols
 //              = 390 bits = 49 bytes qs[] + 1 padding byte = 52 B/block.
