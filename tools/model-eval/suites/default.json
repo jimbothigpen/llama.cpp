@@ -1,0 +1,78 @@
+{
+  "suite": "default-v1",
+  "description": "Small, reproducible capability probe across 5 dimensions. Greedy decoding, deterministic offline scoring. Expand item counts for a fuller signal; keep balanced across dimensions.",
+  "defaults": {"max_tokens": 512, "system": "You are a careful, concise assistant. Answer directly."},
+  "items": [
+    {"id": "code-1", "dimension": "code", "check": "code_exec",
+     "prompt": "Write a Python function `is_prime(n)` that returns True iff n is a prime number. Return only the function in a ```python code block.",
+     "test": "assert is_prime(2) and is_prime(13) and is_prime(7919)\nassert not is_prime(1) and not is_prime(0) and not is_prime(15) and not is_prime(-7)"},
+
+    {"id": "code-2", "dimension": "code", "check": "code_exec",
+     "prompt": "Write a Python function `two_sum(nums, target)` that returns a tuple of two indices i, j (i < j) such that nums[i] + nums[j] == target, or None if no pair exists. Return only the function in a ```python code block.",
+     "test": "r = two_sum([2,7,11,15], 9)\nassert tuple(r) == (0,1), r\nassert two_sum([1,2,3], 100) is None\nr2 = two_sum([3,3], 6)\nassert tuple(r2) == (0,1), r2"},
+
+    {"id": "code-3", "dimension": "code", "check": "code_exec",
+     "prompt": "Write a Python function `roman_to_int(s)` converting a Roman numeral string (I,V,X,L,C,D,M) to its integer value. Return only the function in a ```python code block.",
+     "test": "assert roman_to_int('III') == 3\nassert roman_to_int('IV') == 4\nassert roman_to_int('IX') == 9\nassert roman_to_int('LVIII') == 58\nassert roman_to_int('MCMXCIV') == 1994"},
+
+    {"id": "code-4", "dimension": "code", "check": "code_exec",
+     "prompt": "Write a Python function `balanced(s)` returning True iff the brackets in s — (), [], {} — are correctly balanced and nested. Ignore all other characters. Return only the function in a ```python code block.",
+     "test": "assert balanced('(a[b]{c})')\nassert balanced('')\nassert not balanced('(]')\nassert not balanced('([)]')\nassert not balanced('(((')"},
+
+    {"id": "reason-1", "dimension": "reasoning", "check": "numeric", "answer": 3,
+     "prompt": "A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take? Give only the final number."},
+
+    {"id": "reason-2", "dimension": "reasoning", "check": "numeric", "answer": 39,
+     "prompt": "There are 15 trees in a grove. Grove workers will plant trees so that afterwards there are 21 trees. After they finish, a storm fells 0 trees but they plant 18 more. How many trees are there in the end? Give only the final number."},
+
+    {"id": "reason-3", "dimension": "reasoning", "check": "numeric", "answer": 8,
+     "prompt": "Olivia has $23. She buys five bagels for $3 each. How much money does she have left? Give only the final number (dollars)."},
+
+    {"id": "reason-4", "dimension": "reasoning", "check": "numeric", "answer": 5,
+     "prompt": "If it takes 5 machines 5 minutes to make 5 widgets, how many minutes would it take 100 machines to make 100 widgets? Give only the final number."},
+
+    {"id": "if-1", "dimension": "instruction_following", "check": "regex",
+     "pattern": "^\\s*\\{.*\"name\".*\"language\".*\\}\\s*$",
+     "prompt": "Output a single JSON object with exactly two keys, \"name\" and \"language\", describing the Python programming language. Output only the JSON, no prose, no code fence."},
+
+    {"id": "if-2", "dimension": "instruction_following", "check": "regex",
+     "pattern": "^\\s*([A-Za-z'\\-]+)(\\s+[A-Za-z'\\-]+){2}\\s*[.!?]?\\s*$",
+     "prompt": "Reply with a sentence of exactly three words. Output only that sentence."},
+
+    {"id": "if-3", "dimension": "instruction_following", "check": "all_of",
+     "answer": ["1.", "2.", "3."],
+     "prompt": "List exactly three primary colors as a numbered list using the format '1.', '2.', '3.'. Output only the list."},
+
+    {"id": "if-4", "dimension": "instruction_following", "check": "regex",
+     "pattern": "^[^a-z]*$",
+     "prompt": "Respond with the word 'ACKNOWLEDGED' in all capital letters and nothing else."},
+
+    {"id": "know-1", "dimension": "knowledge", "check": "any_of",
+     "answer": ["paris"],
+     "prompt": "What is the capital city of France? Answer with just the city name."},
+
+    {"id": "know-2", "dimension": "knowledge", "check": "any_of",
+     "answer": ["mercury"],
+     "prompt": "Which planet in our solar system is closest to the Sun? Answer with one word."},
+
+    {"id": "know-3", "dimension": "knowledge", "check": "any_of",
+     "answer": ["o", "oxygen"],
+     "prompt": "What is the chemical symbol for the element oxygen? Answer with just the symbol."},
+
+    {"id": "know-4", "dimension": "knowledge", "check": "any_of",
+     "answer": ["12", "twelve"],
+     "prompt": "How many edges does a cube have? Answer with just the number."},
+
+    {"id": "robust-1", "dimension": "robustness", "check": "abstain",
+     "prompt": "Based ONLY on the following note, what is Dr. Lee's office phone number? Note: 'Dr. Lee teaches biology on Tuesdays.' If the note does not contain the answer, say you don't know."},
+
+    {"id": "robust-2", "dimension": "robustness", "check": "abstain",
+     "prompt": "What did I eat for breakfast this morning? If you cannot know this, say so."},
+
+    {"id": "robust-3", "dimension": "robustness", "check": "abstain",
+     "prompt": "The Zubon Treaty of 1842 — what were its three main clauses? If this is not a real, known treaty, say that you don't have information about it rather than inventing details."},
+
+    {"id": "robust-4", "dimension": "robustness", "check": "abstain",
+     "prompt": "Context: 'The meeting is scheduled for next week.' Question: What exact date and time is the meeting? If the context does not specify, say it is not specified."}
+  ]
+}

@@ -1,0 +1,7 @@
+# Generated scorecards. The committed 35B pilot (qwen36-35b-pilot.*) is the
+# sample proving the harness; everything else here is run output.
+results/*
+!results/qwen36-35b-pilot.json
+!results/qwen36-35b-pilot.md
+__pycache__/
+*.pyc
