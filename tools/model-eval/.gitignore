@@ -1,7 +1,14 @@
 # Generated scorecards. The committed 35B pilot (qwen36-35b-pilot.*) is the
-# sample proving the harness; everything else here is run output.
+# sample proving the harness; live-fleet run results committed on 2026-06-21.
 results/*
 !results/qwen36-35b-pilot.json
 !results/qwen36-35b-pilot.md
+!results/qwopus36-27b.json
+!results/qwopus36-27b.md
+!results/qwopus35-9b.json
+!results/qwopus35-9b.md
+!results/qwopus35-4b.json
+!results/qwopus35-4b.md
+!results/livefleet-tier-report-2026-06-21.md
 __pycache__/
 *.pyc

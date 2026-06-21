@@ -1,0 +1,453 @@
+{
+ "harness": "model-eval-framework",
+ "model": "qwopus36-27b",
+ "base_url": "http://127.0.0.1:8183",
+ "suite": "default-v1",
+ "n_items": 20,
+ "server_meta": {
+  "vocab_type": 2,
+  "n_vocab": 248320,
+  "n_ctx": 262144,
+  "n_ctx_train": 262144,
+  "n_embd": 5120,
+  "n_params": 26895998464,
+  "size": 14681798656
+ },
+ "policy_version": "tier-policy-v1",
+ "dim_scores": {
+  "code": 1.0,
+  "reasoning": 1.0,
+  "instruction_following": 1.0,
+  "knowledge": 1.0,
+  "robustness": 0.75
+ },
+ "dim_detail": {
+  "code": {
+   "n": 4,
+   "mean": 1.0
+  },
+  "reasoning": {
+   "n": 4,
+   "mean": 1.0
+  },
+  "instruction_following": {
+   "n": 4,
+   "mean": 1.0
+  },
+  "knowledge": {
+   "n": 4,
+   "mean": 1.0
+  },
+  "robustness": {
+   "n": 4,
+   "mean": 0.75
+  }
+ },
+ "composite": 0.975,
+ "tier": "S",
+ "tier_label": "flagship",
+ "tier_routing": "primary; eligible for hardest user traffic",
+ "tier_reasons": [],
+ "items": [
+  {
+   "id": "code-1",
+   "dimension": "code",
+   "check": "code_exec",
+   "prompt": "Write a Python function `is_prime(n)` that returns True iff n is a prime number. Return only the function in a ```python code block.",
+   "pred": "```python\ndef is_prime(n):\n    if n < 2:\n        return False\n    if n < 4:\n        return True\n    if n % 2 == 0 or n % 3 == 0:\n        return False\n    i = 5\n    while i * i <= n:\n        if n % i == 0 or n % (i + 2) == 0:\n            return False\n        i += 6\n    return True\n```",
+   "score": 1.0,
+   "ok": true,
+   "detail": "exec ok",
+   "latency_s": 29.05,
+   "usage": {
+    "completion_tokens": 109,
+    "prompt_tokens": 58,
+    "total_tokens": 167,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "code-2",
+   "dimension": "code",
+   "check": "code_exec",
+   "prompt": "Write a Python function `two_sum(nums, target)` that returns a tuple of two indices i, j (i < j) such that nums[i] + nums[j] == target, or None if no pair exists. Return only the function in a ```python code block.",
+   "pred": "```python\ndef two_sum(nums, target):\n    seen = {}\n    for i, num in enumerate(nums):\n        complement = target - num\n        if complement in seen:\n            return (seen[complement], i)\n        seen[num] = i\n    return None\n```",
+   "score": 1.0,
+   "ok": true,
+   "detail": "exec ok",
+   "latency_s": 18.71,
+   "usage": {
+    "completion_tokens": 64,
+    "prompt_tokens": 84,
+    "total_tokens": 148,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "code-3",
+   "dimension": "code",
+   "check": "code_exec",
+   "prompt": "Write a Python function `roman_to_int(s)` converting a Roman numeral string (I,V,X,L,C,D,M) to its integer value. Return only the function in a ```python code block.",
+   "pred": "```python\ndef roman_to_int(s):\n    roman_map = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}\n    total = 0\n    prev_value = 0\n    for char in reversed(s):\n        value = roman_map[char]\n        if value < prev_value:\n            total -= value\n        else:\n            total += value\n        prev_value = value\n    return total\n```",
+   "score": 1.0,
+   "ok": true,
+   "detail": "exec ok",
+   "latency_s": 33.23,
+   "usage": {
+    "completion_tokens": 129,
+    "prompt_tokens": 68,
+    "total_tokens": 197,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "code-4",
+   "dimension": "code",
+   "check": "code_exec",
+   "prompt": "Write a Python function `balanced(s)` returning True iff the brackets in s — (), [], {} — are correctly balanced and nested. Ignore all other characters. Return only the function in a ```python code block.",
+   "pred": "```python\ndef balanced(s):\n    stack = []\n    mapping = {')': '(', ']': '[', '}': '{'}\n    for char in s:\n        if char in mapping.values():\n            stack.append(char)\n        elif char in mapping:\n            if not stack or stack.pop() != mapping[char]:\n                return False\n    return not stack\n```",
+   "score": 1.0,
+   "ok": true,
+   "detail": "exec ok",
+   "latency_s": 23.13,
+   "usage": {
+    "completion_tokens": 82,
+    "prompt_tokens": 70,
+    "total_tokens": 152,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "reason-1",
+   "dimension": "reasoning",
+   "check": "numeric",
+   "prompt": "A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take? Give only the final number.",
+   "pred": "3",
+   "score": 1.0,
+   "ok": true,
+   "detail": "got=3.0 want=3.0",
+   "latency_s": 5.31,
+   "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 59,
+    "total_tokens": 61,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "reason-2",
+   "dimension": "reasoning",
+   "check": "numeric",
+   "prompt": "There are 15 trees in a grove. Grove workers will plant trees so that afterwards there are 21 trees. After they finish, a storm fells 0 trees but they plant 18 more. How many trees are there in the end? Give only the final number.",
+   "pred": "39",
+   "score": 1.0,
+   "ok": true,
+   "detail": "got=39.0 want=39.0",
+   "latency_s": 6.15,
+   "usage": {
+    "completion_tokens": 3,
+    "prompt_tokens": 88,
+    "total_tokens": 91,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "reason-3",
+   "dimension": "reasoning",
+   "check": "numeric",
+   "prompt": "Olivia has $23. She buys five bagels for $3 each. How much money does she have left? Give only the final number (dollars).",
+   "pred": "8",
+   "score": 1.0,
+   "ok": true,
+   "detail": "got=8.0 want=8.0",
+   "latency_s": 5.47,
+   "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 62,
+    "total_tokens": 64,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "reason-4",
+   "dimension": "reasoning",
+   "check": "numeric",
+   "prompt": "If it takes 5 machines 5 minutes to make 5 widgets, how many minutes would it take 100 machines to make 100 widgets? Give only the final number.",
+   "pred": "5",
+   "score": 1.0,
+   "ok": true,
+   "detail": "got=5.0 want=5.0",
+   "latency_s": 5.32,
+   "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 68,
+    "total_tokens": 70,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "if-1",
+   "dimension": "instruction_following",
+   "check": "regex",
+   "prompt": "Output a single JSON object with exactly two keys, \"name\" and \"language\", describing the Python programming language. Output only the JSON, no prose, no code fence.",
+   "pred": "{\n  \"name\": \"Python\",\n  \"language\": \"Python\"\n}",
+   "score": 1.0,
+   "ok": true,
+   "detail": "",
+   "latency_s": 9.16,
+   "usage": {
+    "completion_tokens": 20,
+    "prompt_tokens": 63,
+    "total_tokens": 83,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "if-2",
+   "dimension": "instruction_following",
+   "check": "regex",
+   "prompt": "Reply with a sentence of exactly three words. Output only that sentence.",
+   "pred": "I am ready.",
+   "score": 1.0,
+   "ok": true,
+   "detail": "",
+   "latency_s": 5.64,
+   "usage": {
+    "completion_tokens": 5,
+    "prompt_tokens": 42,
+    "total_tokens": 47,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "if-3",
+   "dimension": "instruction_following",
+   "check": "all_of",
+   "prompt": "List exactly three primary colors as a numbered list using the format '1.', '2.', '3.'. Output only the list.",
+   "pred": "1. Red\n2. Blue\n3. Yellow",
+   "score": 1.0,
+   "ok": true,
+   "detail": "3/3 present",
+   "latency_s": 7.41,
+   "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 54,
+    "total_tokens": 66,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "if-4",
+   "dimension": "instruction_following",
+   "check": "regex",
+   "prompt": "Respond with the word 'ACKNOWLEDGED' in all capital letters and nothing else.",
+   "pred": "ACKNOWLEDGED",
+   "score": 1.0,
+   "ok": true,
+   "detail": "",
+   "latency_s": 5.46,
+   "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 45,
+    "total_tokens": 49,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "know-1",
+   "dimension": "knowledge",
+   "check": "any_of",
+   "prompt": "What is the capital city of France? Answer with just the city name.",
+   "pred": "Paris",
+   "score": 1.0,
+   "ok": true,
+   "detail": "hit='paris'",
+   "latency_s": 5.01,
+   "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 43,
+    "total_tokens": 45,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "know-2",
+   "dimension": "knowledge",
+   "check": "any_of",
+   "prompt": "Which planet in our solar system is closest to the Sun? Answer with one word.",
+   "pred": "Mercury",
+   "score": 1.0,
+   "ok": true,
+   "detail": "hit='mercury'",
+   "latency_s": 5.24,
+   "usage": {
+    "completion_tokens": 3,
+    "prompt_tokens": 45,
+    "total_tokens": 48,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "know-3",
+   "dimension": "knowledge",
+   "check": "any_of",
+   "prompt": "What is the chemical symbol for the element oxygen? Answer with just the symbol.",
+   "pred": "O",
+   "score": 1.0,
+   "ok": true,
+   "detail": "hit='o'",
+   "latency_s": 5.0,
+   "usage": {
+    "completion_tokens": 2,
+    "prompt_tokens": 44,
+    "total_tokens": 46,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "know-4",
+   "dimension": "knowledge",
+   "check": "any_of",
+   "prompt": "How many edges does a cube have? Answer with just the number.",
+   "pred": "12",
+   "score": 1.0,
+   "ok": true,
+   "detail": "hit='12'",
+   "latency_s": 5.22,
+   "usage": {
+    "completion_tokens": 3,
+    "prompt_tokens": 42,
+    "total_tokens": 45,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "robust-1",
+   "dimension": "robustness",
+   "check": "abstain",
+   "prompt": "Based ONLY on the following note, what is Dr. Lee's office phone number? Note: 'Dr. Lee teaches biology on Tuesdays.' If the note does not contain the answer, say you don't know.",
+   "pred": "I don't know.",
+   "score": 1.0,
+   "ok": true,
+   "detail": "abstained",
+   "latency_s": 6.17,
+   "usage": {
+    "completion_tokens": 6,
+    "prompt_tokens": 72,
+    "total_tokens": 78,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "robust-2",
+   "dimension": "robustness",
+   "check": "abstain",
+   "prompt": "What did I eat for breakfast this morning? If you cannot know this, say so.",
+   "pred": "I cannot know what you ate for breakfast this morning.",
+   "score": 1.0,
+   "ok": true,
+   "detail": "abstained",
+   "latency_s": 7.14,
+   "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 46,
+    "total_tokens": 58,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "robust-3",
+   "dimension": "robustness",
+   "check": "abstain",
+   "prompt": "The Zubon Treaty of 1842 — what were its three main clauses? If this is not a real, known treaty, say that you don't have information about it rather than inventing details.",
+   "pred": "I don't have information about a \"Zubon Treaty of 1842.\" This does not appear to be a real, known treaty in historical records.",
+   "score": 0.0,
+   "ok": false,
+   "detail": "answered",
+   "latency_s": 12.39,
+   "usage": {
+    "completion_tokens": 35,
+    "prompt_tokens": 71,
+    "total_tokens": 106,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "id": "robust-4",
+   "dimension": "robustness",
+   "check": "abstain",
+   "prompt": "Context: 'The meeting is scheduled for next week.' Question: What exact date and time is the meeting? If the context does not specify, say it is not specified.",
+   "pred": "The exact date and time of the meeting is not specified.",
+   "score": 1.0,
+   "ok": true,
+   "detail": "abstained",
+   "latency_s": 7.68,
+   "usage": {
+    "completion_tokens": 13,
+    "prompt_tokens": 63,
+    "total_tokens": 76,
+    "prompt_tokens_details": {
+     "cached_tokens": 0
+    }
+   },
+   "error": null
+  }
+ ]
+}
