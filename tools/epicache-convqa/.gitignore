@@ -1,0 +1,5 @@
+# fetched benchmark data and run outputs are reproducible — not committed
+data/
+results/
+__pycache__/
+*.pyc
