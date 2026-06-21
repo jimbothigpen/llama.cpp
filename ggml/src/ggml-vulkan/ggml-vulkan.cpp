@@ -3382,17 +3382,37 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         path = FA_COOPMAT2;
     }
 
-    // TURBOQ2_0/TURBOQ3_0/TURBOQ4_0 K/V use struct bindings (block_turboq{2,3,4}_0) wired
-    // into the flash_attn_dequant.glsl aliased-SSBO-view abstraction, which is
-    // only included by the FA_SCALAR shader. cm1/cm2 turbo support will land
-    // with the WHT/MLA work in a later phase. TURBOQ{2,3}_TCQ likewise uses
-    // struct bindings in the same scalar-only FA dequant path.
-    if (k_type == GGML_TYPE_TURBOQ2_0 || v_type == GGML_TYPE_TURBOQ2_0 ||
+    // turboq4_0 K/V use struct bindings (block_turboq4_0) wired into
+    // flash_attn_dequant.glsl's aliased-SSBO-view abstraction. That dequant header
+    // is included by BOTH flash_attn.comp (FA_SCALAR) and flash_attn_cm1.comp
+    // (FA_COOPMAT1): the cm1 shader decodes any quant K/V via the same
+    // dequantize4()/USE_DECODE_* path before the coopmat multiply, exactly like the
+    // scalar shader. turboq4_0 on FA_COOPMAT1 is PPL-parity-validated vs scalar on
+    // coopmat1 (gfx1103, Qwen3.5-9B D=256, K=q8_0/V=turboq4: 6.4856 vs 6.4866,
+    // <0.02 sigma) with a ~+10% prefill speedup, so we keep FA_COOPMAT1 when it was
+    // selected and demote only when the chosen path can't decode turbo:
+    // flash_attn_cm2.comp does NOT include the dequant header (its buffer_reference
+    // decode path lacks turbo) so cm2 falls to scalar, and n_rows==1 was already
+    // demoted to scalar above (decode path is out of scope).
+    //
+    // turboq2_0/turboq3_0 share the IDENTICAL cm1 mechanism (only the dequantize4()
+    // case differs) and would be a trivial extension, but are not yet PPL-validated
+    // on the coopmat path. TURBOQ{2,3}_TCQ and KV_OSCAR_INT2 likewise stay scalar.
+    // All of these remain demoted to FA_SCALAR pending their own validation.
+    const bool turbo_cm1_ok =
+        k_type == GGML_TYPE_TURBOQ4_0 || v_type == GGML_TYPE_TURBOQ4_0;
+    const bool turbo_scalar_only =
+        k_type == GGML_TYPE_TURBOQ2_0 || v_type == GGML_TYPE_TURBOQ2_0 ||
         k_type == GGML_TYPE_TURBOQ3_0 || v_type == GGML_TYPE_TURBOQ3_0 ||
-        k_type == GGML_TYPE_TURBOQ4_0 || v_type == GGML_TYPE_TURBOQ4_0 ||
         k_type == GGML_TYPE_TURBOQ2_TCQ || v_type == GGML_TYPE_TURBOQ2_TCQ ||
         k_type == GGML_TYPE_TURBOQ3_TCQ || v_type == GGML_TYPE_TURBOQ3_TCQ ||
-        k_type == GGML_TYPE_KV_OSCAR_INT2 || v_type == GGML_TYPE_KV_OSCAR_INT2) {
+        k_type == GGML_TYPE_KV_OSCAR_INT2 || v_type == GGML_TYPE_KV_OSCAR_INT2;
+    // scalar-only types win on a mixed pair (conservative: any unvalidated turbo
+    // operand forces scalar). turboq4_0 keeps cm1 only when cm1 was selected.
+    if (turbo_scalar_only) {
+        path = FA_SCALAR;
+    } else if (turbo_cm1_ok && path != FA_COOPMAT1) {
+        // FA_COOPMAT2 (no turbo decode) or any non-cm1 selection -> scalar.
         path = FA_SCALAR;
     }
 
