@@ -32,7 +32,7 @@ For maximum throughput on repetitive/templated text, add `--spec-ngram-simple-si
 
 ## Benchmark results (TODO 117, 2026-06-12)
 
-Host: ai01 (gfx1103, ROCm, `HSA_OVERRIDE_GFX_VERSION=11.0.2`).
+Host: gfx1103 (ROCm, `HSA_OVERRIDE_GFX_VERSION=11.0.2`).
 Binary: `/opt/llama-yggdrasil-rocm/bin/llama-speculative-simple` v733 (`d4a3c802c`).
 Model: `Qwen3.5-9B-MTP-Q4_K_M.gguf`. Prompt: 649-tok Wikipedia "Robert Boulter" passage.
 Sampler: `--temp 0 --seed 1`. Context: `-n 256 -c 4096 -fa on -ngl 99 --no-mmap`.

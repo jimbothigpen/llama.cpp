@@ -312,12 +312,12 @@ absence of 3.1 checkpoint weights. Monitor upstream vLLM and EAGLE3 repositories
 All BF16 GGUFs rebuilt 2026-06-14 from new-schema converter (PR #18039 path A — keys
 `eagle3.target_layers` / `eagle3.target_hidden_size` / `eagle3.norm_before_residual`, no double
 prefix). Quant ladders rebuilt 2026-06-19 from those new-schema BF16s. Build: `819 (3ff8220f3)` on
-ai01 (gfx1103 ROCm). IQ3_M produced without imatrix — architecturally impossible for standalone
+gfx1103 (ROCm). IQ3_M produced without imatrix — architecturally impossible for standalone
 eagle3 GGUFs (no `token_embd.weight` → llama-imatrix fails at tensor count check).
 
 ### H1 — Qwen3.6-35B-A3B (EAGLE3.1 head, n_embd_tgt=2048)
 
-Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-eagle3-<q>.gguf`
+Filename: `Qwen3.6-35B-A3B-eagle3-<q>.gguf`
 
 | Quant   | Size | BPW   | Magic      | Built      |
 |---------|------|-------|------------|------------|
@@ -332,7 +332,7 @@ Has `fc_norm.weight` tensor (EAGLE3.1 FC normalization). 15 tensors total.
 
 ### H2 — Qwen3.5-9B (EAGLE3 head, n_embd_tgt=4096, compact-vocab d2t)
 
-Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.5-9B/Qwen3.5-9B-eagle3-<q>.gguf`
+Filename: `Qwen3.5-9B-eagle3-<q>.gguf`
 
 | Quant   | Size | BPW   | Magic      | Built      |
 |---------|------|-------|------------|------------|
@@ -347,7 +347,7 @@ Has `d2t` tensor (compact-vocab 32K→248320 mapping). 14 tensors total.
 
 ### H3 — Qwen3.5-35B-A3B (EAGLE3 head, n_embd_tgt=2048)
 
-Path: `/mnt/cephfs/0/Container/models/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-eagle3-<q>.gguf`
+Filename: `Qwen3.5-35B-A3B-eagle3-<q>.gguf`
 
 | Quant  | Size | BPW   | Magic    | Built      |
 |--------|------|-------|----------|------------|
@@ -357,7 +357,7 @@ No quant ladder yet — target Qwen3.5-35B-A3B is not in active use; build on de
 
 ### PRISM — Qwen3.6-27B (Ex0bit PRISM drafter, n_embd_tgt=2048, compact-vocab d2t)
 
-Path: `/mnt/cephfs/0/Container/models/Ex0bit/Qwen3.6-27B-PRISM-EAGLE3/Qwen3.6-27B-eagle3-<q>.gguf`
+Filename: `Qwen3.6-27B-eagle3-<q>.gguf`
 
 | Quant  | Size | BPW   | Magic    | Built      |
 |--------|------|-------|----------|------------|
