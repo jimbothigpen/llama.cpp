@@ -155,6 +155,16 @@ int main(int argc, char ** argv) {
         cparams.n_rs_seq  = 0;
         cparams.ctx_other = ctx_tgt;
 
+        // Non-causal drafts (DFlash block-diffusion: hparams.causal_attn == false) hit the
+        // llama-context GGML_ASSERT(n_ubatch >= n_tokens) when the prompt exceeds the default
+        // n_ubatch (512) — e.g. ~737 tokens at depth 1024 aborts with rc=134. Auto-size the draft
+        // micro-batch to the full batch so the whole non-causal prompt fits one ubatch. FORK-ONLY.
+        if (!llama_model_is_causal(model_dft.get())) {
+            cparams.n_ubatch = cparams.n_batch;
+            LOG_INF("%s: non-causal draft model — auto-setting draft n_ubatch = n_batch (%u)\n",
+                    __func__, cparams.n_ubatch);
+        }
+
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;

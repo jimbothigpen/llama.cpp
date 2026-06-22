@@ -56,6 +56,13 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     // Feature fusion layer: projects 3 target layers to draft hidden size
     fc = create_tensor(tn(LLM_TENSOR_FC, "weight"), {n_embd_inp, n_embd}, 0);
 
+    // Per-aux fc_norm: one RMSNorm vector per extracted target layer, packed as ggml ne
+    // {n_embd_aux, n_aux} (SpecForge/SGLang fcs.{i}.weight). Optional — older eagle3 drafts
+    // omit it. Applied per target-feature segment before the fc combiner (see encoder graph).
+    const int64_t n_aux      = (int64_t) target_layer_ids.size();
+    const int64_t n_embd_aux = n_embd_inp / n_aux;
+    fc_norm = create_tensor(tn(LLM_TENSOR_EAGLE3_FC_NORM, "weight"), {n_embd_aux, n_aux}, TENSOR_NOT_REQUIRED);
+
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, TENSOR_NOT_REQUIRED);
@@ -132,6 +139,20 @@ llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_grap
     ggml_tensor * cur = nullptr;
 
     cur = build_inp_embd_enc();
+
+    // Per-aux fc_norm (optional): RMSNorm each target-feature segment by its own row before the
+    // fc combiner — chunk → per-aux RMSNorm → concat → fc. fc_norm ne = {n_embd_aux, n_aux};
+    // reshape the fused input into {n_embd_aux, n_aux, n_tokens} so ggml_rms_norm normalizes each
+    // [n_embd_aux] chunk independently and the {n_embd_aux, n_aux} weight broadcasts over tokens.
+    if (model.fc_norm) {
+        const int64_t n_embd_aux = model.fc_norm->ne[0];
+        const int64_t n_aux      = model.fc_norm->ne[1];
+
+        cur = ggml_reshape_3d(ctx0, cur, n_embd_aux, n_aux, n_tokens);
+        cur = build_norm(cur, model.fc_norm, NULL, LLM_NORM_RMS, -1);
+        cur = ggml_reshape_2d(ctx0, cur, n_embd_aux * n_aux, n_tokens);
+        cb(cur, "fc_norm_out", -1);
+    }
 
     // Feature fusion layer
     cur = build_lora_mm(model.fc, cur);
