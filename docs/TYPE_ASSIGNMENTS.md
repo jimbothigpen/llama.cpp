@@ -184,12 +184,12 @@ Preserve ik_llama's R-suffix layout verbatim:
 Slots 200–201, 203–205, 207, 209, 215, 224–228, 231–255 are reserved for
 future packed-variant additions.
 
-**Turbo-tan's `TQ3_0 = 200`** (KV-cache only) is NOT preserved at 200 —
-slot 200 is in our packed-variant zone, and the type name suggests it's
-yet another KV variant best placed adjacent to the TurboQuant KV family.
-**Assignment:** `GGML_TYPE_TURBOQ3_NATIVE = 65` (last slot of TurboQuant
-zone), renaming to disambiguate from the WHT/TCQ families. If turbo-tan's
-TQ3_0 turns out to not be a TurboQuant variant at all, revisit.
+**Turbo-tan's `TQ3_0 = 200`** (KV-cache only) was tentatively earmarked for
+the TurboQuant KV zone, but the earlier draft assignment `GGML_TYPE_TURBOQ3_NATIVE = 65`
+was **never landed in `ggml/include/ggml.h`** (doc-only reservation, zero code references).
+Slot 65 has since been assigned to `GGML_TYPE_TURBOQ6_0` (2026-06-22, TODO 250). If turbo-tan's
+TQ3_0 is ported later it must take a **fresh free slot**, not 65 — and revisit whether it is a
+TurboQuant variant at all.
 
 ## llama_ftype assignments
 
