@@ -115,11 +115,21 @@ Originally drafted against `pr/tq4-weight-compression`; that branch is fully sub
 |---|---|---|---|
 | 80 | `GGML_TYPE_WHT3_0` | `TQ3_1S` (45) | WHT-rotated 8-level Lloyd-Max, block_size=32 |
 | 81 | `GGML_TYPE_WHT4_0` | `TQ4_1S` (46) | WHT-rotated 16-level Lloyd-Max, block_size=32 |
-| 82–85 | reserved | | future WHT variants |
+| 82 | `GGML_TYPE_WHT5_0` | — (yggdrasil extension) | WHT-rotated 32-level Lloyd-Max, block_size=32 (6.0 bpw) |
+| 83 | `GGML_TYPE_WHT6_0` | — (yggdrasil extension) | WHT-rotated 64-level Lloyd-Max, block_size=32 (7.0 bpw) |
+| 84 | `GGML_TYPE_WHT8_0` | — (yggdrasil extension) | WHT-rotated 256-level Lloyd-Max, block_size=32 (9.0 bpw) |
+| 85 | reserved | | future WHT variant |
 
 Symbol prefix: `wht_`. The `TQ` prefix in TheTom's naming collided with
 turbo-tan's RaBitQ TQ3 family; renaming to `WHT` reflects the actual
 transform (Walsh-Hadamard) and breaks the collision.
+
+**WHT5_0/WHT6_0/WHT8_0 (slots 82/83/84, 2026-06-22):** yggdrasil extensions of
+TheTom's WHT lineage to wider Lloyd-Max codebooks (no upstream TheTom counterpart
+— the rotation + dual-half-scale block design and quantizer are TheTom's, the
+5/6/8-bit codebooks and index packings are new). FTYPEs `MOSTLY_WHT5_0`=59,
+`MOSTLY_WHT6_0`=60, `MOSTLY_WHT8_0`=61. Status: functional (CPU + CUDA/HIP
+dequant→cuBLAS path); fused mmvq + Vulkan deferred. Credit: TheTom (WHT method).
 
 ### 86–91: RaBitQ weight family (source: turbo-tan `main`)
 

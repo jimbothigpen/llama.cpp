@@ -1,6 +1,8 @@
-# WHT Weight Quantization (`WHT3_0` / `WHT4_0`)
+# WHT Weight Quantization (`WHT3_0` / `WHT4_0` / `WHT5_0` / `WHT6_0` / `WHT8_0`)
 
-> **Status: Stable** — CPU, CUDA/HIP, and Vulkan backends for both types. WHT3_0 and WHT4_0 do **not** use imatrix — calibration-free.
+> **Status: Stable (WHT3_0/WHT4_0)** — CPU, CUDA/HIP, and Vulkan backends. WHT3_0/WHT4_0 do **not** use imatrix — calibration-free.
+>
+> **Status: Functional (WHT5_0/WHT6_0/WHT8_0, 2026-06-22)** — wider Lloyd-Max codebooks (32/64/256 levels) at index bit-widths 5/6/8. CPU (quant + dequant + vec_dot) and CUDA/HIP (dequant→cuBLAS/rocBLAS matmul) are wired and run a coherent decode; **no fused mmvq kernel and no Vulkan backend yet** (perf legs deferred). Like the narrower siblings they are calibration-free (imatrix integrated but ignored). Slots 82/83/84.
 
 ---
 
@@ -12,6 +14,11 @@
 |---|---|---|---|---|---|---|
 | `WHT3_0` | `GGML_TYPE_WHT3_0` (slot 80) | `MOSTLY_WHT3_0` (41) | 3-bit (8 centroids) | **4.0** | 16 (QK=32) | CPU, CUDA/HIP, Vulkan |
 | `WHT4_0` | `GGML_TYPE_WHT4_0` (slot 81) | `MOSTLY_WHT4_0` (42) | 4-bit (16 centroids) | **5.0** | 20 (QK=32) | CPU, CUDA/HIP, Vulkan |
+| `WHT5_0` | `GGML_TYPE_WHT5_0` (slot 82) | `MOSTLY_WHT5_0` (59) | 5-bit (32 centroids) | **6.0** | 24 (QK=32) | CPU, CUDA/HIP (dequant path) |
+| `WHT6_0` | `GGML_TYPE_WHT6_0` (slot 83) | `MOSTLY_WHT6_0` (60) | 6-bit (64 centroids) | **7.0** | 28 (QK=32) | CPU, CUDA/HIP (dequant path) |
+| `WHT8_0` | `GGML_TYPE_WHT8_0` (slot 84) | `MOSTLY_WHT8_0` (61) | 8-bit (256 centroids) | **9.0** | 36 (QK=32) | CPU, CUDA/HIP (dequant path) |
+
+> `WHT5_0`/`WHT6_0`/`WHT8_0` are **functional** (2026-06-22): they quantize, load, and decode coherently via the CPU path and the CUDA/HIP dequant→cuBLAS/rocBLAS matmul path. They do **not** yet have a fused single-token mmvq kernel (so decode uses the dequant path) or a Vulkan backend — those are deferred perf legs.
 
 **TL;DR.** WHT4_0 competes with Q5_K_M — not Q4_K_M — because its true cost is ~5 bpw. A Walsh-Hadamard rotation applied before quantization flattens weight outliers and lets a compact fitted codebook achieve better quality than a plain low-bit quant at the same cost. No imatrix calibration is needed.
 
@@ -23,6 +30,11 @@ llama-quantize model-F16.gguf model-WHT4_0.gguf WHT4_0
 
 # Quantize to WHT3_0 (~4 bpw, competes with Q4_0 / IQ4_XS)
 llama-quantize model-F16.gguf model-WHT3_0.gguf WHT3_0
+
+# Wider variants (functional; ~6/7/9 bpw). 8-bit ≈ Q8_0-class quality.
+llama-quantize model-F16.gguf model-WHT5_0.gguf WHT5_0
+llama-quantize model-F16.gguf model-WHT6_0.gguf WHT6_0
+llama-quantize model-F16.gguf model-WHT8_0.gguf WHT8_0
 
 # Run inference
 llama-cli -m model-WHT4_0.gguf --no-mmap -fa on -p "Hello"
@@ -144,6 +156,14 @@ Each block covers 32 weights (`QK_TQ3_0 = QK_WHT4_0 = 32`) with two fp16 half-bl
 ```
 = 5.0 bits/value (`static_assert(sizeof(block_wht4_0) == 20)`)
 
+The wider variants follow the identical `d0`/`d1` dual-scale layout (`QK_WHT5_0 = QK_WHT6_0 = QK_WHT8_0 = 32`), differing only in codebook size and index packing:
+
+**`block_wht5_0`** — 24 bytes: `[d0][d1][qs[20]: 5-bit indices, 8 packed into 5 bytes per group]` = 6.0 bpw.
+**`block_wht6_0`** — 28 bytes: `[d0][d1][qs[24]: 6-bit indices, 4 packed into 3 bytes per group]` = 7.0 bpw.
+**`block_wht8_0`** — 36 bytes: `[d0][d1][qs[32]: 8-bit indices, 1 per byte]` = 9.0 bpw.
+
+The CPU encode/decode share a single parameterized core (`wht_quant_core` / `wht_dequant_core` in `ggml-turbo-quant.c`) over the per-type Lloyd-Max codebook; the CUDA dequant LUTs in `ggml-cuda/turbo-quant.cuh` are kept byte-identical (quantize runs on CPU, dequant on GPU).
+
 ### Encode pipeline (`ggml/src/ggml-turbo-quant.c`)
 
 For each 32-weight block:
@@ -171,7 +191,13 @@ The three share the same mathematical family (Walsh-Hadamard Transform) but are 
   - **`ne1 == 1` (single-token decode):** fused `ggml_cuda_mul_mat_tq_multi<1>` — dp4a int8 on NVIDIA WHT4_0; scalar/half on AMD RDNA (dp4a not available on RDNA).
   - **`ne1 = 2–8` (small-batch / low `-ub`):** fused `ggml_cuda_mul_mat_tq_multi`, reusing each weight block across all tokens.
   - **`ne1 > 8` (standard prefill):** dequant-to-Q8_0 → cuBLAS/rocBLAS.
-- **Vulkan** — mul_mat_vec pipelines for both types wired in `ggml-vulkan.cpp` (`dequant_wht3_0.comp` / `mul_mat_vec_wht3_0.comp` shaders)
+- **Vulkan** — mul_mat_vec pipelines for WHT3_0/WHT4_0 wired in `ggml-vulkan.cpp` (`dequant_wht3_0.comp` / `mul_mat_vec_wht3_0.comp` shaders)
+
+**WHT5_0/WHT6_0/WHT8_0 backends (functional, 2026-06-22):**
+
+- **CPU** — full quant + dequant + `vec_dot` (dequant-then-dot against Q8_0), parameterized over the codebook.
+- **CUDA/HIP** — device dequant kernels (`dequantize_wht5_0`/`_wht6_0`/`_wht8_0` in `ggml-cuda/dequantize.cuh`) feed the **dequant→cuBLAS/rocBLAS** matmul path for all batch sizes (single-token decode included). These types are explicitly routed past the fused mmvq/mmq kernels (an `is_wht_dequant` guard in `ggml-cuda.cu`), since no fused WHT5/6/8 mmvq kernel exists yet. They store **natively** in VRAM (no WHT4_0-style load-time Q8_0 conversion).
+- **Deferred (perf legs):** fused single-token mmvq kernel (dp4a/scalar), Vulkan shaders, and SIMD `vec_dot` — none are required for functional correctness.
 
 ---
 
