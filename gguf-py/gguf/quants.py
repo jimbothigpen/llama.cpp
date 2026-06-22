@@ -1376,3 +1376,13 @@ class IQ4_XS(__Quant, qtype=GGMLQuantizationType.IQ4_XS):
         qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1, 32))
 
         return (dl * qs).reshape((n_blocks, -1))
+
+
+class WQ3_TCQ(__Quant, qtype=GGMLQuantizationType.WQ3_TCQ):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("WQ3_TCQ quantization is done externally")
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("WQ3_TCQ dequantization requires GGUF codebook metadata")

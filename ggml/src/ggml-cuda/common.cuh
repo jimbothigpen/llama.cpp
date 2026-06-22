@@ -1015,6 +1015,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_NVFP4> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_WQ3_TCQ> {
+    static constexpr int qk = QK_TURBOQ3_TCQ;
+    static constexpr int qr = 1;
+    static constexpr int qi = QK_TURBOQ3_TCQ / 4;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q2_K> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR2_K;
@@ -1638,4 +1645,3 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }
-

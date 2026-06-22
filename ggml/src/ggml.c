@@ -820,6 +820,17 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_wht4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_wht4_0_ref,
     },
+    // WQ3_TCQ: 3-bit TCQ WEIGHT quant (source: buun feat/tcq-wq3-ffn-fusion). GPU-only dequant
+    // (CUDA in ggml-cuda/wq3-tcq.cu); reuses the 52-byte block_turboq3_tcq layout. CPU to_float
+    // pending Ph2 (ADR-016 imatrix). slots 82–91 are reserved gaps (WHT5/6/8, RaBitQ).
+    [GGML_TYPE_WQ3_TCQ] = {
+        .type_name                = "wq3_tcq",
+        .blck_size                = QK_TURBOQ3_TCQ,
+        .type_size                = sizeof(block_turboq3_tcq),
+        .is_quantized             = true,
+        .to_float                 = NULL,  // GPU-only: CUDA dequant in wq3-tcq.cu
+        .from_float_ref           = NULL,
+    },
     // Phase 5b-1a: ik_llama base IK weight quant family (source: ik_llama)
     [GGML_TYPE_IQ4_K] = {
         .type_name                = "iq4_k",

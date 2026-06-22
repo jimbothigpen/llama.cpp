@@ -69,6 +69,7 @@
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
+#include "ggml-cuda/wq3-tcq.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -631,6 +632,7 @@ struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     std::string name;
+    std::vector<ggml_cuda_wq3_tcq_decoded_cache *> wq3_tcq_decoded_caches;
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
         device(device), dev_ptr(dev_ptr),
@@ -638,6 +640,9 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
+        for (ggml_cuda_wq3_tcq_decoded_cache * cache : wq3_tcq_decoded_caches) {
+            ggml_cuda_wq3_tcq_decoded_cache_free(cache);
+        }
         CUDA_CHECK(cudaFree(dev_ptr));
     }
 };
@@ -2593,7 +2598,9 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
+    // WQ3_TCQ is a weight quant with its own native decode/FFN-fusion path — exclude from generic mmvq.
+    const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0 ||
+                               src0->type == GGML_TYPE_WQ3_TCQ);
     const bool is_iqk_mmvq = ggml_cuda_iqk_mmvq_supported(src0->type);
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_iqk_mmvq &&
                              src1->type == GGML_TYPE_F32 &&
@@ -2625,6 +2632,60 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+static bool ggml_cuda_should_fuse_mul_mat_vec_wq3_tcq(const ggml_tensor * tensor) {
+    ggml_tensor *       src0 = tensor->src[0];
+    ggml_tensor *       src1 = tensor->src[1];
+    const ggml_tensor * dst  = tensor;
+
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
+                                   src0->view_src;
+
+    if (tensor->op != GGML_OP_MUL_MAT || bad_padding_clear) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_WQ3_TCQ || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[1] != 1) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft) ||
+                       ggml_backend_buft_is_cuda_split(src1->buffer->buft);
+
+    return !split;
+}
+
+static const ggml_cuda_wq3_tcq_decoded_cache * ggml_cuda_wq3_tcq_get_or_create_decoded_cache(const ggml_tensor * tensor, cudaStream_t stream) {
+    if (tensor->buffer == nullptr ||
+            !ggml_backend_buffer_is_cuda(tensor->buffer) ||
+            ggml_backend_buft_is_cuda_split(tensor->buffer->buft)) {
+        return nullptr;
+    }
+
+    if (tensor->extra != nullptr) {
+        return (const ggml_cuda_wq3_tcq_decoded_cache *) tensor->extra;
+    }
+
+    ggml_backend_cuda_buffer_context * buffer_ctx = (ggml_backend_cuda_buffer_context *) tensor->buffer->context;
+    ggml_cuda_wq3_tcq_decoded_cache * cache = ggml_cuda_wq3_tcq_decoded_cache_try_create(
+        tensor->name, tensor->data, ggml_nbytes(tensor), stream);
+    if (cache == nullptr) {
+        return nullptr;
+    }
+
+    const_cast<ggml_tensor *>(tensor)->extra = cache;
+    buffer_ctx->wq3_tcq_decoded_caches.push_back(cache);
+    return cache;
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
 
@@ -2638,8 +2699,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels)
-    const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
+    // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels).
+    // WQ3_TCQ is also excluded here — it has its own native decode/FFN-fusion path.
+    const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0 ||
+                               src0->type == GGML_TYPE_WQ3_TCQ);
     // IQK base weight types: unconditional guard keeps them out of mmvq/mmq for ALL batch sizes.
     // mul_mat_vec_q_switch_type has no IQK case → GGML_ABORT for batch 2-8 without this guard.
     const bool is_iqk_weight = ggml_cuda_iqk_mmvq_supported(src0->type);
@@ -2656,6 +2719,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     bool any_gpus_with_slow_fp16 = false;
 
     if (split) {
+        if (src0->type == GGML_TYPE_WQ3_TCQ) {
+            use_mul_mat_q = false;
+        }
         ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *) src0->buffer->buft->context;
         auto & tensor_split = buft_ctx->tensor_split;
         for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
@@ -2682,6 +2748,16 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
     }
 
+    bool use_mul_mat_vec_wq3_tcq = !split
+        && src0->type == GGML_TYPE_WQ3_TCQ
+        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
+        && src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1
+        && !bad_padding_clear
+        && ggml_is_contiguous(src1);
+    if (use_mul_mat_vec_wq3_tcq) {
+        use_mul_mat_q = false;
+    }
+
     // debug helpers
     //printf("src0: %8d %8d %8d %8d\n", src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
     //printf("      %8d %8d %8d %8d\n", src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
@@ -2701,7 +2777,23 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
 
-    if (!split && use_mul_mat_vec_f) {
+    if (!split && use_mul_mat_vec_wq3_tcq) {
+        ggml_cuda_wq3_tcq_profile_scope profile_scope = ggml_cuda_wq3_tcq_profile_begin(
+            src0->name,
+            (int) src0->ne[0],
+            (int) src0->ne[1],
+            ctx.stream());
+        ggml_cuda_wq3_tcq_mmvq_native(
+            ctx.pool(),
+            src0->data,
+            ggml_cuda_wq3_tcq_get_or_create_decoded_cache(src0, ctx.stream()),
+            (const float *) src1->data,
+            (float *)       dst->data,
+            (int) src0->ne[0],
+            (int) src0->ne[1],
+            ctx.stream());
+        ggml_cuda_wq3_tcq_profile_end(profile_scope, ctx.stream());
+    } else if (!split && use_mul_mat_vec_f) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM
         // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -4128,6 +4220,94 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     bool fused_mul_mat_vec = false;
     int  fused_node_count  = 0;
 
+    if (i + 4 < cgraph->n_nodes &&
+            cgraph->nodes[i]->op == GGML_OP_DIV &&
+            cgraph->nodes[i + 1]->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 2]->op == GGML_OP_DIV &&
+            cgraph->nodes[i + 3]->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 4]->op == GGML_OP_GLU) {
+        ggml_tensor * div0 = cgraph->nodes[i];
+        ggml_tensor * mm0  = cgraph->nodes[i + 1];
+        ggml_tensor * div1 = cgraph->nodes[i + 2];
+        ggml_tensor * mm1  = cgraph->nodes[i + 3];
+        ggml_tensor * glu  = cgraph->nodes[i + 4];
+
+        ggml_tensor * gate = glu->src[0];
+        ggml_tensor * up   = glu->src[1];
+
+        const bool order_ok =
+            ((gate == mm0 && up == mm1) || (gate == mm1 && up == mm0)) &&
+            mm0->src[1] == div0 &&
+            mm1->src[1] == div1 &&
+            div0->src[0] == div1->src[0];
+
+        if (order_ok && ggml_cuda_should_fuse_mul_mat_vec_wq3_tcq(up)) {
+            const ggml_tensor * up_src0 = up->src[0];
+            const ggml_tensor * gate_src0 = gate->src[0];
+            if (gate_src0->type == GGML_TYPE_WQ3_TCQ && ggml_are_same_shape(up_src0, gate_src0)) {
+                ggml_cuda_op_div(*cuda_ctx, up->src[1]);
+                ggml_cuda_op_div(*cuda_ctx, gate->src[1]);
+
+                ggml_cuda_wq3_tcq_mmvq_fused_gate_up_glu(
+                    cuda_ctx->pool(),
+                    up_src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(up_src0, cuda_ctx->stream()),
+                    gate_src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(gate_src0, cuda_ctx->stream()),
+                    (const float *) up->src[1]->data,
+                    (const float *) gate->src[1]->data,
+                    (float *) glu->data,
+                    (int) up_src0->ne[0],
+                    (int) up_src0->ne[1],
+                    ggml_get_glu_op(glu),
+                    cuda_ctx->stream());
+
+                return 4;
+            }
+        }
+    }
+
+    if (i + 3 < cgraph->n_nodes &&
+            cgraph->nodes[i]->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 1]->op == GGML_OP_DIV &&
+            cgraph->nodes[i + 2]->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 3]->op == GGML_OP_GLU) {
+        ggml_tensor * gate = cgraph->nodes[i];
+        ggml_tensor * up_div = cgraph->nodes[i + 1];
+        ggml_tensor * up = cgraph->nodes[i + 2];
+        ggml_tensor * glu = cgraph->nodes[i + 3];
+
+        const bool graph_shape_ok =
+            glu->src[0] == gate && glu->src[1] == up &&
+            up->src[1] == up_div &&
+            gate->src[1] != nullptr && gate->src[1]->op == GGML_OP_DIV &&
+            up_div->src[0] == gate->src[1]->src[0];
+
+        if (graph_shape_ok && ggml_cuda_should_fuse_mul_mat_vec_wq3_tcq(up)) {
+            const ggml_tensor * up_src0 = up->src[0];
+            const ggml_tensor * gate_src0 = gate->src[0];
+            if (gate_src0->type == GGML_TYPE_WQ3_TCQ && ggml_are_same_shape(up_src0, gate_src0)) {
+                ggml_cuda_op_div(*cuda_ctx, up_div);
+
+                ggml_cuda_wq3_tcq_mmvq_fused_gate_up_glu(
+                    cuda_ctx->pool(),
+                    up_src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(up_src0, cuda_ctx->stream()),
+                    gate_src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(gate_src0, cuda_ctx->stream()),
+                    (const float *) up->src[1]->data,
+                    (const float *) gate->src[1]->data,
+                    (float *) glu->data,
+                    (int) up_src0->ne[0],
+                    (int) up_src0->ne[1],
+                    ggml_get_glu_op(glu),
+                    cuda_ctx->stream());
+
+                return 3;
+            }
+        }
+    }
+
     // gate + glu + up
     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
         const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
@@ -4223,6 +4403,31 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const ggml_tensor * src0 = up->src[0];
             const ggml_tensor * src1 = up->src[1];
             const ggml_tensor * ids  = up->src[2];
+
+            if (ggml_cuda_should_fuse_mul_mat_vec_wq3_tcq(up)) {
+                const ggml_tensor * gate_src0 = gate->src[0];
+                if (gate_src0->type != GGML_TYPE_WQ3_TCQ || !ggml_are_same_shape(src0, gate_src0)) {
+                    continue;
+                }
+
+                ggml_cuda_wq3_tcq_mmvq_fused_gate_up_glu(
+                    cuda_ctx->pool(),
+                    src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(src0, cuda_ctx->stream()),
+                    gate_src0->data,
+                    ggml_cuda_wq3_tcq_get_or_create_decoded_cache(gate_src0, cuda_ctx->stream()),
+                    (const float *) src1->data,
+                    (const float *) src1->data,
+                    (float *) glu->data,
+                    (int) src0->ne[0],
+                    (int) src0->ne[1],
+                    ggml_get_glu_op(glu),
+                    cuda_ctx->stream());
+
+                fused_mul_mat_vec = true;
+                fused_node_count  = 3;
+                break;
+            }
 
             if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
@@ -5324,6 +5529,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_BF16:
                     case GGML_TYPE_WHT4_0:
                     case GGML_TYPE_WHT3_0:
+                    case GGML_TYPE_WQ3_TCQ:
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ2_K:
@@ -5365,6 +5571,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_WHT3_0:
                     case GGML_TYPE_TURBOQ3_TCQ:
                     case GGML_TYPE_TURBOQ2_TCQ:
+                    case GGML_TYPE_WQ3_TCQ:
                     case GGML_TYPE_KV_OSCAR_INT2:
                         return true;
                     default:

@@ -29,6 +29,9 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
+        case GGML_TYPE_WQ3_TCQ:
+            mul_mat_q_case<GGML_TYPE_WQ3_TCQ>(ctx, args, stream);
+            break;
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, args, stream);
             break;
@@ -138,6 +141,12 @@ void ggml_cuda_mul_mat_q(
                 quantize_mmq_fp4_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                         ne11, ne12, ne13, stream);
 
+            } else if (src0->type == GGML_TYPE_WQ3_TCQ) {
+                GGML_ASSERT(src1->type == GGML_TYPE_F32);
+                GGML_ASSERT(ne12 == 1 && ne13 == 1 &&
+                    "WQ3_TCQ MMQ path: batched src1 (ne12/ne13 > 1) not implemented");
+                ggml_cuda_wq3_tcq_rotate_quantize_q8_1_mmq(
+                    src1_d, (block_q8_1_mmq *) src1_q8_1.get(), ne10, ne11, s11, stream);
             } else {
                 quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded,
                                        ne11, ne12, ne13, stream);
@@ -293,6 +302,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_WQ3_TCQ:
             mmq_supported = true;
             break;
         default:

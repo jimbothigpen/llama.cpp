@@ -26,6 +26,12 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef GGML_USE_CUDA
+extern void ggml_cuda_set_wq3_tcq_codebook(const float * codebook, int n_entries);
+extern void ggml_cuda_set_wq3_tcq_signs(uint32_t sign_seed);
+extern void ggml_cuda_set_wq3_tcq_signs_direct(const float * s1, const float * s2, int n);
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -331,6 +337,54 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {-2, nullptr};
         }
 
+#ifdef GGML_USE_CUDA
+        {
+            bool has_wq3 = false;
+            for (const auto & it : ml.weights_map) {
+                if (it.second.tensor && it.second.tensor->type == GGML_TYPE_WQ3_TCQ) {
+                    has_wq3 = true;
+                    break;
+                }
+            }
+
+            if (has_wq3) {
+                int64_t cb_key = gguf_find_key(ml.metadata, "turbo.tcq.codebook.weight");
+                if (cb_key < 0) {
+                    cb_key = gguf_find_key(ml.metadata, "turbo.tcq.codebook.default");
+                }
+                if (cb_key < 0) {
+                    throw std::runtime_error("WQ3_TCQ model missing turbo.tcq.codebook.weight/default metadata");
+                }
+
+                const size_t cb_n = gguf_get_arr_n(ml.metadata, cb_key);
+                if (cb_n != 512 && cb_n != 1024) {
+                    throw std::runtime_error("WQ3_TCQ codebook must have 512 or 1024 entries, got " + std::to_string(cb_n));
+                }
+
+                const float * cb_data = (const float *) gguf_get_arr_data(ml.metadata, cb_key);
+                ggml_cuda_set_wq3_tcq_codebook(cb_data, (int) cb_n);
+                LLAMA_LOG_INFO("%s: WQ3_TCQ: loaded %d-entry weight codebook from GGUF metadata\n", __func__, (int) cb_n);
+
+                const int64_t s1_key = gguf_find_key(ml.metadata, "turbo.tcq.signs1");
+                const int64_t s2_key = gguf_find_key(ml.metadata, "turbo.tcq.signs2");
+                if (s1_key >= 0 && s2_key >= 0) {
+                    const float * s1 = (const float *) gguf_get_arr_data(ml.metadata, s1_key);
+                    const float * s2 = (const float *) gguf_get_arr_data(ml.metadata, s2_key);
+                    ggml_cuda_set_wq3_tcq_signs_direct(s1, s2, 128);
+                    LLAMA_LOG_INFO("%s: WQ3_TCQ: loaded FWHT signs from GGUF vectors\n", __func__);
+                } else {
+                    int64_t seed_key = gguf_find_key(ml.metadata, "turbo.tcq.sign_seed");
+                    uint32_t sign_seed = 42;
+                    if (seed_key >= 0) {
+                        sign_seed = gguf_get_val_u32(ml.metadata, seed_key);
+                    }
+                    ggml_cuda_set_wq3_tcq_signs(sign_seed);
+                    LLAMA_LOG_INFO("%s: WQ3_TCQ: loaded FWHT signs from seed=%u\n", __func__, sign_seed);
+                }
+            }
+        }
+#endif
+
         return {0, model_ptr.release()};
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
@@ -578,4 +632,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-
