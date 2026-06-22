@@ -79,6 +79,14 @@ human decision (none currently).
 |---|---|---|---|---|---|---|---|---|---|
 | ZAYA1-8B | **this fork** (first ggml/llama.cpp backend); references Zyphra/vllm@`zaya1-pr`, Zyphra/transformers@`zaya1`, Zyphra/llama.cpp@`CCA` (`src/models/zaya.cpp`) | this fork (`ZayaModel` converter) | Zyphra/ZAYA1-8B (HF) | zyphra | CCA (reference only) | `src/models/zaya.cpp` | [zaya1.md](zaya1.md) | 2026-06-22 | VERIFIED |
 
+## Evaluation tooling
+
+Not a ported model feature — original tooling in this fork. External dataset provenance documented here per maintenance policy.
+
+| Tool | Source | External datasets | In-repo paths | Commit | Last-verified | Status |
+|---|---|---|---|---|---|---|
+| conv-QA eval harness | **this fork** (original — not a ported model feature); benchmarks EpiCache KV-cache quality via multi-session QA tasks (EpiCache ref: arXiv 2509.17396) | **LoCoMo** (`snap-research/locomo`, HuggingFace — paper-sourced multi-session conversations with multi-hop/temporal/adversarial QA pairs; fetched via `fetch_data.sh`, Apache 2.0); **LongMemEval** adapter included in `prepare_subset.py --format longmemeval` (paper-sourced multi-session QA benchmark; external fetch, not bundled) | `tools/epicache-convqa/` | `5de8b2705` (2026-06-21) | 2026-06-22 | VERIFIED |
+
 ## Tracked but NOT currently in-tree (drift watch only)
 
 These appear in the contributing-forks table / roadmap but are **not** live ported features on `main`.
