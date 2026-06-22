@@ -643,14 +643,15 @@ extern "C" {
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 
-    LLAMA_API int32_t llama_model_n_ctx_train(const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd_inp (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd_out (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_layer      (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_layer_nextn(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_head       (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
     // Number of NextN/MTP prediction layers in this model (0 if none).
     LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);

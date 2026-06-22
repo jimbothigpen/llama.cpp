@@ -802,13 +802,20 @@ struct llm_graph_params {
             }
         }
 
+        // TODO: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448035248
+        if (cparams.nextn_layer_offset != other.cparams.nextn_layer_offset) {
+            return false;
+        }
+
         return
-            cparams.embeddings  == other.cparams.embeddings  &&
-            cparams.causal_attn == other.cparams.causal_attn &&
+            cparams.embeddings              == other.cparams.embeddings              &&
+            cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
+            cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
+            cparams.causal_attn             == other.cparams.causal_attn             &&
             // MTP graph topology depends on op_type (NONE runs the full transformer; WARMUP /
             // UPDATE_ACCEPTED / DRAFT_GEN run only the NextN tail). Reuse is invalid across
             // op_type changes — even between WARMUP and DRAFT_GEN, since the input shape differs.
-            cparams.mtp_op_type == other.cparams.mtp_op_type &&
+            cparams.mtp_op_type             == other.cparams.mtp_op_type             &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec    == other.cvec    &&

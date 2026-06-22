@@ -403,7 +403,7 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
-bool common_params_handle_models(common_params & params, llama_example curr_ex) {
+bool common_params_handle_models(common_params & params, llama_example curr_ex, common_download_callback * callback) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
@@ -414,6 +414,10 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
     opts.skip_download   = params.skip_download;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
+
+    if (callback) {
+        opts.callback = callback;
+    }
 
     // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
     // so we should not auto-discover mtp/mmproj siblings for them
@@ -591,8 +595,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    // export_graph_ops loads only metadata
-    const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
+    const bool skip_model_download =
+        // server will call common_params_handle_models() later, so we skip it here
+        ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
+        // export_graph_ops loads only metadata
+        ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
     if (!skip_model_download) {
         // handle model and download
@@ -601,7 +608,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         // model is required (except for server)
         // TODO @ngxson : maybe show a list of available models in CLI in this case
         if (params.model.path.empty()
-                && ctx_arg.ex != LLAMA_EXAMPLE_SERVER
                 && !params.usage
                 && !params.completion
                 && !params.list_sidecar_types) {
@@ -932,8 +938,8 @@ static utf8_argv make_utf8_argv() {
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
 #ifdef _WIN32
     auto utf8 = make_utf8_argv();
-    if (!utf8.ptrs.empty()) {
-        argc = static_cast<int>(utf8.buf.size());
+    // repair argv only when it matches the process command line
+    if (static_cast<int>(utf8.buf.size()) == argc) {
         argv = utf8.ptrs.data();
     }
 #endif
@@ -3057,7 +3063,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
-        add_opt(common_arg(
+    add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},
         "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)",
