@@ -1,3 +1,8 @@
+// EAGLE3 speculative-decode drafter.
+// Provenance: ported from carlosfundora/llama.cpp-1-bit-turbo (remote
+//   `carlosfundora`, branch integration). The compact-vocab two-vocab loader
+//   and converter (conversion/eagle3.py, SpecForge format) are this fork's
+//   additions. See docs/features/eagle3.md.
 #include "models.h"
 
 void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {

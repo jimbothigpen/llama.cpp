@@ -14,7 +14,7 @@
 | | Value |
 |---|---|
 | **What it is** | Prompt compression via a small scorer model; reduces the token budget fed to the target model's prefill |
-| **Upstream** | buun `master` (SD-089-pflash) |
+| **Upstream** | buun, branch `experiment/SD-089-pflash` (see [Provenance](#provenance)) |
 | **Flag** | `--pflash-scorer <scorer-model-dir>` (minimum required flag) |
 | **Validated arch** | Qwen3.x scorer (Qwen3.5-0.8B recommended) |
 | **Key tunable** | `--pflash-keep-ratio 0.05` (default: keep 5% of tokens above `--pflash-min-tokens`) |
@@ -23,6 +23,21 @@
 | **Scorer generalization** | `500046b0b` (non-Qwen arch support — §-FLAG unvalidated) |
 
 ---
+
+## Provenance
+
+PFlash is ported from the **buun** fork
+([spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp),
+remote `buun`), branch **`experiment/SD-089-pflash`** — verified 2026-06-22
+(`common/pflash*.cpp/.h` present at synced ref `2aeee7d3f`). The scorer is a
+standard small model directory (e.g. Qwen3.5-0.8B), supplied at runtime via
+`--pflash-scorer`; there is no separate converter or shipped weight artifact.
+
+This fork's additions on top of buun's CPU baseline: the HIP/CUDA GPU scorer
+(`pflash-graph.cpp`, ~24× speedup), the Vulkan iGPU fallback, the LRU scorer
+cache, on-disk persistence, and the non-Qwen scorer generalization (the latter
+still §-FLAG unvalidated — see PFL-1 above). See the canonical
+[PROVENANCE.md](PROVENANCE.md).
 
 ## How PFlash works
 

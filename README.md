@@ -57,7 +57,7 @@ sibling forks rebased onto mainline's architecture.
 | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | **Base** — this fork rebases against mainline regularly | upstream-of-everything |
 | [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) | TurboQuant KV cache (`TURBOQ{2,3,4}_0`), WHT weight quants, alpha-scaling, asymmetric K/V, InnerQ calibrated KV (`TURBOQ{2,3,4}_INNERQ`) | active |
 | [spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp) | TCQ KV cache (`TURBOQ{2,3}_TCQ`), PFlash prompt compression, DFlash S1 model loader | active |
-| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | RotorQuant KV V-cache (`RQ_*`), EAGLE3, PHANTOM-X, TurboMind allocator, Wave32 RDNA2 kernels | active |
+| [carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo) | EAGLE3, PHANTOM-X (TurboMind allocator queued; Wave32 RDNA2 out of scope; RotorQuant `RQ_*` was ported then removed — see [docs/features/PROVENANCE.md](docs/features/PROVENANCE.md)) | active |
 | [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) | RaBitQ TQ3 weight quants (`RBQ3_*`); MTP research | recent |
 | [domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip) | TriAttention KV compression with GPU scoring, `--hugepages` | moderate |
 | [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) | IK quants (IQ\*_K, IQ\*_KS), BitNet, MLA / FlashMLA, fused MoE, ongoing MTP improvements | very active; **not a git merge source** — see [docs/IK_LLAMA_PORTS.md](docs/IK_LLAMA_PORTS.md) |
@@ -592,7 +592,10 @@ code-heavy, context-repetitive tasks; avoid for general-chat or creative-writing
 
 ### DFlash speculative decode (S1 loader + S2 dispatch; S3 GPU ring in progress) — Phase 7a
 
-DFlash drafter spec-decode lifted from buun `master` + z-lab drafter:
+DFlash has three distinct upstreams (see [docs/features/PROVENANCE.md](docs/features/PROVENANCE.md)):
+the **runtime** (speculative loop, cross-attention ring, dispatch) is from **buun `master`**;
+the **GGUF converter** (`conversion/dflash_draft.py`) is from **Anbeeld/beellama.cpp** (MIT);
+the **drafter weights** are the **z-lab** DFlash family. Components:
 
 - **S1 model loader** (`b6a75e524`) — drafter model architecture + GGUF loader in-tree.
 - **S2 dispatch** (`ef80c728c`) — `common_speculative_state_dflash` + factory dispatch wired into `--spec-type dflash`.

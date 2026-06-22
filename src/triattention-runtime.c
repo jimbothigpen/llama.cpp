@@ -1,5 +1,10 @@
 /*
  * triattention-runtime.c — TriAttention runtime scoring
+ *
+ * Provenance: TriAttention ported from domvox (remote `domvox`, branch
+ *   feature/triattention-scoring). The EpiCache prefill-bounding path
+ *   (compiled in under LLAMA_EPICACHE) is this fork's implementation;
+ *   algorithm reference arXiv:2509.17396. See docs/features/triattention.md.
  */
 
 #define _GNU_SOURCE

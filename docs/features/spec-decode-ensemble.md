@@ -17,6 +17,25 @@ The recommended ensemble for most workloads is:
 For maximum throughput on repetitive/templated text, add `--spec-ngram-simple-size-n 4`
 (shorter context window → higher n-gram fire-rate at the cost of lower accept%).
 
+## Provenance
+
+The cascade ensemble is **this fork's own wiring** — the
+`common_speculative_draft()` priority-order dispatch in `common/speculative.cpp`.
+It composes existing pieces and introduces no new upstream code:
+
+- The **n-gram arms** (`ngram-simple`, `ngram-cache`, `ngram-mod`, `map-k`) are
+  the mainline ggml-org n-gram family.
+- The **MTP arm** (`draft-mtp`) is the MTP runtime feature — see
+  [mtp.md](mtp.md) and [PROVENANCE.md](PROVENANCE.md).
+
+There is no separate upstream remote to track for the cascade itself; drift
+tracking for the arms follows their respective rows in
+[PROVENANCE.md](PROVENANCE.md).
+
+> Note: `common/speculative.cpp` is also being reworked by the MTP-driver
+> convergence effort; this provenance note describes the cascade dispatch and is
+> expected to survive that rebase, but re-confirm the function name if it moves.
+
 ## How it works
 
 - **n-gram arm** (ngram-simple, size_n=12 default): matches the last `size_n` tokens against

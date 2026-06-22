@@ -1,3 +1,6 @@
+// InnerQ per-channel calibration engine for TurboQuant KV cache.
+// Provenance: ported from thetom (remote `thetom`, branch
+//   feature/turboquant-kv-cache). See docs/features/innerq-kv.md.
 #include "turbo-innerq.cuh"
 #include <cstring>
 

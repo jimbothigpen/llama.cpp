@@ -1,3 +1,8 @@
+// DFlash drafter model loader (hidden-state cross-attention speculative decode).
+// Provenance: runtime ported from buun (remote `buun`,
+//   github.com/spiritbuun/buun-llama-cpp). GGUF converter
+//   (conversion/dflash_draft.py) is from Anbeeld/beellama.cpp (MIT); drafter
+//   weights are the z-lab DFlash family. See docs/features/dflash.md.
 #include "models.h"
 
 #include <algorithm>

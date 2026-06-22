@@ -8,7 +8,12 @@
 //   5. GhostBuffer — pinned memory ring for zero-copy HSA transport
 //
 // Wraps ngram_mod internally and adds all 5 components on top.
-// Ported from carlosfundora/sglang-1-bit-turbo phantom_worker.py
+//
+// Provenance: C++ code ported from carlosfundora/llama.cpp-1-bit-turbo
+//   (github.com/carlosfundora/llama.cpp-1-bit-turbo, remote `carlosfundora`).
+//   The original algorithm reference is carlosfundora's sglang implementation
+//   (sglang-1-bit-turbo `phantom_worker.py`); the `--spec-type phantom` factory
+//   wiring is this fork's addition. See docs/features/phantom-x.md.
 //
 // Usage: --spec-type phantom [--phantom-buffers 2] [--phantom-bloom-bits 16384]
 

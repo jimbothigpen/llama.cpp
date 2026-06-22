@@ -1,3 +1,7 @@
+// WHT-rotated weight quants (WHT3_0/WHT4_0).
+// Provenance: ported from thetom (remote `thetom`, branch
+//   feature/turboquant-kv-cache; upstream names TQ3_1S/TQ4_1S). ROCm + Vulkan
+//   backends are this fork's. See docs/features/wht-weight-quants.md.
 #include "turbo-quant.cuh"
 #include "turbo-wht.cuh"
 
