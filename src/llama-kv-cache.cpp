@@ -79,16 +79,6 @@ static bool ggml_type_is_turboq_tcq(enum ggml_type t) {
     return t == GGML_TYPE_TURBOQ3_TCQ || t == GGML_TYPE_TURBOQ2_TCQ;
 }
 
-#define INNERQ_MAX_CHANNELS 256  // must match turbo-innerq.cuh INNERQ_MAX_CHANNELS
-
-#ifdef GGML_USE_CUDA
-// Cross-TU InnerQ symbols from turbo-innerq.cu (CUDA backend).
-// Cannot include turbo-innerq.cuh directly from a plain C++ file.
-extern bool  turbo_innerq_needs_tensor_update(void);
-extern void  turbo_innerq_mark_tensor_updated(void);
-extern float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS];
-#endif
-
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
@@ -266,7 +256,6 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     bool la_log_emitted = false;  // log TURBO_LAYER_ADAPTIVE banner once per kv_cache construction (fit probe + real run each get their own banner)
-    ggml_backend_buffer_type_t innerq_buft = nullptr;  // buft of first INNERQ layer, for scale_inv tensor placement
 
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
@@ -408,7 +397,7 @@ llama_kv_cache::llama_kv_cache(
         // If the target GPU backend does not support SET_ROWS for the chosen KV type,
         // fall back to CPU buffer so the pre-allocated tensor is CPU-resident and the
         // CPU backend can run SET_ROWS. Applies generically to any type not registered
-        // in the backend's SET_ROWS dispatch (e.g. TURBOQ*_INNERQ on Vulkan, RQ types).
+        // in the backend's SET_ROWS dispatch (e.g. RQ types).
         if (offload_dev) {
             struct ggml_tensor dummy_src0 = {};
             dummy_src0.type  = GGML_TYPE_F32;
@@ -431,17 +420,6 @@ llama_kv_cache::llama_kv_cache(
                 buft = ggml_backend_cpu_buffer_type();
             }
         }
-
-        // InnerQ×TCQ hybrid: provision scale_inv tensor for TCQ types.
-        // TCQ encode already applies d_innerq_scale when TURBO_INNERQ is set; the scale_inv
-        // tensor (initialized to 1.0) feeds the Q-rotation WHT for the Q-side inverse.
-        const bool layer_is_tcq =
-            layer_type_k == GGML_TYPE_TURBOQ2_TCQ  || layer_type_k == GGML_TYPE_TURBOQ3_TCQ  ||
-            layer_type_v == GGML_TYPE_TURBOQ2_TCQ  || layer_type_v == GGML_TYPE_TURBOQ3_TCQ;
-        if (!innerq_buft && layer_is_tcq) {
-            innerq_buft = buft;
-        }
-
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -475,13 +453,6 @@ llama_kv_cache::llama_kv_cache(
         map_layer_ids[il] = layers.size();
 
         layers.push_back({ il, k, v, k_res, k_stream, v_stream, });
-    }
-
-    // Create per-channel InnerQ scale_inv tensor if any INNERQ KV type is in use.
-    if (innerq_buft) {
-        ggml_context * ctx = ctx_for_buft(innerq_buft);
-        turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, INNERQ_MAX_CHANNELS);
-        ggml_format_name(turbo_innerq_scale_inv, "innerq_scale_inv");
     }
 
     if (reuse) {
@@ -550,14 +521,6 @@ llama_kv_cache::llama_kv_cache(
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
-
-    // Initialize InnerQ scale_inv to identity (1.0f) — calibration starts uncorrected.
-#ifdef GGML_USE_CUDA
-    if (turbo_innerq_scale_inv && !model.hparams.no_alloc) {
-        std::vector<float> ones(INNERQ_MAX_CHANNELS, 1.0f);
-        ggml_backend_tensor_set(turbo_innerq_scale_inv, ones.data(), 0, sizeof(float) * INNERQ_MAX_CHANNELS);
-    }
-#endif
 
     {
         const size_t memory_size_k = size_k_bytes();
@@ -1196,22 +1159,6 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
         }
     }
 
-#ifdef GGML_USE_CUDA
-    // 236-L2: re-sync EVERY decode while finalized — do NOT mark-updated (one-shot).
-    // turbo_innerq_scale_inv lives in the KV-cache backend buffer, which is zeroed by
-    // ggml_backend_buffer_clear between perplexity chunks (and on any cache reset). A
-    // one-shot sync therefore survives only until the first clear, after which the Q-side
-    // compensation reads scale_inv == 0 → Q is zeroed → ~17 PPL. The host scale_inv values
-    // are static after finalize; re-copying this 512-byte tensor each decode is negligible
-    // and guarantees the graph always sees the active values. update() runs this block every
-    // decode because turbo_innerq_needs_tensor_update() stays true post-finalize (it gates
-    // the ctor's NO_UPDATE short-circuit — see llama_kv_cache_context ctor).
-    if (turbo_innerq_scale_inv && turbo_innerq_needs_tensor_update()) {
-        ggml_backend_tensor_set(turbo_innerq_scale_inv, g_innerq_scale_inv_host, 0, sizeof(float) * INNERQ_MAX_CHANNELS);
-        updated = true;
-    }
-#endif
-
     return updated;
 }
 
@@ -1741,9 +1688,6 @@ bool llama_kv_cache::triattention_compact(const std::vector<uint32_t> & keep_pos
     return true;
 }
 
-ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
-    return turbo_innerq_scale_inv;
-}
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
@@ -3164,16 +3108,7 @@ llama_kv_cache_context::llama_kv_cache_context(
         llama_context * lctx,
         bool do_shift,
         stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
-    // §-FLAG-B: a pending InnerQ scale_inv sync ALSO requires running update() (see
-    // llama_kv_cache::update()), otherwise the decode-side Q compensation tensor stays at
-    // its 1.0 identity init while the encode side scales K — a ~2.5x PPL regression. Plain
-    // decode is !do_shift && sc_info.empty(), which would otherwise short-circuit to
-    // NO_UPDATE and never refresh the tensor.
-    bool innerq_pending = false;
-#ifdef GGML_USE_CUDA
-    innerq_pending = (kv && kv->get_turbo_innerq_scale_inv() && turbo_innerq_needs_tensor_update());
-#endif
-    if (!do_shift && this->sc_info.empty() && !innerq_pending) {
+    if (!do_shift && this->sc_info.empty()) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
 }
@@ -3239,9 +3174,6 @@ ggml_type llama_kv_cache_context::type_v() const {
     return kv->type_v();
 }
 
-ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
-    return kv->get_turbo_innerq_scale_inv();
-}
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);

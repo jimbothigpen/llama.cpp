@@ -2667,17 +2667,6 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   direction);
 
-    // InnerQ×TCQ hybrid: WHT rotation with per-channel scale_inv applied before the transform
-    // (forward) or after (inverse). scale_inv is F32[128]; pass NULL for identity (same as ggml_turbo_wht).
-    // Enables Q-side compensation for TCQ K vectors pre-scaled by InnerQ equalization at encode time:
-    //   encode: K[j] *= scale[j] before FWHT  →  decode: Q[j] *= scale_inv[j] before FWHT
-    //   dot product: (scale_inv*Q) · (scale*K) = Q·K  (Parseval, scale_inv = 1/scale)
-    GGML_API struct ggml_tensor * ggml_turbo_wht_innerq(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   direction,
-            struct ggml_tensor  * scale_inv);
-
     // custom operators
 
     typedef void (*ggml_custom1_op_t)(struct ggml_tensor * dst , const struct ggml_tensor * a, int ith, int nth, void * userdata);

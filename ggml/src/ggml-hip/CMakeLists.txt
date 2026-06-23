@@ -129,15 +129,6 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq3_tcq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-turboq2_tcq-f16.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq2_tcq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-turboq2_innerq-turboq2_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_innerq-turboq3_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq2_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-f16-turboq3_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-turboq2_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-turboq3_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-turboq2_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-turboq3_innerq.cu
-        ../ggml-cuda/template-instances/fattn-vec-instance-turboq3_innerq-turboq2_innerq.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_1-turboq4_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_1-turboq3_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_1-turboq2_0.cu

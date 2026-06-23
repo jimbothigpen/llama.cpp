@@ -9,7 +9,6 @@
 #pragma once
 
 #include "common.cuh"
-#include "turbo-innerq.cuh"
 #include <cstdlib>
 #include <cmath>
 
@@ -183,169 +182,6 @@ static __device__ __forceinline__ void turbo_rotate_forward_64(float * x) {
     for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS1_64[i];
     turbo_fwht_64(x);
     for (int i = 0; i < 64; i++) x[i] *= TURBO_WHT_SIGNS2_64[i];
-}
-
-// ---- InnerQ per-channel equalization ----
-// Equalizes K channel variances before WHT rotation to reduce quantization error.
-// Enabled via TURBO_INNERQ=N env var (N = calibration token count).
-// Math: <Q/s, s*K> = <Q, K> preserves dot products.
-// INNERQ_MAX_CHANNELS is defined in turbo-innerq.cuh
-
-static __device__ float d_innerq_scale[INNERQ_MAX_CHANNELS];
-static __device__ float d_innerq_scale_inv[INNERQ_MAX_CHANNELS];
-static __device__ float d_innerq_sq_accum[INNERQ_MAX_CHANNELS];
-static __device__ int   d_innerq_count;
-static __device__ int   d_innerq_active;       // 0 = scales are identity, 1 = scales applied
-static __device__ int   d_innerq_calibrating;  // 1 = accumulating K² stats
-
-static int  innerq_enabled       = 0;  // host: 0=off, 1=calibrating, 2=active
-static int  innerq_target_tokens = 0;
-static float innerq_strength     = 0.5f;
-static bool  innerq_initialized  = false;
-
-// Host: read TURBO_INNERQ env, start calibration if enabled
-static void turbo_innerq_init(void) {
-    if (innerq_initialized) return;
-    innerq_initialized = true;
-
-    // OSCAR_INNERQ is an alias arming the SAME InnerQ machinery for the calibrated OSCAR INT2 K path
-    // (Track 1A / TODO 243). TURBO_INNERQ takes precedence so existing Turbo runs are unchanged.
-    const char * env = getenv("TURBO_INNERQ");
-    if (!env || atoi(env) <= 0) env = getenv("OSCAR_INNERQ");
-    if (!env || atoi(env) <= 0) {
-        innerq_enabled = 0;
-        return;
-    }
-    innerq_target_tokens = atoi(env);
-    innerq_enabled = 1;  // calibrating
-
-    const char * env_str = getenv("TURBO_INNERQ_STRENGTH");
-    if (env_str) innerq_strength = atof(env_str);
-    if (innerq_strength <= 0.0f || innerq_strength > 1.0f) innerq_strength = 0.5f;
-
-    // Zero accumulators and set calibrating flag on device
-    float zeros[INNERQ_MAX_CHANNELS] = {0};
-    int zero = 0, one = 1;
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_sq_accum, zeros, sizeof(zeros)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_count, &zero, sizeof(int)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_active, &zero, sizeof(int)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &one, sizeof(int)));
-
-    GGML_LOG_INFO("%s: InnerQ calibration started (target=%d tokens, strength=%.2f)\n",
-                   __func__, innerq_target_tokens, innerq_strength);
-}
-
-// Host: finalize calibration — compute scales, upload, activate
-static void turbo_innerq_finalize(int group_size) {
-    // Read accumulators from device
-    float sq_accum[INNERQ_MAX_CHANNELS];
-    int count = 0;
-    CUDA_CHECK(cudaMemcpyFromSymbol(sq_accum, d_innerq_sq_accum, group_size * sizeof(float)));
-    CUDA_CHECK(cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int)));
-
-    if (count <= 0) {
-        GGML_LOG_WARN("%s: InnerQ calibration got 0 tokens, disabling\n", __func__);
-        innerq_enabled = 0;
-        int zero = 0;
-        CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
-        return;
-    }
-
-    // Compute per-channel RMS
-    float rms[INNERQ_MAX_CHANNELS];
-    float mean_rms = 0.0f;
-    float max_ratio = 0.0f, min_ratio = 1e30f;
-    for (int i = 0; i < group_size; i++) {
-        rms[i] = sqrtf(sq_accum[i] / (float)count);
-        mean_rms += rms[i];
-    }
-    mean_rms /= (float)group_size;
-
-    // Compute scale[i] = (mean_rms / channel_rms[i])^strength, clamp to [0.5, 2.0]
-    float scale[INNERQ_MAX_CHANNELS];
-    float scale_inv[INNERQ_MAX_CHANNELS];
-    for (int i = 0; i < group_size; i++) {
-        float ratio = (rms[i] > 1e-10f) ? (mean_rms / rms[i]) : 1.0f;
-        float s = powf(ratio, innerq_strength);
-        if (s < 0.5f) s = 0.5f;
-        if (s > 2.0f) s = 2.0f;
-        scale[i] = s;
-        scale_inv[i] = 1.0f / s;
-        if (ratio > max_ratio) max_ratio = ratio;
-        if (ratio < min_ratio) min_ratio = ratio;
-    }
-
-    // Auto-skip if max channel ratio < 1.2 (already balanced)
-    if (max_ratio < 1.2f && min_ratio > (1.0f / 1.2f)) {
-        GGML_LOG_INFO("%s: InnerQ auto-disabled (channels already balanced, max_ratio=%.3f)\n",
-                       __func__, max_ratio);
-        innerq_enabled = 0;
-        int zero = 0;
-        CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
-        return;
-    }
-
-    // Stop calibrating, upload scales, activate
-    int zero = 0, one = 1;
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_scale, scale, group_size * sizeof(float)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_scale_inv, scale_inv, group_size * sizeof(float)));
-    CUDA_CHECK(cudaDeviceSynchronize());  // ensure scales are visible before activating
-    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_active, &one, sizeof(int)));
-
-    innerq_enabled = 2;  // active
-
-    // Publish scale_inv to shared host state for cross-TU tensor update
-    turbo_innerq_publish(scale_inv, group_size);
-
-    GGML_LOG_INFO("%s: InnerQ finalized (%d tokens, max_ratio=%.3f, min_ratio=%.3f)\n",
-                   __func__, count, max_ratio, min_ratio);
-}
-
-// Host: called before each set_rows kernel launch
-static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
-    if (!innerq_initialized) {
-        turbo_innerq_init();
-    }
-    if (innerq_enabled == 0) return;
-
-    // InnerQ only works when each WHT group = one head (group_size == head_dim).
-    // For standard models: ne00 = n_heads * head_dim, group_size = head_dim → ne00 % group_size == 0, fine.
-    // For non-standard models (head_dim > group_size, e.g. GLM 576 → 64-group):
-    //   ne00 = head_dim (single head), group_size = 64, ne00/group_size = 9 groups per head → WRONG.
-    // Detect: if ne00 / group_size doesn't divide evenly into standard head counts (1,2,4,8,16,32,64,128),
-    // it's likely multi-group-per-head. Simpler check: group_size < 128 means head_dim > 128.
-    const bool multi_group_per_head = (group_size < 128);  // 64-group → head_dim > 128, multi-group
-    if (multi_group_per_head) {
-        if (innerq_enabled == 1) {
-            GGML_LOG_WARN("%s: InnerQ disabled (ne00=%lld != group_size=%d, multi-group heads)\n",
-                           __func__, (long long)ne00, group_size);
-            innerq_enabled = 0;
-            int zero = 0;
-            CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
-        }
-        return;
-    }
-
-    // Check if calibration is complete
-    if (innerq_enabled == 1) {
-        int count = 0;
-        CUDA_CHECK(cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int)));
-        if (count >= innerq_target_tokens) {
-            turbo_innerq_finalize(group_size);
-        }
-    }
-}
-
-// Host: check if InnerQ is currently active (finalized)
-static bool turbo_innerq_is_active(void) {
-    return innerq_enabled == 2;
-}
-
-// Host: check if InnerQ is armed at all (calibrating OR active). Used by the OSCAR-INT2 calibrated
-// encode path to decide between the calibrated and plain kernels. Caller must have run init/finalize.
-static bool turbo_innerq_is_enabled(void) {
-    return innerq_enabled != 0;
 }
 
 // ---- 4-bit centroids (Lloyd-Max for N(0, 1/128)) ----
@@ -713,25 +549,6 @@ static __device__ float d_turboq3_tcq_codebook[512] = {
 };
 
 // TCQ GET_ROWS dequantize (for non-FA paths)
-// InnerQ×TCQ hybrid §-FLAG-A — build-gate disposition (batch2 2026-06-06):
-// When InnerQ is active, values decoded here are in the FWHT-rotated domain
-// (cb[state]*norm ≈ FWHT(scale⊙K)[t]*norm).  The per-channel InnerQ scale is applied
-// PRE-FWHT at encode (set-rows.cu: x[ch]*=d_innerq_scale[ch] before the transform), so the
-// stored states encode FWHT of an already-scaled vector.
-//   §-FLAG-A is NOT correctable per-element here: this dequant emits one FWHT bin t, but a
-//   diagonal pre-rotation scaling does not commute with the FWHT (S·F ≠ F·S' for diagonal S),
-//   so no per-bin multiply by scale_inv[·] can recover dot(Q,K).  A correct inverse needs a
-//   BLOCK-level decode (load all 128 states → IFWHT → multiply scale_inv per channel), which is
-//   a new block kernel / graph op OUTSIDE the turbo-quant.cuh + turbo-wht.cu scope of this gate.
-//   Deferred as a follow-on (needs a new block-level decode kernel/graph op).
-//   §-FLAG-B was a real regression (default TCQ path corrupted: the innerq WHT variant ran
-//   unconditionally and relied on a scale_inv==1.0 buffer that is actually cleared to 0 → Q≈0 →
-//   ~2.5x PPL). FIXED in llama-graph.cpp: engage ggml_turbo_wht_innerq ONLY when TURBO_INNERQ is
-//   active; otherwise plain ggml_turbo_wht → byte-identical to baseline (PPL 6.4741, no regression).
-//   §-FLAG-C (src->data cast) is correct as drafted: turbo-wht.cu reads src[1]->data (device ptr).
-// Impact bound: TURBO_INNERQ off (default) → no encode scale, scale_inv=1.0 → byte-identical
-//   to TCQ-only (this path correct).  TURBO_INNERQ on + FA (-fa) → Q-rotation compensation makes
-//   it correct (GET_ROWS bypassed).  Only TURBO_INNERQ on + non-FA hits the uncorrected path.
 #define QR_TURBOQ3_TCQ 2
 static __device__ __forceinline__
 void dequantize_turboq3_tcq(const void * vx, const int64_t ib, const int iqs, float2 & v) {
@@ -806,7 +623,7 @@ static __device__ float d_turboq2_tcq_codebook[256] = {
 // Qwen3.5-9B Q4_K_M, contradicting buun's no-regression claim. Buun's gains
 // are likely long-context-only on our model mix. Long-context users can
 // opt in via TURBO_TCQ_ALPHA (K) and TURBO_TCQ_ALPHA_V (V) env vars.
-// K/V routing comes from the innerq_is_k / iq_is_k kernel parameter at the
+// K/V routing comes from the iq_is_k kernel parameter at the
 // TURBOQ{3,2}_TCQ encode dispatch (set-rows.cu).
 static __device__ float d_tcq_norm_alpha   = 1.0f;
 static __device__ float d_tcq_norm_alpha_v = 1.0f;
@@ -819,7 +636,7 @@ static __device__ uint8_t * d_tcq_dump_out_buf = nullptr; // [max_groups][128] V
 static __device__ int       d_tcq_dump_max     = 0;       // max groups to dump (0 = disabled)
 
 
-// 2-bit TCQ GET_ROWS dequantize — see §-FLAG in dequantize_turboq3_tcq above re: InnerQ×TCQ GET_ROWS gap
+// 2-bit TCQ GET_ROWS dequantize
 #define QR_TURBOQ2_TCQ 2
 static __device__ __forceinline__
 void dequantize_turboq2_tcq(const void * vx, const int64_t ib, const int iqs, float2 & v) {

@@ -14,15 +14,10 @@
 //   1. Apply s_first elementwise
 //   2. Radix-2 Hadamard butterfly (log2(group_size) stages, in-place)
 //   3. Normalize by 1/sqrt(group_size) and apply s_second elementwise
-//
-// InnerQ scale_inv: when non-null, applies per-channel inverse scaling for
-// Q/V equalization. For forward (Q rotation): multiply BEFORE signs+WHT.
-// For inverse (V un-rotation): multiply AFTER WHT+signs.
 
 template <int direction, int group_size>
 static __global__ void k_turbo_wht_f32(const float * __restrict__ src,
                                         float * __restrict__ dst,
-                                        const float * __restrict__ scale_inv,
                                         int64_t n_groups,
                                         int64_t head_dim,
                                         int64_t groups_per_head) {
@@ -44,12 +39,6 @@ static __global__ void k_turbo_wht_f32(const float * __restrict__ src,
     // Load from global memory
     x[t] = src[base + t];
     __syncthreads();
-
-    // InnerQ forward: apply scale_inv BEFORE signs+WHT (for Q pre-rotation)
-    if (direction == 0 && scale_inv != nullptr) {
-        x[t] *= scale_inv[t % group_size];
-        __syncthreads();
-    }
 
     // Apply first sign array
     if (group_size == 128) {
@@ -95,11 +84,6 @@ static __global__ void k_turbo_wht_f32(const float * __restrict__ src,
         result = x[t] * inv_sqrt;
     }
 
-    // InnerQ inverse: apply scale_inv AFTER WHT+signs (for V un-rotation)
-    if (direction == 1 && scale_inv != nullptr) {
-        result *= scale_inv[t % group_size];
-    }
-
     dst[base + t] = result;
 }
 
@@ -124,7 +108,6 @@ static __global__ void k_turbo_wht_copy_tail(const float * __restrict__ src,
 
 void ggml_cuda_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
-    const ggml_tensor * scale_tensor = dst->src[1];  // InnerQ scale_inv (may be NULL)
 
     GGML_ASSERT(src->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -146,7 +129,6 @@ void ggml_cuda_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const float * src_ptr = (const float *) src->data;
     float       * dst_ptr = (float       *) dst->data;
-    const float * scale_inv_ptr = scale_tensor ? (const float *) scale_tensor->data : nullptr;
 
     cudaStream_t stream = ctx.stream();
 
@@ -156,23 +138,23 @@ void ggml_cuda_turbo_wht(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         if (group_size == 128) {
             dim3 threads(128);
             if (direction == 0) {
-                k_turbo_wht_f32<0, 128><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<0, 128><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                k_turbo_wht_f32<1, 128><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<1, 128><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             }
         } else if (group_size == 64) {
             dim3 threads(64);
             if (direction == 0) {
-                k_turbo_wht_f32<0, 64><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<0, 64><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                k_turbo_wht_f32<1, 64><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<1, 64><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             }
         } else {
             dim3 threads(32);
             if (direction == 0) {
-                k_turbo_wht_f32<0, 32><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<0, 32><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                k_turbo_wht_f32<1, 32><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
+                k_turbo_wht_f32<1, 32><<<blocks, threads, 0, stream>>>(src_ptr, dst_ptr, n_groups, head_dim, groups_per_head);
             }
         }
     }
