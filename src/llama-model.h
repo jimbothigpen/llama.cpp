@@ -429,6 +429,20 @@ struct llama_layer {
     struct ggml_tensor * ssm_alpha_s = nullptr;
     struct ggml_tensor * ssm_beta_s  = nullptr;
 
+    // per-column activation scales for WQ3_TCQ / SmoothQuant-style weights
+    struct ggml_tensor * wq_act_scale        = nullptr;
+    struct ggml_tensor * wk_act_scale        = nullptr;
+    struct ggml_tensor * wv_act_scale        = nullptr;
+    struct ggml_tensor * wo_act_scale        = nullptr;
+    struct ggml_tensor * wqkv_act_scale      = nullptr;
+    struct ggml_tensor * wqkv_gate_act_scale = nullptr;
+    struct ggml_tensor * ffn_gate_act_scale  = nullptr;
+    struct ggml_tensor * ffn_up_act_scale    = nullptr;
+    struct ggml_tensor * ffn_down_act_scale  = nullptr;
+    struct ggml_tensor * ssm_out_act_scale   = nullptr;
+    struct ggml_tensor * ssm_alpha_act_scale = nullptr;
+    struct ggml_tensor * ssm_beta_act_scale  = nullptr;
+
     // input scales
     struct ggml_tensor * wq_in_s            = nullptr;
     struct ggml_tensor * wk_in_s            = nullptr;

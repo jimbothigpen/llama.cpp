@@ -51,6 +51,7 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "WHT5_0",   LLAMA_FTYPE_MOSTLY_WHT5_0,   " 6.00 bpw WHT-rotated",             },
     { "WHT6_0",   LLAMA_FTYPE_MOSTLY_WHT6_0,   " 7.00 bpw WHT-rotated",             },
     { "WHT8_0",   LLAMA_FTYPE_MOSTLY_WHT8_0,   " 9.00 bpw WHT-rotated",             },
+    { "WQ3_TCQ",  LLAMA_FTYPE_MOSTLY_WQ3_TCQ,  " 3.25 bpw TCQ weight (k=3 L=10)",   },
     { "IQ2_K",    LLAMA_FTYPE_MOSTLY_IQ2_K,    " 2.375 bpw ik_llama 2-bit",         },
     { "IQ3_K",    LLAMA_FTYPE_MOSTLY_IQ3_K,    " 3.4375 bpw ik_llama 3-bit",        },
     { "IQ4_K",    LLAMA_FTYPE_MOSTLY_IQ4_K,    " 4.50 bpw ik_llama 4-bit",          },

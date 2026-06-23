@@ -4965,6 +4965,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_WHT5_0:
         case GGML_TYPE_WHT6_0:
         case GGML_TYPE_WHT8_0:
+        case GGML_TYPE_WQ3_TCQ:
         case GGML_TYPE_TURBOQ2_0:
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:

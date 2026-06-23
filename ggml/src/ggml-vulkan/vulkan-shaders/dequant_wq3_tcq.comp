@@ -1,0 +1,62 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_8bit_storage : require
+
+#include "dequant_head.glsl"
+#include "wq3_tcq_common.glsl"
+
+// WQ3_TCQ — 3-bit trellis-coded WEIGHT quant (k=3, L=10, 1024-state codebook) + FWHT.
+// Each thread fully dequantizes one 128-element block into f16/f32 (correctness
+// path used by the prefill dequant->generic-f16-matmul fallback). Mirrors the
+// authoritative CPU dequantize_row_wq3_tcq / CUDA wq3-tcq.cu contract.
+//
+// Block (block_wq3_tcq, 52B): float16 norm + qs[50] (byte 49 = the original pad
+// byte, always 0, so the t=127 sliding window read of qs[49] stays in bounds).
+//
+// 64 threads per workgroup, one 128-block each (buf[128] is per-thread/local).
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_wq3_tcq data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    const uint ib = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (ib >= p.nel / 128u) {
+        return;
+    }
+
+    const float norm = float(data_a[ib].norm);
+
+    // Decode 128 trellis states via the sliding 10-bit window, look up codebook,
+    // and apply the input sign vector s2.
+    float buf[128];
+    for (uint t = 0u; t < 128u; t++) {
+        const uint bitpos = t * 3u;
+        const uint byte    = bitpos >> 3u;
+        const uint off     = bitpos & 7u;
+        const uint raw =  uint(data_a[ib].qs[byte])
+                       | (uint(data_a[ib].qs[byte + 1u]) << 8u)
+                       | (uint(data_a[ib].qs[byte + 2u]) << 16u);
+        const uint state = (raw >> off) & 0x3FFu;
+        buf[t] = WQ3_TCQ_CODEBOOK[state] * WQ3_S2[t];
+    }
+
+    // Unnormalized 128-point Hadamard butterfly (7 stages).
+    for (uint step = 1u; step < 128u; step <<= 1u) {
+        for (uint i = 0u; i < 128u; i += step * 2u) {
+            for (uint j = i; j < i + step; j++) {
+                const float a = buf[j];
+                const float b = buf[j + step];
+                buf[j]        = a + b;
+                buf[j + step] = a - b;
+            }
+        }
+    }
+
+    // Output sign vector s1, orthonormal scale, and the per-block norm.
+    const uint out_base = ib * 128u;
+    for (uint t = 0u; t < 128u; t++) {
+        data_b[out_base + t] = D_TYPE(buf[t] * WQ3_INV_SQRT128 * WQ3_S1[t] * norm);
+    }
+}

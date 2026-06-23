@@ -1919,3 +1919,207 @@ size_t quantize_wht8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
     }
     return nrows * row_size;
 }
+
+/* ============================================================================
+ * WQ3_TCQ — 3-bit Trellis-Coded WEIGHT quant (k=3, L=10, 1024 states) + FWHT
+ *
+ * CPU encoder (from_float_ref) + CPU dequant (to_float) for buun's WQ3 weight
+ * runtime (ggml-cuda/wq3-tcq.cu). The CUDA decode is the authoritative contract:
+ *
+ *   y[t] = norm * (1/sqrt128) * s1[t] * FWHT( s2 ⊙ codebook[state] )[t]
+ *
+ * The encoder inverts it: normalize x -> forward FWHT (s1 -> Hadamard butterfly
+ * -> 1/sqrt128*s2) -> Viterbi trellis encode (right-shift, init state 0) ->
+ * states; corrected_norm = ||x|| / ||codebook[states]|| stored as fp16.
+ *
+ * codebook + signs are DETERMINISTIC and hardcoded so the C encoder, the C
+ * dequant and the emitted GGUF (turbo.tcq.codebook.weight + turbo.tcq.sign_seed=42)
+ * are byte-identical, giving exact CPU<->CUDA parity. Signs are copied verbatim
+ * from wq3-tcq.cu (h_wq3_tcq_signs1_seed42 / h_wq3_tcq_signs2_seed1084) — these
+ * are the WEIGHT-path signs and differ from turbo_cpu_s1/s2 (the KV-cache path).
+ *
+ * Block layout (block_turboq3_tcq, 52B): fp16 norm + qs[49] (390-bit stream:
+ * 7-bit zero prefix + 128*3-bit outputs) + 1 pad byte. Decode reads a sliding
+ * 10-bit window at bit t*3.
+ * ==========================================================================*/
+
+#define WQ3_QK          128
+#define WQ3_K_BITS      3
+#define WQ3_L_BITS      10
+#define WQ3_N_STATES    1024
+#define WQ3_N_OUT       8
+#define WQ3_STATE_MASK  0x3FF
+#define WQ3_PRED_MASK   0x7F                 /* (1<<(L-K))-1 */
+static const float WQ3_INV_SQRT128 = 0.08838834764831845f;
+
+/* seed-42 FWHT signs — verbatim from ggml-cuda/wq3-tcq.cu */
+static const float wq3_s1[128] = {
+    -1, 1,-1,-1,-1, 1,-1,-1,-1, 1,-1,-1,-1,-1, 1,-1,
+     1, 1, 1,-1, 1,-1, 1, 1, 1, 1, 1, 1, 1, 1,-1,-1,
+     1, 1, 1,-1, 1,-1,-1,-1,-1,-1, 1, 1, 1, 1, 1,-1,
+     1, 1,-1, 1,-1, 1,-1, 1, 1,-1,-1,-1,-1,-1,-1,-1,
+    -1, 1, 1,-1, 1, 1, 1, 1,-1, 1,-1, 1, 1, 1,-1, 1,
+    -1, 1,-1, 1,-1,-1, 1,-1, 1, 1, 1, 1, 1, 1, 1, 1,
+     1, 1, 1,-1,-1, 1, 1, 1, 1, 1, 1, 1, 1,-1, 1,-1,
+     1, 1,-1, 1,-1, 1, 1,-1, 1,-1, 1,-1,-1, 1, 1,-1,
+};
+static const float wq3_s2[128] = {
+    -1, 1, 1,-1, 1,-1, 1,-1,-1, 1, 1,-1,-1, 1,-1,-1,
+    -1, 1, 1,-1,-1, 1,-1, 1, 1, 1,-1,-1,-1, 1, 1, 1,
+     1, 1,-1,-1, 1,-1, 1,-1,-1, 1, 1,-1, 1, 1, 1, 1,
+    -1, 1, 1, 1, 1, 1, 1, 1, 1,-1,-1, 1,-1,-1,-1, 1,
+    -1,-1, 1,-1,-1,-1,-1, 1,-1,-1,-1,-1,-1,-1, 1, 1,
+     1, 1,-1, 1, 1, 1,-1,-1,-1,-1,-1,-1,-1, 1, 1, 1,
+    -1, 1, 1, 1, 1,-1, 1, 1,-1,-1, 1, 1, 1, 1,-1, 1,
+    -1,-1, 1, 1,-1,-1,-1, 1,-1,-1, 1,-1,-1,-1, 1,-1,
+};
+
+#include "wq3-tcq-codebook.inc"   /* static const float WQ3_TCQ_CODEBOOK[1024] */
+
+/* Accessors so llama-quant.cpp can emit the codebook + sign_seed into the GGUF. */
+const float * ggml_wq3_tcq_codebook(int * n_entries) {
+    if (n_entries) *n_entries = WQ3_N_STATES;
+    return WQ3_TCQ_CODEBOOK;
+}
+uint32_t ggml_wq3_tcq_sign_seed(void) { return 42u; }
+
+/* unnormalized 128-point Hadamard butterfly (matches wq3_fwht128 in CUDA) */
+static void wq3_butterfly(float * x) {
+    for (int h = 1; h < WQ3_QK; h *= 2)
+        for (int i = 0; i < WQ3_QK; i += h * 2)
+            for (int j = i; j < i + h; j++) {
+                float a = x[j], b = x[j + h];
+                x[j] = a + b; x[j + h] = a - b;
+            }
+}
+
+/* forward rotate (encoder): x*=s1 -> butterfly -> x*=inv_sqrt128*s2 (orthonormal) */
+static void wq3_fwht_forward(float * x) {
+    for (int i = 0; i < WQ3_QK; i++) x[i] *= wq3_s1[i];
+    wq3_butterfly(x);
+    for (int i = 0; i < WQ3_QK; i++) x[i] *= WQ3_INV_SQRT128 * wq3_s2[i];
+}
+
+/* Viterbi encode a unit-norm rotated 128-block into trellis states (start state 0).
+ * scratch must hold: cost[1024], ncost[1024] (float) and bt[128*1024] (uint16_t).
+ * Returns recon_norm = ||codebook[states]||. */
+static float wq3_viterbi(const float * data, int * states,
+                         float * cost, float * ncost, uint16_t * bt) {
+    for (int s = 0; s < WQ3_N_STATES; s++) cost[s] = 1e30f;
+    cost[0] = 0.0f;
+    for (int t = 0; t < WQ3_QK; t++) {
+        uint16_t * bt_t = bt + (size_t)t * WQ3_N_STATES;
+        for (int s = 0; s < WQ3_N_STATES; s++) ncost[s] = 1e30f;
+        const float xt = data[t];
+        for (int s = 0; s < WQ3_N_STATES; s++) {
+            const float bc = cost[s];
+            if (bc >= 1e30f) continue;
+            const int sh = s >> WQ3_K_BITS;            /* shared high bits of next state */
+            for (int out = 0; out < WQ3_N_OUT; out++) {
+                const int ns = sh | (out << (WQ3_L_BITS - WQ3_K_BITS));
+                const float d = xt - WQ3_TCQ_CODEBOOK[ns];
+                const float tot = bc + d * d;
+                if (tot < ncost[ns]) { ncost[ns] = tot; bt_t[ns] = (uint16_t) s; }
+            }
+        }
+        float * tmp = cost; cost = ncost; ncost = tmp;
+    }
+    int st = 0; float best = 1e30f;
+    for (int s = 0; s < WQ3_N_STATES; s++) if (cost[s] < best) { best = cost[s]; st = s; }
+    float rn = 0.0f;
+    for (int t = WQ3_QK - 1; t >= 0; t--) {
+        states[t] = st;
+        rn += WQ3_TCQ_CODEBOOK[st] * WQ3_TCQ_CODEBOOK[st];
+        st = bt[(size_t)t * WQ3_N_STATES + st];
+    }
+    return sqrtf(rn);
+}
+
+/* pack states -> qs[49]: 7-bit zero prefix, then out[t]=states[t]>>7 at bit 7+t*3 */
+static void wq3_pack(const int * states, uint8_t * qs) {
+    memset(qs, 0, 49);
+    for (int t = 0; t < WQ3_QK; t++) {
+        const int out = states[t] >> (WQ3_L_BITS - WQ3_K_BITS);
+        const int bitpos = (WQ3_L_BITS - WQ3_K_BITS) + t * WQ3_K_BITS;
+        for (int b = 0; b < WQ3_K_BITS; b++)
+            if (out & (1 << b)) qs[(bitpos + b) >> 3] |= (uint8_t)(1 << ((bitpos + b) & 7));
+    }
+}
+
+/* encode one 128-block using caller-provided Viterbi scratch */
+static void wq3_encode_block(const float * x, block_turboq3_tcq * blk,
+                             float * cost, float * ncost, uint16_t * bt) {
+    float buf[WQ3_QK];
+    float n2 = 0.0f;
+    for (int i = 0; i < WQ3_QK; i++) { buf[i] = x[i]; n2 += x[i] * x[i]; }
+    const float saved = sqrtf(n2);
+    const float inv = (saved > 1e-10f) ? 1.0f / saved : 0.0f;
+    for (int i = 0; i < WQ3_QK; i++) buf[i] *= inv;
+    wq3_fwht_forward(buf);                     /* into unit-norm codebook domain */
+    int states[WQ3_QK];
+    const float rn = wq3_viterbi(buf, states, cost, ncost, bt);
+    const float corrected = (rn > 1e-10f) ? saved / rn : saved;
+    blk->norm = GGML_FP32_TO_FP16(corrected);
+    wq3_pack(states, blk->qs);
+    blk->pad = 0;
+}
+
+void quantize_row_wq3_tcq_ref(const float * GGML_RESTRICT x, block_turboq3_tcq * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBOQ3_TCQ == 0);
+    const int nb = (int)(k / QK_TURBOQ3_TCQ);
+    float  * cost  = (float *)   malloc(sizeof(float)    * WQ3_N_STATES);
+    float  * ncost = (float *)   malloc(sizeof(float)    * WQ3_N_STATES);
+    uint16_t * bt  = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)WQ3_QK * WQ3_N_STATES);
+    for (int i = 0; i < nb; i++)
+        wq3_encode_block(x + (size_t)i * QK_TURBOQ3_TCQ, &y[i], cost, ncost, bt);
+    free(cost); free(ncost); free(bt);
+}
+
+void dequantize_row_wq3_tcq(const block_turboq3_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TURBOQ3_TCQ == 0);
+    const int nb = (int)(k / QK_TURBOQ3_TCQ);
+    for (int blk = 0; blk < nb; blk++) {
+        const block_turboq3_tcq * b = &x[blk];
+        const float norm = GGML_FP16_TO_FP32(b->norm);
+        float r[WQ3_QK];
+        /* sliding 10-bit window decode (qs[49] + implicit 0 pad byte read as qs[49]=0) */
+        uint8_t qs[51]; memcpy(qs, b->qs, 49); qs[49] = 0; qs[50] = 0;
+        for (int t = 0; t < WQ3_QK; t++) {
+            const int bitpos = t * WQ3_K_BITS, byte = bitpos >> 3, off = bitpos & 7;
+            const uint32_t raw = (uint32_t)qs[byte] | ((uint32_t)qs[byte+1] << 8) | ((uint32_t)qs[byte+2] << 16);
+            const int state = (int)((raw >> off) & WQ3_STATE_MASK);
+            r[t] = WQ3_TCQ_CODEBOOK[state];
+        }
+        /* inverse rotation matching CUDA: s2 -> butterfly -> inv_sqrt128 * s1 * norm */
+        for (int i = 0; i < WQ3_QK; i++) r[i] *= wq3_s2[i];
+        wq3_butterfly(r);
+        for (int i = 0; i < WQ3_QK; i++) y[(size_t)blk * WQ3_QK + i] = r[i] * WQ3_INV_SQRT128 * wq3_s1[i] * norm;
+    }
+}
+
+size_t quantize_wq3_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                        int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    /* imatrix passthrough — intentionally NOT applied. The FWHT rotates each
+     * 128-group, so original-basis per-column importance is misaligned with the
+     * rotated trellis coefficients; moreover the Hadamard has equal-magnitude
+     * entries (F_tj^2 = 1/128 for all t,j), so the diagonal of the rotated weight
+     * matrix is uniform (= mean importance) and per-element weighting degenerates
+     * to a constant that cannot change the Viterbi path. This matches the audited
+     * WHT3_0/WHT4_0 decision (imatrix weighting HURT PPL +16% there). */
+    GGML_UNUSED(imatrix);
+    assert(n_per_row % QK_TURBOQ3_TCQ == 0);
+    const int64_t nb_per_row = n_per_row / QK_TURBOQ3_TCQ;
+    const size_t row_size = nb_per_row * sizeof(block_turboq3_tcq);
+
+    float  * cost  = (float *)   malloc(sizeof(float)    * WQ3_N_STATES);
+    float  * ncost = (float *)   malloc(sizeof(float)    * WQ3_N_STATES);
+    uint16_t * bt  = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)WQ3_QK * WQ3_N_STATES);
+    for (int64_t row = 0; row < nrows; row++) {
+        block_turboq3_tcq * y_row = (block_turboq3_tcq *)((char *)dst + row * row_size);
+        const float * x_row = src + row * n_per_row;
+        for (int64_t b = 0; b < nb_per_row; b++)
+            wq3_encode_block(x_row + b * QK_TURBOQ3_TCQ, &y_row[b], cost, ncost, bt);
+    }
+    free(cost); free(ncost); free(bt);
+    return nrows * row_size;
+}

@@ -143,9 +143,17 @@ dequant→cuBLAS path); fused mmvq + Vulkan deferred. Credit: TheTom (WHT method
 
 Symbol prefix: `rbq_`. Disambiguates from TheTom's WHT family.
 
-### 92–95: reserved for unanticipated weight quants
+### 92–95: unanticipated weight quants
 
-Held open. New contributing forks would land here.
+| Slot | Name | Source | Notes |
+|---|---|---|---|
+| 92 | `GGML_TYPE_WQ3_TCQ` | buun `feat/tcq-wq3-ffn-fusion` | TurboQuant 3-bit **weight** quant: TCQ (k=3, L=9, 512 states) + FWHT rotation. Re-slotted from buun's upstream `46` to avoid a mid-enum renumber of our relocated KV types. GPU-only dequant; reuses the 52-byte `block_turboq3_tcq` layout (128 elems, 3.25 bpv). CUDA-first (Ph1); CPU/HIP/Vulkan + quantizer in Ph2–4. See `docs/features/wq3-tcq.md`. |
+| 93–95 | reserved | | future weight quant extensions |
+
+WQ3_TCQ landed here (not the 80–85 WHT zone) because it is neither a WHT nor a
+RaBitQ variant — it is a trellis-coded (TCQ) weight quant, the first of its kind,
+so it takes the dedicated unanticipated-weight reserve. This also keeps the
+in-flight WHT5/6/8 (83–85) reservations free.
 
 ## ik_llama compatibility zone (96–199) — preserved IDs
 

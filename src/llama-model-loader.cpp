@@ -61,6 +61,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_WHT5_0:   return "WHT5_0 - 6.0 bpw WHT-rotated 5-bit";
         case LLAMA_FTYPE_MOSTLY_WHT6_0:   return "WHT6_0 - 7.0 bpw WHT-rotated 6-bit";
         case LLAMA_FTYPE_MOSTLY_WHT8_0:   return "WHT8_0 - 9.0 bpw WHT-rotated 8-bit";
+        case LLAMA_FTYPE_MOSTLY_WQ3_TCQ:  return "WQ3_TCQ - 3.25 bpw TCQ weight (k=3 L=10) + FWHT";
         case LLAMA_FTYPE_MOSTLY_IQ4_K:    return "IQ4_K - 4.50 bpw ik_llama imatrix 4-bit";
         case LLAMA_FTYPE_MOSTLY_IQ3_K:    return "IQ3_K - 3.4375 bpw ik_llama imatrix 3-bit";
         case LLAMA_FTYPE_MOSTLY_IQ2_K:    return "IQ2_K - 2.375 bpw ik_llama imatrix 2-bit";

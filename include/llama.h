@@ -180,6 +180,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_WHT5_0        = 59, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT6_0        = 60, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT8_0        = 61, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_WQ3_TCQ       = 62, // except 1d tensors (re-slotted 59→62: WHT5/6/8 claimed 59-61 in the same reship wave)
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

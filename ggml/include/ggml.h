@@ -451,7 +451,10 @@ extern "C" {
         GGML_TYPE_WHT5_0  = 82, // WHT-rotated 5-bit weight quant: 32 Lloyd-Max centroids, block_size=32 (6.0 bpw)
         GGML_TYPE_WHT6_0  = 83, // WHT-rotated 6-bit weight quant: 64 Lloyd-Max centroids, block_size=32 (7.0 bpw)
         GGML_TYPE_WHT8_0  = 84, // WHT-rotated 8-bit weight quant: 256 Lloyd-Max centroids, block_size=32 (9.0 bpw)
-        // slots 85–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
+        // slot 85 reserved for yggdrasil future WHT variant — see docs/TYPE_ASSIGNMENTS.md
+        // slots 86–91 reserved for RaBitQ weight family — see docs/TYPE_ASSIGNMENTS.md
+        GGML_TYPE_WQ3_TCQ = 92, // TurboQuant 3-bit WEIGHT quant: TCQ (k=3, L=10, 1024 states) + FWHT rotation; CPU+CUDA dequant. Source: buun feat/tcq-wq3-ffn-fusion (re-slotted 46→92 to avoid mid-enum renumber; reuses block_turboq3_tcq 52-byte layout)
+        // slots 93–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)
         // IDs match ik_llama's enum order (ascending) to preserve existing ik_llama GGUF compat.

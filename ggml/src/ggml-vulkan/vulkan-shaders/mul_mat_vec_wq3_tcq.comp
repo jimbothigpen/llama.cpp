@@ -1,0 +1,105 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_8bit_storage : require
+
+#include "mul_mat_vec_base.glsl"
+#include "wq3_tcq_common.glsl"
+
+// WQ3_TCQ matvec (batch=1 decode path). Mirrors mul_mat_vec_wht3_0.comp but for
+// 128-element FWHT-rotated trellis blocks. Exploits Hadamard orthogonality so we
+// never materialise the inverse-rotated weight row:
+//
+//   <W_row, b> = norm * INV_SQRT128 * <s2 (.) codebook[state], H(s1 (.) b)>
+//
+// i.e. forward-rotate the *activation* once per block (H = unnormalised Hadamard,
+// symmetric), then dot against raw codebook weights. 128 threads cooperate on the
+// 128-pt butterfly in shared memory; NUM_ROWS output rows share each rotation.
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// Forward-rotated activation block, one column per NUM_COLS (<= mul_mat_vec_max_cols = 8).
+shared float wq3_smem[8 * 128];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid = gl_LocalInvocationID.x;   // 0..127, owns element `tid`
+
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < NUM_ROWS; ++n) {
+            temp[j][n] = FLOAT_TYPE(0);
+        }
+    }
+
+    const uint num_blocks_per_row = p.ncols / 128u;
+
+    // Per-thread sliding-window read parameters (decode the state owned by `tid`).
+    const uint bitpos = tid * 3u;
+    const uint byte   = bitpos >> 3u;
+    const uint off    = bitpos & 7u;
+    const float s1_tid = WQ3_S1[tid];
+    const float s2_tid = WQ3_S2[tid];
+
+    for (uint blk = 0; blk < num_blocks_per_row; blk++) {
+        // Stage 1: load activation, apply input sign s1, write to shmem.
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const uint b_base = c * p.batch_stride_b + b_offset + blk * 128u;
+            wq3_smem[c * 128u + tid] = float(data_b[b_base + tid]) * s1_tid;
+        }
+        barrier();
+
+        // Stage 2: forward Hadamard butterfly in shared memory (7 stages).
+        [[unroll]] for (uint step = 1u; step < 128u; step <<= 1u) {
+            if ((tid & step) == 0u) {
+                const uint partner = tid + step;
+                [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+                    const uint base = c * 128u;
+                    const float a = wq3_smem[base + tid];
+                    const float b = wq3_smem[base + partner];
+                    wq3_smem[base + tid]     = a + b;
+                    wq3_smem[base + partner] = a - b;
+                }
+            }
+            barrier();
+        }
+
+        // Stage 3: decode this thread's trellis state + codebook value per row.
+        // w = codebook[state] * s2 * norm * INV_SQRT128  (norm is per-row-per-block).
+        float w_vals[NUM_ROWS];
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib = (first_row + n) * num_blocks_per_row + blk;
+            const uint raw =  uint(data_a[a_offset + ib].qs[byte])
+                           | (uint(data_a[a_offset + ib].qs[byte + 1u]) << 8u)
+                           | (uint(data_a[a_offset + ib].qs[byte + 2u]) << 16u);
+            const uint state = (raw >> off) & 0x3FFu;
+            const float norm = float(data_a[a_offset + ib].norm);
+            w_vals[n] = WQ3_TCQ_CODEBOOK[state] * s2_tid * norm * WQ3_INV_SQRT128;
+        }
+
+        // Stage 4: accumulate dot products against the rotated activation.
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const float b_rotated = wq3_smem[c * 128u + tid];
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                temp[c][n] += FLOAT_TYPE(w_vals[n] * b_rotated);
+            }
+        }
+        barrier();
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

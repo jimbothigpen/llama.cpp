@@ -7864,6 +7864,10 @@ static const ggml_type all_types[] = {
     GGML_TYPE_WHT3_0, GGML_TYPE_WHT4_0,
     GGML_TYPE_TURBOQ2_0, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ4_0,
     GGML_TYPE_TURBOQ5_0, GGML_TYPE_TURBOQ6_0,
+    // GGML_TYPE_WQ3_TCQ omitted: backend-ops builds tensors without the model-load
+    // codebook upload, so the CUDA native path asserts "codebook not loaded"; and CUDA
+    // get_rows doesn't cover these rotated weight quants (same gap as WHT3/4_0). Parity
+    // is validated end-to-end via dual coherent decode + ctypes CPU-dequant-vs-reference.
 };
 
 static const ggml_type base_types[] = {

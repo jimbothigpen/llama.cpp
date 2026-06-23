@@ -860,6 +860,17 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_wht8_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_wht8_0_ref,
     },
+    // WQ3_TCQ: 3-bit TCQ WEIGHT quant (source: buun feat/tcq-wq3-ffn-fusion). GPU-only dequant
+    // (CUDA in ggml-cuda/wq3-tcq.cu); reuses the 52-byte block_turboq3_tcq layout. CPU to_float
+    // pending Ph2 (ADR-016 imatrix). WHT5/6/8 occupy slots 82-84; 85-91 reserved (RaBitQ); WQ3=92.
+    [GGML_TYPE_WQ3_TCQ] = {
+        .type_name                = "wq3_tcq",
+        .blck_size                = QK_TURBOQ3_TCQ,
+        .type_size                = sizeof(block_turboq3_tcq),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_wq3_tcq,      // Ph2: CPU dequant (parity oracle)
+        .from_float_ref           = (ggml_from_float_t) quantize_row_wq3_tcq_ref,  // Ph2: CPU Viterbi encoder
+    },
     // Phase 5b-1a: ik_llama base IK weight quant family (source: ik_llama)
     [GGML_TYPE_IQ4_K] = {
         .type_name                = "iq4_k",
@@ -8159,6 +8170,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBOQ6_0: result = quantize_turboq6_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ2_TCQ: result = quantize_turboq2_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ3_TCQ: result = quantize_turboq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_WQ3_TCQ: result = quantize_wq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_KV_OSCAR_INT2: result = quantize_kv_oscar_int2(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT3_0:  result = quantize_wht3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT4_0:  result = quantize_wht4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

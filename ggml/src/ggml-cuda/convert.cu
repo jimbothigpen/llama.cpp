@@ -1,5 +1,6 @@
 #include "convert.cuh"
 #include "dequantize.cuh"
+#include "wq3-tcq.cuh"
 
 #include <cstdint>
 
@@ -1324,6 +1325,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_block_cont_cuda<QK_WHT6_0, QR_WHT6_0, dequantize_wht6_0>;
         case GGML_TYPE_WHT8_0:
             return dequantize_block_cont_cuda<QK_WHT8_0, QR_WHT8_0, dequantize_wht8_0>;
+        case GGML_TYPE_WQ3_TCQ:
+            return dequantize_wq3_tcq_to_fp16;
         case GGML_TYPE_IQ4_K:
             return dequantize_block_cont_cuda<QK_K, QR_IQ4_K, dequantize_iq4_k>;
         case GGML_TYPE_IQ3_K:
@@ -1399,6 +1402,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_block_cont_cuda<QK_WHT6_0, QR_WHT6_0, dequantize_wht6_0>;
         case GGML_TYPE_WHT8_0:
             return dequantize_block_cont_cuda<QK_WHT8_0, QR_WHT8_0, dequantize_wht8_0>;
+        case GGML_TYPE_WQ3_TCQ:
+            return dequantize_wq3_tcq_to_fp32;
         case GGML_TYPE_IQ4_K:
             return dequantize_block_cont_cuda<QK_K, QR_IQ4_K, dequantize_iq4_k>;
         case GGML_TYPE_IQ3_K:
