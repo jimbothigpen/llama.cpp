@@ -1000,6 +1000,30 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q8_0> {
     static constexpr int qi = QI8_0;
 };
 
+// WHT5/6/8 weight quants: block size 32, fused mmvq vec_dot processes the whole block in
+// one thread (the inverse Hadamard is not separable across sub-blocks). Setting qi == vdr
+// (== 2) makes the generic mmvq kernel hand each thread a full block (qi/vdr == 1 ⇒ iqs==0).
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_WHT5_0> {
+    static constexpr int qk = QK_WHT5_0;
+    static constexpr int qr = 2;
+    static constexpr int qi = 2;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_WHT6_0> {
+    static constexpr int qk = QK_WHT6_0;
+    static constexpr int qr = 2;
+    static constexpr int qi = 2;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_WHT8_0> {
+    static constexpr int qk = QK_WHT8_0;
+    static constexpr int qr = 2;
+    static constexpr int qi = 2;
+};
+
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_MXFP4> {
     static constexpr int qk = QK_MXFP4;

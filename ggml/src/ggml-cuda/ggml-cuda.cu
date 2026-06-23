@@ -2644,9 +2644,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels)
     const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
-    // Wider WHT weight types (5/6/8-bit): dequant→cuBLAS path only (no fused mmvq/mmq kernel
-    // yet). mmvq's default branch would otherwise accept them and abort in the switch.
-    const bool is_wht_dequant = (src0->type == GGML_TYPE_WHT5_0 || src0->type == GGML_TYPE_WHT6_0 || src0->type == GGML_TYPE_WHT8_0);
+    // Wider WHT weight types (5/6/8-bit) now have a fused single-token mmvq kernel
+    // (vec_dot decode-then-MAC, see mmvq.cu). They are admitted to mmvq for decode /
+    // small-batch (ne[1] <= MMVQ_MAX_BATCH_SIZE). They have NO mmq kernel, so keep them
+    // out of mmq → prefill (ne[1] > MMVQ_MAX_BATCH_SIZE) falls through to cuBLAS-dequant.
+    const bool is_wht_no_mmq = (src0->type == GGML_TYPE_WHT5_0 || src0->type == GGML_TYPE_WHT6_0 || src0->type == GGML_TYPE_WHT8_0);
     // IQK base weight types: unconditional guard keeps them out of mmvq/mmq for ALL batch sizes.
     // mul_mat_vec_q_switch_type has no IQK case → GGML_ABORT for batch 2-8 without this guard.
     const bool is_iqk_weight = ggml_cuda_iqk_mmvq_supported(src0->type);
@@ -2654,10 +2656,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const bool is_iqk_mmvq = is_iqk_weight &&
                              src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
                              ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_wht_dequant && !is_iqk_weight
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_iqk_weight
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
-    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_wht_dequant && !is_iqk_weight
+    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_wht_no_mmq && !is_iqk_weight
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     bool any_gpus_with_slow_fp16 = false;

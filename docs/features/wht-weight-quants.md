@@ -2,7 +2,9 @@
 
 > **Status: Stable (WHT3_0/WHT4_0)** — CPU, CUDA/HIP, and Vulkan backends. WHT3_0/WHT4_0 do **not** use imatrix — calibration-free.
 >
-> **Status: Functional (WHT5_0/WHT6_0/WHT8_0, 2026-06-22)** — wider Lloyd-Max codebooks (32/64/256 levels) at index bit-widths 5/6/8. CPU (quant + dequant + vec_dot) and CUDA/HIP (dequant→cuBLAS/rocBLAS matmul) are wired and run a coherent decode; **no fused mmvq kernel and no Vulkan backend yet** (perf legs deferred). Like the narrower siblings they are calibration-free (imatrix integrated but ignored). Slots 82/83/84.
+> **Status: Functional + fused decode (WHT5_0/WHT6_0/WHT8_0, 2026-06-22)** — wider Lloyd-Max codebooks (32/64/256 levels) at index bit-widths 5/6/8. CPU (quant + dequant + vec_dot) and CUDA/HIP are wired. As of 2026-06-22 single-token decode uses a **fused mmvq vec_dot kernel** (native, decode-then-MAC in registers) instead of the old dequant→cuBLAS path — a large decode-TPS win (WHT5_0: **0.9 → 10.6 t/s, 11.8×** on RDNA3.5/gfx1103) at PPL-parity. Prefill (`ne[1] > 8`) still uses dequant→cuBLAS/rocBLAS. **No Vulkan backend or SIMD CPU vec_dot yet** (deferred). Like the narrower siblings they are calibration-free (imatrix integrated but ignored). Slots 82/83/84.
+>
+> ⚠️ **Test-GGUF caveat (2026-06-22):** the canonical `Qwen3.5-9B-WHT6_0.gguf` / `Qwen3.5-9B-WHT8_0.gguf` files currently dequant to **garbage** (PPL ≈ 1020 / 512k vs ≈8.7 for WHT5_0) — *bit-identically on the unmodified base build*, i.e. a pre-existing quantizer/file defect unrelated to the mmvq work. Only `WHT5_0` is presently a healthy test model. WHT6_0/WHT8_0 mmvq is verified numerically faithful to their (broken) dequant path; a re-quant is needed to validate them at a healthy PPL.
 
 ---
 
@@ -14,11 +16,11 @@
 |---|---|---|---|---|---|---|
 | `WHT3_0` | `GGML_TYPE_WHT3_0` (slot 80) | `MOSTLY_WHT3_0` (41) | 3-bit (8 centroids) | **4.0** | 16 (QK=32) | CPU, CUDA/HIP, Vulkan |
 | `WHT4_0` | `GGML_TYPE_WHT4_0` (slot 81) | `MOSTLY_WHT4_0` (42) | 4-bit (16 centroids) | **5.0** | 20 (QK=32) | CPU, CUDA/HIP, Vulkan |
-| `WHT5_0` | `GGML_TYPE_WHT5_0` (slot 82) | `MOSTLY_WHT5_0` (59) | 5-bit (32 centroids) | **6.0** | 24 (QK=32) | CPU, CUDA/HIP (dequant path) |
-| `WHT6_0` | `GGML_TYPE_WHT6_0` (slot 83) | `MOSTLY_WHT6_0` (60) | 6-bit (64 centroids) | **7.0** | 28 (QK=32) | CPU, CUDA/HIP (dequant path) |
-| `WHT8_0` | `GGML_TYPE_WHT8_0` (slot 84) | `MOSTLY_WHT8_0` (61) | 8-bit (256 centroids) | **9.0** | 36 (QK=32) | CPU, CUDA/HIP (dequant path) |
+| `WHT5_0` | `GGML_TYPE_WHT5_0` (slot 82) | `MOSTLY_WHT5_0` (59) | 5-bit (32 centroids) | **6.0** | 24 (QK=32) | CPU, CUDA/HIP (mmvq decode + cuBLAS prefill) |
+| `WHT6_0` | `GGML_TYPE_WHT6_0` (slot 83) | `MOSTLY_WHT6_0` (60) | 6-bit (64 centroids) | **7.0** | 28 (QK=32) | CPU, CUDA/HIP (mmvq decode + cuBLAS prefill) |
+| `WHT8_0` | `GGML_TYPE_WHT8_0` (slot 84) | `MOSTLY_WHT8_0` (61) | 8-bit (256 centroids) | **9.0** | 36 (QK=32) | CPU, CUDA/HIP (mmvq decode + cuBLAS prefill) |
 
-> `WHT5_0`/`WHT6_0`/`WHT8_0` are **functional** (2026-06-22): they quantize, load, and decode coherently via the CPU path and the CUDA/HIP dequant→cuBLAS/rocBLAS matmul path. They do **not** yet have a fused single-token mmvq kernel (so decode uses the dequant path) or a Vulkan backend — those are deferred perf legs.
+> `WHT5_0`/`WHT6_0`/`WHT8_0` (2026-06-22): single-token decode runs through a **fused mmvq `vec_dot` kernel** (CUDA/HIP); prefill (`ne[1] > 8`) uses dequant→cuBLAS/rocBLAS. No Vulkan backend or SIMD CPU `vec_dot` yet — deferred perf legs. See the §Backend support section for the decode-TPS table and the WHT6_0/WHT8_0 broken-test-GGUF caveat.
 
 **TL;DR.** WHT4_0 competes with Q5_K_M — not Q4_K_M — because its true cost is ~5 bpw. A Walsh-Hadamard rotation applied before quantization flattens weight outliers and lets a compact fitted codebook achieve better quality than a plain low-bit quant at the same cost. No imatrix calibration is needed.
 
@@ -193,11 +195,21 @@ The three share the same mathematical family (Walsh-Hadamard Transform) but are 
   - **`ne1 > 8` (standard prefill):** dequant-to-Q8_0 → cuBLAS/rocBLAS.
 - **Vulkan** — mul_mat_vec pipelines for WHT3_0/WHT4_0 wired in `ggml-vulkan.cpp` (`dequant_wht3_0.comp` / `mul_mat_vec_wht3_0.comp` shaders)
 
-**WHT5_0/WHT6_0/WHT8_0 backends (functional, 2026-06-22):**
+**WHT5_0/WHT6_0/WHT8_0 backends (functional + fused decode, 2026-06-22):**
 
 - **CPU** — full quant + dequant + `vec_dot` (dequant-then-dot against Q8_0), parameterized over the codebook.
-- **CUDA/HIP** — device dequant kernels (`dequantize_wht5_0`/`_wht6_0`/`_wht8_0` in `ggml-cuda/dequantize.cuh`) feed the **dequant→cuBLAS/rocBLAS** matmul path for all batch sizes (single-token decode included). These types are explicitly routed past the fused mmvq/mmq kernels (an `is_wht_dequant` guard in `ggml-cuda.cu`), since no fused WHT5/6/8 mmvq kernel exists yet. They store **natively** in VRAM (no WHT4_0-style load-time Q8_0 conversion).
-- **Deferred (perf legs):** fused single-token mmvq kernel (dp4a/scalar), Vulkan shaders, and SIMD `vec_dot` — none are required for functional correctness.
+- **CUDA/HIP — single-token decode (`ne1 == 1`, also `ne1 ≤ 8`):** fused **mmvq** `vec_dot_wht{5,6,8}_0_q8_1` (in `ggml-cuda/mmvq.cu`). The dot reconstructs the full 32-element block in registers (centroid LUT + inverse-RHT via the shared `wht{5,6,8}_0_reconstruct` helpers in `dequantize.cuh`, byte-identical to the dequant path) then float-MACs against the q8_1-quantized activations: `d8 · Σ w[k]·a_q[k]`. The whole block is processed by one thread (type traits `qi == vdr == 2` ⇒ `iqs == 0`); **no dp4a/WMMA** (the inverse Hadamard is not separable into integer sub-dots). All three are **native** (no WHT4_0-style load-time Q8_0 conversion). WHT5_0/WHT6_0 were chosen native (6/7 bpw — Q8_0 conversion would inflate); WHT8_0 was also kept native (uniform code, avoids the extra upload-hook + allocation reasoning of the q8_0-conversion route).
+- **CUDA/HIP — prefill (`ne1 > 8`):** unchanged **dequant→cuBLAS/rocBLAS**. WHT5/6/8 have no mmq kernel, so they are kept out of mmq (`is_wht_no_mmq` guard in `ggml-cuda.cu`) and large batches fall through to cuBLAS. (`mul_mat_id`/MoE + CUDA-graph paths still take the dequant route — deferred; the test model is dense.)
+- **Decode TPS (Qwen3.5-9B, RDNA3.5/gfx1103, `llama-cli -n 128 -fa on`):**
+
+  | Type | Before (dequant→cuBLAS, every token) | After (fused mmvq) | Speedup | PPL parity (BLAS vs mmvq, c=512) |
+  |------|------|------|------|------|
+  | WHT5_0 | 0.9 t/s | **10.6 t/s** | **11.8×** | 8.6988 vs 8.7221 (+0.27 %, ≪1σ) ✅ |
+  | WHT6_0 | 1.0 t/s | 19.5 t/s¹ | — | 1019.6 vs 1114.8 (broken GGUF — see caveat) |
+  | WHT8_0 | crash² | crash² | — | 512324 vs 583023 (broken GGUF — see caveat) |
+
+  ¹ WHT6_0 is a broken test GGUF (garbage output) so its decode timing is not representative. ² The WHT8_0 GGUF is so degenerate it crashes generation in *both* baseline and mmvq builds (invalid sampled output), so cli-TPS is unmeasurable; the mmvq PPL leg still ran and tracks BLAS. The pre-existing breakage is bit-identical on the unmodified base build (see top caveat).
+- **Deferred (perf legs):** Vulkan shaders and SIMD CPU `vec_dot`; mmvq fusion (bias/gate) and `mul_mat_id` mmvq for these types — none are required for the decode win above.
 
 ---
 

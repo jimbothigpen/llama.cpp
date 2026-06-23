@@ -192,12 +192,14 @@ static __device__ __forceinline__ void wht_inverse_rht_32(float * buf) {
 
 // WHT5_0: 5-bit weight type, block size 32, dual half-block scales.
 // Packing: 4 groups of 8 indices, each group's 40 bits in 5 little-endian bytes.
-static __device__ __forceinline__ void dequantize_wht5_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+// Reconstruct the full 32-element block (centroid * half-block scale, then inverse RHT)
+// into buf[32]. Shared by the dequant→cuBLAS path and the fused mmvq vec_dot so the two
+// stay byte-identical to the CPU reference.
+static __device__ __forceinline__ void wht5_0_reconstruct(const void * vx, const int64_t ib, float * buf) {
     const block_wht5_0 * x = (const block_wht5_0 *) vx;
     const float d0 = __half2float(x[ib].d0);
     const float d1 = __half2float(x[ib].d1);
 
-    float buf[32];
     for (int g = 0; g < 4; g++) {
         const uint8_t * qp = x[ib].qs + g * 5;
         uint64_t acc = 0;
@@ -210,18 +212,22 @@ static __device__ __forceinline__ void dequantize_wht5_0(const void * vx, const 
         }
     }
     wht_inverse_rht_32(buf);
+}
+
+static __device__ __forceinline__ void dequantize_wht5_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    float buf[32];
+    wht5_0_reconstruct(vx, ib, buf);
     v.x = buf[iqs];
     v.y = buf[iqs + 1];
 }
 
 // WHT6_0: 6-bit weight type, block size 32, dual half-block scales.
 // Packing: 8 groups of 4 indices, each group's 24 bits in 3 little-endian bytes.
-static __device__ __forceinline__ void dequantize_wht6_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+static __device__ __forceinline__ void wht6_0_reconstruct(const void * vx, const int64_t ib, float * buf) {
     const block_wht6_0 * x = (const block_wht6_0 *) vx;
     const float d0 = __half2float(x[ib].d0);
     const float d1 = __half2float(x[ib].d1);
 
-    float buf[32];
     for (int g = 0; g < 8; g++) {
         const uint8_t * qp = x[ib].qs + g * 3;
         uint32_t acc = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
@@ -233,23 +239,32 @@ static __device__ __forceinline__ void dequantize_wht6_0(const void * vx, const 
         }
     }
     wht_inverse_rht_32(buf);
+}
+
+static __device__ __forceinline__ void dequantize_wht6_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    float buf[32];
+    wht6_0_reconstruct(vx, ib, buf);
     v.x = buf[iqs];
     v.y = buf[iqs + 1];
 }
 
 // WHT8_0: 8-bit weight type, block size 32, dual half-block scales (1 index/byte).
-static __device__ __forceinline__ void dequantize_wht8_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+static __device__ __forceinline__ void wht8_0_reconstruct(const void * vx, const int64_t ib, float * buf) {
     const block_wht8_0 * x = (const block_wht8_0 *) vx;
     const float d0 = __half2float(x[ib].d0);
     const float d1 = __half2float(x[ib].d1);
 
-    float buf[32];
     for (int j = 0; j < 32; j++) {
         uint8_t idx = x[ib].qs[j];
         float d = (j < 16) ? d0 : d1;
         buf[j] = WHT8_CENTROIDS_WEIGHT[idx] * d;
     }
     wht_inverse_rht_32(buf);
+}
+
+static __device__ __forceinline__ void dequantize_wht8_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    float buf[32];
+    wht8_0_reconstruct(vx, ib, buf);
     v.x = buf[iqs];
     v.y = buf[iqs + 1];
 }
