@@ -4,7 +4,7 @@
 >
 > **Status: Functional + fused decode (WHT5_0/WHT6_0/WHT8_0, 2026-06-22)** — wider Lloyd-Max codebooks (32/64/256 levels) at index bit-widths 5/6/8. CPU (quant + dequant + vec_dot) and CUDA/HIP are wired. As of 2026-06-22 single-token decode uses a **fused mmvq vec_dot kernel** (native, decode-then-MAC in registers) instead of the old dequant→cuBLAS path — a large decode-TPS win (WHT5_0: **0.9 → 10.6 t/s, 11.8×** on RDNA3.5/gfx1103) at PPL-parity. Prefill (`ne[1] > 8`) still uses dequant→cuBLAS/rocBLAS. **No Vulkan backend or SIMD CPU vec_dot yet** (deferred). Like the narrower siblings they are calibration-free (imatrix integrated but ignored). Slots 82/83/84.
 >
-> ⚠️ **Test-GGUF caveat (2026-06-22):** the canonical `Qwen3.5-9B-WHT6_0.gguf` / `Qwen3.5-9B-WHT8_0.gguf` files currently dequant to **garbage** (PPL ≈ 1020 / 512k vs ≈8.7 for WHT5_0) — *bit-identically on the unmodified base build*, i.e. a pre-existing quantizer/file defect unrelated to the mmvq work. Only `WHT5_0` is presently a healthy test model. WHT6_0/WHT8_0 mmvq is verified numerically faithful to their (broken) dequant path; a re-quant is needed to validate them at a healthy PPL.
+> ✅ **Test-GGUF resolved (2026-06-23):** the earlier garbage `Qwen3.5-9B-WHT6_0.gguf` / `-WHT8_0.gguf` (PPL ≈ 1020 / 512k) were **stale files produced by a superseded pre-commit WIP quantizer** (written 2026-06-19, three days *before* the WHT5/6/8 quantize code landed in `4fd735f2c` on 2026-06-22). The committed quantizer **and** dequantizer are correct — a CPU round-trip test (production `ggml_quantize_chunk` → `to_float`) reconstructs N(0,1) cleanly with monotonic NRMSE 3.7 % / 1.9 % / 0.5 % (WHT5/6/8). **Re-quantizing from BF16 with the committed code restored healthy PPL:** WHT6_0 **7.6542** (b=512) / **7.6631** (b=1, mmvq); WHT8_0 **7.6892** / **7.6825** (Qwen3.5-9B, wikitext c=512, 6 chunks; WHT5_0 reference 8.6988). mmvq (b=1) tracks the dequant→cuBLAS path (b=512) within ≪1σ — the deferred WHT6/8 mmvq parity gate is now **closed**. No code change was required; the defect was a stale data file, not a dequant bug.
 
 ---
 
@@ -205,10 +205,10 @@ The three share the same mathematical family (Walsh-Hadamard Transform) but are 
   | Type | Before (dequant→cuBLAS, every token) | After (fused mmvq) | Speedup | PPL parity (BLAS vs mmvq, c=512) |
   |------|------|------|------|------|
   | WHT5_0 | 0.9 t/s | **10.6 t/s** | **11.8×** | 8.6988 vs 8.7221 (+0.27 %, ≪1σ) ✅ |
-  | WHT6_0 | 1.0 t/s | 19.5 t/s¹ | — | 1019.6 vs 1114.8 (broken GGUF — see caveat) |
-  | WHT8_0 | crash² | crash² | — | 512324 vs 583023 (broken GGUF — see caveat) |
+  | WHT6_0 | 1.0 t/s | 19.5 t/s | — | **7.6542 vs 7.6631** (+0.12 %, ≪1σ) ✅ |
+  | WHT8_0 | — | — | — | **7.6892 vs 7.6825** (−0.09 %, ≪1σ) ✅ |
 
-  ¹ WHT6_0 is a broken test GGUF (garbage output) so its decode timing is not representative. ² The WHT8_0 GGUF is so degenerate it crashes generation in *both* baseline and mmvq builds (invalid sampled output), so cli-TPS is unmeasurable; the mmvq PPL leg still ran and tracks BLAS. The pre-existing breakage is bit-identical on the unmodified base build (see top caveat).
+  PPL re-measured 2026-06-23 on the **re-quantized** WHT6_0/WHT8_0 GGUFs (wikitext c=512, 6 chunks; the earlier 1020 / 512k figures were stale pre-commit files — see the resolved caveat at the top). WHT8_0 now generates coherently (64-tok smoke OK); both legs confirm the mmvq fused decode is PPL-faithful to the dequant→cuBLAS path.
 - **Deferred (perf legs):** Vulkan shaders and SIMD CPU `vec_dot`; mmvq fusion (bias/gate) and `mul_mat_id` mmvq for these types — none are required for the decode win above.
 
 ---
