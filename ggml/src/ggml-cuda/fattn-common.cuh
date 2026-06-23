@@ -922,6 +922,118 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq4_0(
     return sum;
 }
 
+// ----------------------------------------------------------------------------
+// Prefill-tiled turbo KQ dot (turbo-kv-prefill-fix-2026-06-22).
+// Dequantizes each K element pair EXACTLY ONCE per K row, then MACs the result
+// against all `ncols` query columns. This hoists the expensive byte-extract +
+// centroid LUT + norm multiply out of the per-query loop, amortizing it across
+// the query tile (mirrors the V-aggregation path, which already reuses each
+// dequantized V across ncols). Cooperative across `nthreads` lanes (warp-reduce
+// of each sum[j] is done by the caller). Q_v points at Q_reg[0]; column j's
+// per-thread slice begins at element j*Qstride, Qstride = (D/2)/nthreads.
+// Numerics per element are identical to vec_dot_fattn_vec_KQ_turboq2_0 — only
+// the loop order changes — so PPL is unchanged within fp reassociation noise.
+template <int D, int nthreads, int ncols>
+static __device__ __forceinline__ void vec_dot_fattn_vec_KQ_turboq2_0_tiled(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, float * __restrict__ sum) {
+
+    const block_turboq2_0 * K_turbo = (const block_turboq2_0 *) K_c;
+
+    constexpr int cpy_nb   = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne   = cpy_nb / 4;
+    constexpr int Qstride  = (D/2)/nthreads;   // half2/float2 elements per column per thread
+
+#pragma unroll
+    for (int j = 0; j < ncols; ++j) {
+        sum[j] = 0.0f;
+    }
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;                   // always even
+            const int ib    = elem0 / QK_TURBOQ2;           // block index
+            const int j0    = elem0 % QK_TURBOQ2;           // always even
+
+            const float   norm    = __half2float(K_turbo[ib].norm);
+            const uint8_t qs_byte = K_turbo[ib].qs[j0 / 4];     // covers j0..j0+3
+            const int     shift   = (j0 % 4) * 2;               // 0 or 4
+
+            const uint8_t idx0 = (qs_byte >> shift)     & 0x3;
+            const uint8_t idx1 = (qs_byte >> (shift+2)) & 0x3;
+
+            // Dequantize ONCE, reuse across all query columns.
+            const float kx = TURBO_CENTROIDS_2BIT[idx0] * norm;
+            const float ky = TURBO_CENTROIDS_2BIT[idx1] * norm;
+
+            const int qidx = k_KQ_0/nthreads + k_KQ_1;
+#pragma unroll
+            for (int j = 0; j < ncols; ++j) {
+#ifdef V_DOT2_F32_F16_AVAILABLE
+                const half2 qv = ((const half2 *) Q_v)[j*Qstride + qidx];
+                ggml_cuda_mad(sum[j], make_float2(kx, ky), __half22float2(qv));
+#else
+                const float2 qv = ((const float2 *) Q_v)[j*Qstride + qidx];
+                sum[j] += kx * qv.x + ky * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+            }
+        }
+    }
+}
+
+// Prefill-tiled turboq4 KQ dot — see vec_dot_fattn_vec_KQ_turboq2_0_tiled.
+template <int D, int nthreads, int ncols>
+static __device__ __forceinline__ void vec_dot_fattn_vec_KQ_turboq4_0_tiled(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, float * __restrict__ sum) {
+
+    const block_turboq4_0 * K_turbo = (const block_turboq4_0 *) K_c;
+
+    constexpr int cpy_nb   = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne   = cpy_nb / 4;
+    constexpr int Qstride  = (D/2)/nthreads;
+
+#pragma unroll
+    for (int j = 0; j < ncols; ++j) {
+        sum[j] = 0.0f;
+    }
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;                   // always even
+            const int ib    = elem0 / QK_TURBOQ4;           // block index
+            const int j0    = elem0 % QK_TURBOQ4;           // always even
+
+            const float   norm    = __half2float(K_turbo[ib].norm);
+            const uint8_t qs_byte = K_turbo[ib].qs[j0 / 2];     // both nibbles = j0, j0+1
+
+            const uint8_t idx0 = (qs_byte >> 0) & 0xF;    // low nibble  = j0
+            const uint8_t idx1 = (qs_byte >> 4) & 0xF;    // high nibble = j0+1
+
+            const float kx = TURBO_CENTROIDS_4BIT[idx0] * norm;
+            const float ky = TURBO_CENTROIDS_4BIT[idx1] * norm;
+
+            const int qidx = k_KQ_0/nthreads + k_KQ_1;
+#pragma unroll
+            for (int j = 0; j < ncols; ++j) {
+#ifdef V_DOT2_F32_F16_AVAILABLE
+                const half2 qv = ((const half2 *) Q_v)[j*Qstride + qidx];
+                ggml_cuda_mad(sum[j], make_float2(kx, ky), __half22float2(qv));
+#else
+                const float2 qv = ((const float2 *) Q_v)[j*Qstride + qidx];
+                sum[j] += kx * qv.x + ky * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+            }
+        }
+    }
+}
+
 // TurboQuant8 KQ dot product: dequantize K from turboq8 blocks, dot with Q (float2/half2).
 // 8-bit, 1 byte per element. Uniform grid: value = (qs-127.5)/127.5 * norm = (qs-127.5)*s
 // with s = norm/127.5 (norm already folds in the per-block absmax scale).
