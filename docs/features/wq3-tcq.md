@@ -146,3 +146,23 @@ dp4a/MAD + `__shfl`. Three source shims were required (no CMake/dispatch changes
    instruction; AMD/host now take the portable `x*c` (which lowers to the same instruction).
 Warp-size correctness: the 128-wide FWHT butterfly assumes 32-lane warps, which matches RDNA3.5
 wave32 (gfx1150/gfx1103 default; no `-mwavefrontsize64`).
+
+## CUDA correctness on newer drivers (driver-580 / CUDA-13.0) — known issue
+
+A Kaggle T4 run reported PPL = 685,572 (garbage) for WQ3_TCQ while Q4_K_M was healthy on the same
+binary. Investigation (worker `wq3-cuda-fastpath-fix`, 2026-06-23) found the **quant and kernels are
+correct**: the *exact* Kaggle binary scores a healthy **PPL 13.05** on sm_75 hardware running
+**NVIDIA driver 550 / CUDA 12.4**, matching the HIP result (13.55). The garbage reproduces only on the
+Kaggle T4's **driver 580 / CUDA 13.0** (cudart is 12.8 on both, so it is not a cudart mismatch; the
+inline-asm fast path was ruled out — it compiles to byte-identical sm_75 SASS and the lib ships SASS
+with no PTX, so there is no JIT).
+
+Likely mechanism: WQ3 publishes its codebook/signs into six file-scope `__constant__` symbols via
+`cudaMemcpyToSymbol` from inside `libggml-cuda.so` (`BUILD_SHARED_LIBS=ON`, `-fgpu-rdc`). On the
+driver-580/CUDA-13 runtime these device symbols are not correctly populated → the kernels read a
+zero/garbage codebook → systematic garbage. Q4_K_M uses no such device symbol and is unaffected.
+
+**Durable fix (recommended, not yet landed):** replace the `__constant__`/`cudaMemcpyToSymbol`
+codebook+signs with `cudaMalloc`'d device buffers passed to the kernels as pointer arguments, removing
+the driver-fragile symbol-registration path. Validation requires a driver-580 box (Kaggle T4); ai02
+(driver 550) cannot reproduce.

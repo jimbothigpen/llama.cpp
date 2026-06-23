@@ -1243,16 +1243,16 @@ static __global__ void k_wq3_tcq_mmvq_q8_1_rowpair_cached(
 }
 
 static __device__ __forceinline__ uint32_t wq3_tcq_mul_u32(uint32_t x, uint32_t c) {
-#if defined(__CUDA_ARCH__) && !defined(GGML_USE_HIP)
-    // NVPTX-only fast path: mad.lo.u32 == x*c (low 32 bits). Under HIP, __CUDA_ARCH__
-    // is defined too (vendors/hip.h), but this PTX is not valid amdgcn — fall through
-    // to the portable multiply, which lowers to the same instruction on AMD.
-    uint32_t r;
-    asm ("mad.lo.u32 %0, %1, %2, 0;" : "=r"(r) : "r"(x), "r"(c));
-    return r;
-#else
+    // Portable 32-bit wrapping multiply on ALL targets (CUDA, HIP, host). The murmur
+    // mixer depends on exact mod-2^32 semantics, which `x * c` on uint32_t already gives;
+    // ptxas lowers it to the same single `mad.lo.u32` the old hand-written inline asm
+    // emitted (verified: byte-identical sm_75 SASS under CUDA 12.4 and 12.8). The asm
+    // therefore bought nothing and only forced the Ph3 HIP port to special-case it
+    // (`!defined(GGML_USE_HIP)`, else invalid amdgcn) — so it is removed as cleanup.
+    // NOTE: this is NOT the cause of the Kaggle-T4 PPL=685,572 report; that artifact is
+    // environment-specific (the exact bins are healthy at PPL 13.05 on sm_75 hardware).
+    // See docs/features/wq3-tcq.md. [TODO 259]
     return x * c;
-#endif
 }
 
 static __device__ __forceinline__ float wq3_tcq_norm_ppf_device(float p) {
