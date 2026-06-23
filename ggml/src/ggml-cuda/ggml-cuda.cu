@@ -2816,11 +2816,15 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (!split && is_iqk_mmvq) {
         // IQK base weight types: dedicated single-token MMVQ kernel
         ggml_cuda_mul_mat_iqk_mmvq(ctx, src0, src1, dst);
-    } else if (!split && is_tq_weight && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE
+    } else if (!split && (src0->type == GGML_TYPE_WHT3_0 || src0->type == GGML_TYPE_WHT4_0)
+               && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE
                && src1->ne[2] == 1 && src1->ne[3] == 1 && ggml_is_contiguous(src1)) {
         // Fused TQ weight mul_mat with pre-rotated activations via warp shuffle WHT.
         // Decode (ne[1]==1) and small-batch (ne[1]<=8: speculative / short prefill) reuse
         // each weight block across all tokens, avoiding the dequant-to-f16 + cuBLAS path.
+        // WHT3/4_0 only — ggml_cuda_mul_mat_vec_tq asserts on other types. WQ3_TCQ uses its
+        // own native single-token kernel (above) for ne[1]==1; multi-token WQ3 falls through
+        // to the generic dequant-to-f16 + cuBLAS path (dequantize_wq3_tcq_to_fp16). [Ph2 fix]
         ggml_cuda_mul_mat_vec_tq(ctx, src0, src1, dst);
     } else {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);

@@ -5591,7 +5591,9 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_WHT4_0:
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:
-            // WHT-rotated / TurboQuant types: just validate scales are not NaN/Inf
+        case GGML_TYPE_WQ3_TCQ:
+            // WHT-rotated / TurboQuant / TCQ types: trellis bitstream + fp16 norm, no
+            // direct float scales to NaN/Inf-check here (decode validated at runtime).
             // TODO: add more thorough validation if needed
             break;
         case GGML_TYPE_IQ2_K:

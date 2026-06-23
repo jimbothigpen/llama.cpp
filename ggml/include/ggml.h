@@ -449,7 +449,7 @@ extern "C" {
         GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
         // slots 82–85 reserved for yggdrasil future WHT variants (WHT5/6/8) — see docs/TYPE_ASSIGNMENTS.md
         // slots 86–91 reserved for RaBitQ weight family — see docs/TYPE_ASSIGNMENTS.md
-        GGML_TYPE_WQ3_TCQ = 92, // TurboQuant 3-bit WEIGHT quant: TCQ (k=3, L=9, 512 states) + FWHT rotation; GPU-only dequant. Source: buun feat/tcq-wq3-ffn-fusion (re-slotted 46→92 to avoid mid-enum renumber; reuses block_turboq3_tcq 52-byte layout)
+        GGML_TYPE_WQ3_TCQ = 92, // TurboQuant 3-bit WEIGHT quant: TCQ (k=3, L=10, 1024 states) + FWHT rotation; CPU+CUDA dequant. Source: buun feat/tcq-wq3-ffn-fusion (re-slotted 46→92 to avoid mid-enum renumber; reuses block_turboq3_tcq 52-byte layout)
         // slots 93–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)

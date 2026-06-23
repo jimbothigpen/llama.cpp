@@ -4652,6 +4652,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
     MOSTLY_NVFP4         = 39  # except 1d tensors
     MOSTLY_Q1_0          = 40  # except 1d tensors
+    MOSTLY_WQ3_TCQ       = 59  # except 1d tensors (TCQ 3-bit weight, k=3 L=10 + FWHT)
 
     GUESSED              = 1024  # not specified in the model file
 

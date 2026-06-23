@@ -13,6 +13,11 @@
 #include <thread>
 #include <unordered_map>
 
+// WQ3_TCQ weight codebook + sign seed (defined in ggml-turbo-quant.c) — emitted
+// into the output GGUF so the loader/CPU/CUDA dequant share the encoder's table.
+extern "C" const float * ggml_wq3_tcq_codebook(int * n_entries);
+extern "C" uint32_t      ggml_wq3_tcq_sign_seed(void);
+
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
 struct tensor_type_option {
@@ -383,7 +388,8 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_TQ1_0:
-            case GGML_TYPE_TQ2_0:   return_type = GGML_TYPE_Q4_0;   break;
+            case GGML_TYPE_TQ2_0:
+            case GGML_TYPE_WQ3_TCQ: return_type = GGML_TYPE_Q4_0;   break; // 128-blk weight quant -> 32-blk fallback
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
@@ -776,6 +782,13 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ1_S:
             return true;
+        case GGML_TYPE_WQ3_TCQ:
+            // WQ3_TCQ rotates each 128-group by an FWHT before the Viterbi trellis.
+            // As with WHT3/4_0 below, original-basis per-column importance is misaligned
+            // with the rotated coefficients; the Hadamard's equal-magnitude entries make
+            // the rotated weight diagonal uniform, so per-element imatrix degenerates to a
+            // constant. Pass imatrix through but do not require/apply it.
+            return false;
         case GGML_TYPE_WHT3_0:
         case GGML_TYPE_WHT4_0:
             // WHT imatrix audit (2026-06-04): ADR-016 marked these imatrix-required
@@ -846,6 +859,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
         case LLAMA_FTYPE_MOSTLY_WHT3_0:  return GGML_TYPE_WHT3_0;
         case LLAMA_FTYPE_MOSTLY_WHT4_0:  return GGML_TYPE_WHT4_0;
+        case LLAMA_FTYPE_MOSTLY_WQ3_TCQ: return GGML_TYPE_WQ3_TCQ;
         case LLAMA_FTYPE_MOSTLY_IQ4_K:   return GGML_TYPE_IQ4_K;
         case LLAMA_FTYPE_MOSTLY_IQ3_K:   return GGML_TYPE_IQ3_K;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   return GGML_TYPE_IQ2_K;
@@ -978,6 +992,17 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_kv     (ctx_out.get(), ml.metadata);
     gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_GENERAL_QUANTIZATION_VERSION).c_str(), GGML_QNT_VERSION);
     gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_GENERAL_FILE_TYPE).c_str(), ftype);
+
+    // WQ3_TCQ: emit the weight codebook + sign seed so the loader (CUDA) and CPU
+    // dequant use the exact same hardcoded table the encoder used. Keys match the
+    // adopted loader in llama.cpp (turbo.tcq.codebook.weight / turbo.tcq.sign_seed).
+    if (ftype == LLAMA_FTYPE_MOSTLY_WQ3_TCQ) {
+        int cb_n = 0;
+        const float * cb = ggml_wq3_tcq_codebook(&cb_n);
+        gguf_set_arr_data(ctx_out.get(), "turbo.tcq.codebook.weight", GGUF_TYPE_FLOAT32, cb, (size_t) cb_n);
+        gguf_set_val_u32 (ctx_out.get(), "turbo.tcq.sign_seed", ggml_wq3_tcq_sign_seed());
+        LLAMA_LOG_INFO("%s: WQ3_TCQ: emitted %d-entry codebook + sign_seed=42 to GGUF metadata\n", __func__, cb_n);
+    }
 
     // Remove split metadata
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());

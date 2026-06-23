@@ -121,6 +121,13 @@ GGML_API void quantize_row_turboq3_tcq_ref(const float * GGML_RESTRICT x, block_
 GGML_API void dequantize_row_turboq3_tcq(const block_turboq3_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_turboq3_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+// WQ3_TCQ: 3-bit TCQ WEIGHT quant (k=3, L=10, 1024 states) + FWHT — source: buun feat/tcq-wq3-ffn-fusion
+GGML_API void   quantize_row_wq3_tcq_ref(const float * GGML_RESTRICT x, block_turboq3_tcq * GGML_RESTRICT y, int64_t k);
+GGML_API void   dequantize_row_wq3_tcq(const block_turboq3_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_wq3_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API const float * ggml_wq3_tcq_codebook(int * n_entries); // hardcoded 1024-entry weight codebook (for GGUF emit)
+GGML_API uint32_t      ggml_wq3_tcq_sign_seed(void);           // = 42 (seed pair 42/1084)
+
 GGML_API void quantize_row_turboq2_tcq_ref(const float * GGML_RESTRICT x, block_turboq2_tcq * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq2_tcq(const block_turboq2_tcq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_turboq2_tcq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);

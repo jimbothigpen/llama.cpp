@@ -1379,10 +1379,47 @@ class IQ4_XS(__Quant, qtype=GGMLQuantizationType.IQ4_XS):
 
 
 class WQ3_TCQ(__Quant, qtype=GGMLQuantizationType.WQ3_TCQ):
+    # 3-bit Trellis-Coded WEIGHT quant (k=3, L=10, 1024 states) + FWHT rotation.
+    # Block (52B): fp16 norm + qs[49] (390-bit stream: 7-bit zero prefix + 128*3-bit
+    # outputs) + 1 pad byte. Decode mirrors ggml-cuda/wq3-tcq.cu and the C reference
+    # dequantize_row_wq3_tcq: sliding 10-bit window -> codebook -> s2 -> Hadamard ->
+    # (1/sqrt128)*s1*norm. Codebook/signs are hardcoded (wq3_tcq_data) and identical
+    # to the C tables, so this matches the GGUF's emitted turbo.tcq.codebook.weight.
+    _H: np.ndarray | None = None  # 128x128 Sylvester (natural-order) Hadamard
+
+    @classmethod
+    def _hadamard128(cls) -> np.ndarray:
+        if cls._H is None:
+            H = np.array([[1.0]], dtype=np.float32)
+            while H.shape[0] < 128:
+                H = np.block([[H, H], [H, -H]]).astype(np.float32)
+            cls._H = H
+        return cls._H
+
     @classmethod
     def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("WQ3_TCQ quantization is done externally")
+        # The Viterbi trellis encoder lives in C (ggml-turbo-quant.c). Produce a
+        # WQ3_TCQ GGUF with: llama-quantize <model> <out> wq3_tcq
+        raise NotImplementedError(
+            "WQ3_TCQ quantization (Viterbi) is implemented in C; use llama-quantize ... wq3_tcq")
 
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("WQ3_TCQ dequantization requires GGUF codebook metadata")
+        from .wq3_tcq_data import WQ3_TCQ_CODEBOOK, WQ3_TCQ_SIGNS1, WQ3_TCQ_SIGNS2
+        n_blocks = blocks.shape[0]
+        norm = blocks[:, :2].view(np.float16).astype(np.float32).reshape((n_blocks, 1))
+        qs = blocks[:, 2:51].astype(np.uint32)                       # (n_blocks, 49)
+        # pad two zero bytes so the sliding window can read byte_idx+2 at t=127
+        qs = np.concatenate([qs, np.zeros((n_blocks, 2), dtype=np.uint32)], axis=1)
+        t = np.arange(128)
+        bit_pos = t * 3
+        byte = bit_pos >> 3
+        off = (bit_pos & 7).astype(np.uint32)
+        raw = qs[:, byte] | (qs[:, byte + 1] << 8) | (qs[:, byte + 2] << 16)
+        state = (raw >> off.reshape((1, -1))) & np.uint32(0x3FF)     # (n_blocks, 128)
+        r = WQ3_TCQ_CODEBOOK[state]                                  # (n_blocks, 128)
+        r = r * WQ3_TCQ_SIGNS2.reshape((1, -1))
+        r = r @ cls._hadamard128()                                  # unnormalized Hadamard
+        inv_sqrt128 = np.float32(0.08838834764831845)
+        r = r * (inv_sqrt128 * WQ3_TCQ_SIGNS1).reshape((1, -1)) * norm
+        return r.astype(np.float32)
