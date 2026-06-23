@@ -1,3 +1,6 @@
+// PFlash prompt compression — scorer-model-driven prefill/KV compression.
+// Provenance: ported from buun (github.com/spiritbuun/buun-llama-cpp,
+//   remote `buun`, branch experiment/SD-089-pflash). See docs/features/pflash.md.
 #include "pflash.h"
 #include "pflash-loader.h"
 #include "pflash-graph.h"

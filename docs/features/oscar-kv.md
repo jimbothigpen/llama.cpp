@@ -25,6 +25,22 @@
 
 ---
 
+## Provenance
+
+OScaR INT2 is **this fork's own implementation** — it is not ported from any
+contributing fork. No upstream llama.cpp fork (buun, thetom, carlosfundora,
+domvox, ik_llama, turbo-tan) carries an `oscar` type; verified against all
+tracked remotes on 2026-06-22.
+
+The algorithm reference is the OScaR paper (**arXiv:2605.19660**): Fast Hadamard
+Transform plus per-block min-max INT2 quantization of the K cache. The ggml type
+(`GGML_TYPE_KV_OSCAR_INT2`, slot 71) and the CUDA/HIP Phase-1 kernels are
+original to this fork. Because KV-cache types are runtime-only and never
+serialized into `.gguf`, there is no file-format lineage to track.
+
+Tracked for drift: the paper only — there is no upstream code remote to sync
+against. See the canonical [PROVENANCE.md](PROVENANCE.md).
+
 ## Quick start
 
 ```bash

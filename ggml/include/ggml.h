@@ -430,9 +430,9 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         // slots 42–59 reserved for mainline growth (do not use) — see docs/TYPE_ASSIGNMENTS.md
-        GGML_TYPE_TURBOQ2_0 = 60, // TurboQuant 2-bit KV cache: 2-bit PolarQuant only (no QJL)
-        GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 4-bit PolarQuant (default TURBOQ4_USE_4BIT=1; legacy 3-bit+QJL mode via TURBOQ4_USE_4BIT=0)
+        GGML_TYPE_TURBOQ2_0 = 60, // TurboQuant 2-bit KV cache: 2-bit PolarQuant only (no QJL) — source: thetom TURBO2_0 (arXiv 2504.19874)
+        GGML_TYPE_TURBOQ3_0 = 61, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL — source: thetom TURBO3_0
+        GGML_TYPE_TURBOQ4_0 = 62, // TurboQuant 4-bit KV cache: 4-bit PolarQuant (default TURBOQ4_USE_4BIT=1; legacy 3-bit+QJL mode via TURBOQ4_USE_4BIT=0) — source: thetom TURBO4_0
         GGML_TYPE_TURBOQ8_0 = 63, // TurboQuant 8-bit KV cache: FWHT + uniform 256-level grid + per-block absmax, no QJL (source: buun TURBO8_0)
         GGML_TYPE_TURBOQ5_0 = 64, // TurboQuant 5-bit KV cache: FWHT + uniform 32-level grid + per-block absmax, no QJL (invented ygg TODO 250)
         GGML_TYPE_TURBOQ6_0 = 65, // TurboQuant 6-bit KV cache: FWHT + uniform 64-level grid + per-block absmax, no QJL (invented ygg TODO 250)
@@ -443,11 +443,11 @@ extern "C" {
         // (<0.25% PPL within σ), so the dedicated KV types were retired (do NOT reuse these slots). The InnerQ×TCQ
         // equalization mechanism (scale_inv Q-rotation for TCQ types) is unaffected and remains. Evidence branch:
         // feature/innerq-fix-hd128-engage-2026-06-19 (58ea5fa2f3). 4-bit was already retired (PPL 9.08 vs 7.47, ft2 ccfe39d675).
-        GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype (arXiv:2605.19660)
+        GGML_TYPE_KV_OSCAR_INT2 = 71, // OScaR 2-bit KV: FHT + per-block min-max INT2 — Phase 1 CUDA prototype — source: this fork (original impl; algorithm ref arXiv:2605.19660)
         // slots 72-75 reserved (RQ_PLANAR3_0/RQ_PLANAR4_0/RQ_ISO3_0/RQ_ISO4_0 removed — zero-rotation scalar dup, strictly dominated)
         // slots 76–79 reserved for yggdrasil future RotorQuant extensions — see docs/TYPE_ASSIGNMENTS.md
-        GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32
-        GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32
+        GGML_TYPE_WHT3_0  = 80, // WHT-rotated 3-bit weight quant: 8 Lloyd-Max centroids, block_size=32 — source: thetom TQ3_1S (renamed to avoid mainline TQ1_0/TQ2_0 collision)
+        GGML_TYPE_WHT4_0  = 81, // WHT-rotated 4-bit weight quant: 16 Lloyd-Max centroids, block_size=32 — source: thetom TQ4_1S
         GGML_TYPE_WHT5_0  = 82, // WHT-rotated 5-bit weight quant: 32 Lloyd-Max centroids, block_size=32 (6.0 bpw)
         GGML_TYPE_WHT6_0  = 83, // WHT-rotated 6-bit weight quant: 64 Lloyd-Max centroids, block_size=32 (7.0 bpw)
         GGML_TYPE_WHT8_0  = 84, // WHT-rotated 8-bit weight quant: 256 Lloyd-Max centroids, block_size=32 (9.0 bpw)

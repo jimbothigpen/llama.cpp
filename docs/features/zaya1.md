@@ -62,7 +62,11 @@ The port was built against the Zyphra reference implementations:
 `Zyphra/vllm@zaya1-pr`
 (`vllm/model_executor/models/zaya.py`, ~750 LoC;
 `vllm/model_executor/layers/mamba/cca.py`, ~530 LoC) and
-`Zyphra/transformers@zaya1`.
+`Zyphra/transformers@zaya1`. Zyphra also maintains a llama.cpp branch
+(`Zyphra/llama.cpp@CCA`, remote `zyphra`, `src/models/zaya.cpp`) used as an
+additional cross-reference; this fork's backend is independently implemented and
+is the production path. None of these references is in mainline ggml-org
+llama.cpp. See the canonical [PROVENANCE.md](PROVENANCE.md).
 
 ### Differences from the Zyphra reference
 

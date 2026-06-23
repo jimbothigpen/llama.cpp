@@ -73,7 +73,7 @@ Status updated per layer landing. Initial state derived from
 |---|---|---|---|---|
 | Zyphra ZAYA1-8B model arch (`LLM_ARCH_ZAYA`) | model port (not phased) | **RELEASED** on gfx1150; compiles on gfx1102/1103 but runtime dead per Tensile/hipBLAS gap | **RELEASED** on RDNA3 (gfx1103); single-seq + multi-seq PPL within ±0.5% across F16/Q8_0/Q5_K_M/IQ4_XS-imat-guq5k | n/a (released; pure-graph port, no new kernels or types) |
 | TurboQuant KV (TURBOQ2/3/4_0) | 1 | **RELEASED** (gfx1150 first-class; gfx1102/1103 smoke-only via `HSA_OVERRIDE_GFX_VERSION=11.0.2`) | **RELEASED** (RDNA3 + RDNA3.5; cross-backend Δ ≤ +0.17%) | n/a (released) |
-| TurboQuant8 KV (TURBOQ8_0, source: buun) | 1 | **wired** — CPU vec_dot + CUDA/HIP fattn-vec instances on main (`b22b6492d`); 8-bit uniform-grid codec; quality bench pending (measure-first) | not present — no Vulkan kernel | P2 — follow CUDA/HIP measure-first; port after benchmark justifies it |
+| TurboQuant8 KV (TURBOQ8_0, source: buun) | 1 | **wired** — CPU vec_dot + CUDA/HIP fattn-vec instances on main (`b22b6492d`); 8-bit uniform-grid codec; quality bench pending (measure-first) | **landed** — K-cache port on main `efb8832cd` (get_rows + dequant + scalar-FA binding + gate); coopmat turboq8 FA = follow-on scope | Vulkan K-cache landed `efb8832cd`; coopmat FA follow-on pending |
 | WHT weight quants (WHT3_0) | 1 | **RELEASED** | **RELEASED** | n/a (released) |
 | WHT weight quants (WHT4_0) | 1 | **RELEASED** | **RELEASED** (cross-backend Δ +0.057%) | n/a (released) |
 | GGML_OP_TURBO_WHT | 1 | **RELEASED** | **RELEASED** | n/a (released) |
@@ -295,3 +295,7 @@ features; sweep regularly.
   DFlash S1 model loader noted.
   NLD Vulkan RELEASED confirmed (gfx1103 RADV, `7da3a8378`). Vulkan base-K
   MUL_MAT_ID fix (`c4da029f3`) recorded.
+- **v5** (2026-06-22) — TURBOQ8_0 Vulkan status updated: K-cache port landed on
+  main `efb8832cd` (get_rows + dequant + scalar-FA binding + gate; was "not present").
+  TURBOQ4_0 Vulkan verified accurate — `cd2d0224c` (coopmat1 FA path fix, no
+  stale limitation text to remove). provenance-docfix-2026-06-22 sweep.

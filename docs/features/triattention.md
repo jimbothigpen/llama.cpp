@@ -42,6 +42,24 @@
 
 ---
 
+## Provenance
+
+TriAttention is ported from the **domvox** fork
+([domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip),
+remote `domvox`), branch **`feature/triattention-scoring`** — verified
+2026-06-22 (`src/triattention*.c`, `src/triattention-hip.hip` present at synced
+ref `f9a308d0a`). The per-model `.tria` calibration file is generated locally by
+`llama-tria-gen`; there is no upstream weight or converter dependency.
+
+This fork's additions on top of domvox's CPU scorer: the GPU GQA scoring kernel
+(HIP + Vulkan, `head_dim ≤ 256`), the per-layer head_dim handling (`.tria` v4),
+the Gemma-4 ISWA SWA-layer capture, and the CPU-vs-GPU divergence fix.
+
+The **EpiCache** prefill-bounding path (compiled in under `LLAMA_EPICACHE`, in
+`src/triattention-runtime.*`) is this fork's own implementation, with algorithm
+reference **arXiv:2509.17396**; it is not part of domvox's TriAttention. See the
+canonical [PROVENANCE.md](PROVENANCE.md).
+
 ## Quick start
 
 ```bash

@@ -1,3 +1,8 @@
+// ZAYA1-8B model architecture (CCA + Mamba).
+// Provenance: this fork's ggml/llama.cpp backend (not in mainline). Built
+//   against the Zyphra reference implementations: Zyphra/vllm@zaya1-pr,
+//   Zyphra/transformers@zaya1, and Zyphra/llama.cpp@CCA (remote `zyphra`,
+//   src/models/zaya.cpp). See docs/features/zaya1.md.
 #include "models.h"
 
 #include "ggml.h"

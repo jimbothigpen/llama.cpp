@@ -2,6 +2,8 @@
 
 End-user documentation for fork-specific features. Each doc covers one feature family: what it is, how to use it, and how it works.
 
+> **Provenance:** [PROVENANCE.md](PROVENANCE.md) is the canonical map of where every ported feature comes from (code / converter / weights upstreams, tracked remote, and synced ref for drift-checking). Each feature doc also carries its own §Provenance section.
+
 ## KV Cache Quantization
 
 Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache-type-v`, no model changes required.

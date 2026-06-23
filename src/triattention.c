@@ -3,6 +3,11 @@
  *
  * Implements TRIA binary loader and per-KV-head scoring with GQA aggregation.
  * Standalone — compiles without ggml for testing, integrates via ggml_map_custom1.
+ *
+ * Provenance: ported from domvox (github.com/domvox/llama.cpp-turboquant-hip,
+ *   remote `domvox`, branch feature/triattention-scoring). The GPU GQA scorer,
+ *   per-layer head_dim handling, and Vulkan path are this fork's additions.
+ *   See docs/features/triattention.md.
  */
 
 #define _GNU_SOURCE  /* sincosf */

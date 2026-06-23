@@ -1,6 +1,12 @@
 /*
  * TurboQuant CUDA kernels for KV cache compression
- * Based on: arXiv 2504.19874 (ICLR 2026)
+ * Algorithm: arXiv 2504.19874 (ICLR 2026) + PolarQuant (arXiv 2502.02617)
+ *
+ * Provenance: ported from thetom (remote `thetom`,
+ *   github.com/TheTom/llama-cpp-turboquant, branch feature/turboquant-kv-cache;
+ *   upstream type names TURBO2/3/4_0). The TCQ variants here are from buun
+ *   (TURBO2/3_TCQ); the ROCm and Vulkan backends are this fork's.
+ *   See docs/features/turboquant-kv-base.md and docs/features/PROVENANCE.md.
  *
  * Implements GGML_TYPE_TURBOQ3_0 (3-bit PolarQuant, block size 32)
  * Constants, WHT rotation, quantize/dequantize device functions.
