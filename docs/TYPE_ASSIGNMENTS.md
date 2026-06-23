@@ -67,8 +67,10 @@ Source-fork canonical branch confirmed by recon `recon/06-thetom-branches.md` (2
 | 61 | `GGML_TYPE_TURBOQ3_0` | `TURBO3_0` (43) | 2-bit PolarQuant + 1-bit QJL |
 | 62 | `GGML_TYPE_TURBOQ4_0` | `TURBO4_0` (44) | 4-bit PolarQuant (default `TURBOQ4_USE_4BIT=1`; legacy 3-bit+QJL mode available via `TURBOQ4_USE_4BIT=0`) |
 | 63 | `GGML_TYPE_TURBOQ8_0` | buun `TURBO8_0` | 8-bit KV: FWHT + uniform 256-level grid (`centroid[i]=(i-127.5)/127.5`) + per-block absmax, no QJL, no PolarQuant codebook. CLI string `turboq8`; block `block_turboq8_0` = 130 bytes (fp16 absmax + 128×uint8), 8.125 bpw. CPU + CUDA/HIP fattn-vec; no Vulkan kernel yet. |
-| 64 | reserved | | future TurboQuant variants |
-| 65 | `GGML_TYPE_TURBOQ3_NATIVE` | turbo-tan `TQ3_0` (200) | 3-bit native KV (turbo-tan); see "Row-interleaved / packed variants" |
+| 64 | `GGML_TYPE_TURBOQ5_0` | ygg (TODO 250) | 5-bit KV: FWHT + uniform 32-level grid (`centroid[i]=(i-15.5)/15.5`) + per-block absmax, no QJL, no PolarQuant codebook. Extends `turboq8` design; `q5_0`-style index split (low nibble in `qs`, high 1 bit in `qh`). CLI string `turboq5`; block `block_turboq5_0` = 82 bytes, 5.125 bpw. CPU + CUDA/HIP fattn-vec; no Vulkan yet. See [features/turboquant-hibit-kv.md](features/turboquant-hibit-kv.md). |
+| 65 | `GGML_TYPE_TURBOQ6_0` | ygg (TODO 250) | 6-bit KV: FWHT + uniform 64-level grid (`centroid[i]=(i-31.5)/31.5`) + per-block absmax, no QJL, no PolarQuant codebook. Extends `turboq8` design; `q6_K`-style index split (low nibble in `qs`, high 2 bits in `qh`). CLI string `turboq6`; block `block_turboq6_0` = 98 bytes, 6.125 bpw. CPU + CUDA/HIP fattn-vec; no Vulkan yet. See [features/turboquant-hibit-kv.md](features/turboquant-hibit-kv.md). |
+
+> **Slot-65 reassignment (2026-06-22, TODO 250).** Slot 65 was previously a *doc-only* reservation for `GGML_TYPE_TURBOQ3_NATIVE` (turbo-tan `TQ3_0`, 200). That type was never landed in `ggml/include/ggml.h` (zero code references fork-wide), so slot 65 was free in the enum and is now assigned to `GGML_TYPE_TURBOQ6_0`. If turbo-tan `TQ3_0` is ported later it must take a fresh free slot, not 65.
 
 Symbol prefix: `turboq_` (kernels), `TURBOQ_` (constants). The `Q` suffix
 disambiguates from the `TURBO*_0` collisions in contributing forks.
@@ -192,12 +194,12 @@ Preserve ik_llama's R-suffix layout verbatim:
 Slots 200–201, 203–205, 207, 209, 215, 224–228, 231–255 are reserved for
 future packed-variant additions.
 
-**Turbo-tan's `TQ3_0 = 200`** (KV-cache only) is NOT preserved at 200 —
-slot 200 is in our packed-variant zone, and the type name suggests it's
-yet another KV variant best placed adjacent to the TurboQuant KV family.
-**Assignment:** `GGML_TYPE_TURBOQ3_NATIVE = 65` (last slot of TurboQuant
-zone), renaming to disambiguate from the WHT/TCQ families. If turbo-tan's
-TQ3_0 turns out to not be a TurboQuant variant at all, revisit.
+**Turbo-tan's `TQ3_0 = 200`** (KV-cache only) was tentatively earmarked for
+the TurboQuant KV zone, but the earlier draft assignment `GGML_TYPE_TURBOQ3_NATIVE = 65`
+was **never landed in `ggml/include/ggml.h`** (doc-only reservation, zero code references).
+Slot 65 has since been assigned to `GGML_TYPE_TURBOQ6_0` (2026-06-22, TODO 250). If turbo-tan's
+TQ3_0 is ported later it must take a **fresh free slot**, not 65 — and revisit whether it is a
+TurboQuant variant at all.
 
 ## llama_ftype assignments
 

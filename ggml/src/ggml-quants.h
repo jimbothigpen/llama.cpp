@@ -107,14 +107,20 @@ GGML_API void quantize_row_turboq2_0_ref(const float * GGML_RESTRICT x, block_tu
 GGML_API void quantize_row_turboq3_0_ref(const float * GGML_RESTRICT x, block_turboq3_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_turboq4_0_ref(const float * GGML_RESTRICT x, block_turboq4_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_turboq8_0_ref(const float * GGML_RESTRICT x, block_turboq8_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_turboq5_0_ref(const float * GGML_RESTRICT x, block_turboq5_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_turboq6_0_ref(const float * GGML_RESTRICT x, block_turboq6_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq2_0(const block_turboq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq3_0(const block_turboq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq4_0(const block_turboq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_turboq8_0(const block_turboq8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_turboq5_0(const block_turboq5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_turboq6_0(const block_turboq6_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_turboq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_turboq8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API size_t quantize_turboq5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API size_t quantize_turboq6_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 // TurboQuant TCQ KV cache (Trellis-Coded Quantization) — source: buun master TURBO[23]_TCQ
 GGML_API void quantize_row_turboq3_tcq_ref(const float * GGML_RESTRICT x, block_turboq3_tcq * GGML_RESTRICT y, int64_t k);

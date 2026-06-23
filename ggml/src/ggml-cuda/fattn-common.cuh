@@ -969,6 +969,92 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq8_0(
 
     return sum;
 }
+
+// TurboQuant5 KQ dot product: dequantize K from turboq5 blocks (5-bit uniform grid), dot with Q.
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq5_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_turboq5_0 * K_turbo = (const block_turboq5_0 *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;                   // always even
+            const int ib    = elem0 / QK_TURBOQ5;           // block index
+            const int j0    = elem0 % QK_TURBOQ5;           // always even
+
+            const float norm = __half2float(K_turbo[ib].norm);
+
+            float2 kv;
+            kv.x = turboq5_dequant_element(&K_turbo[ib], j0,     norm);
+            kv.y = turboq5_dequant_element(&K_turbo[ib], j0 + 1, norm);
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
+
+// TurboQuant6 KQ dot product: dequantize K from turboq6 blocks (6-bit uniform grid), dot with Q.
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_turboq6_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_turboq6_0 * K_turbo = (const block_turboq6_0 *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int k_KQ = k_KQ_0 + (threadIdx.x % nthreads)*cpy_ne + k_KQ_1;
+
+            const int elem0 = k_KQ * 2;                   // always even
+            const int ib    = elem0 / QK_TURBOQ6;           // block index
+            const int j0    = elem0 % QK_TURBOQ6;           // always even
+
+            const float norm = __half2float(K_turbo[ib].norm);
+
+            float2 kv;
+            kv.x = turboq6_dequant_element(&K_turbo[ib], j0,     norm);
+            kv.y = turboq6_dequant_element(&K_turbo[ib], j0 + 1, norm);
+
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            const half2 qv = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            ggml_cuda_mad(sum, make_float2(kv.x, kv.y), __half22float2(qv));
+#else
+            const float2 qv = ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += kv.x * qv.x + kv.y * qv.y;
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
 // TURBOQ2_TCQ KQ dot product: 2-bit Trellis-Coded Quantization (k=2, L=8, 256 states).
 // Decode of element t: 8-bit sliding window starting at bit t*2; state indexes a 256-entry codebook.
 // Block size QK_TURBOQ2_TCQ = 128 elements; layout = norm(fp16) + qs[33] bitstream.
@@ -1343,6 +1429,100 @@ static __device__ __forceinline__ void dequantize_V_turboq8_0(const void * __res
     }
 }
 
+// TurboQuant5 V dequantize: extract `ne` float/half values at position i0.
+// 5-bit, block size 128. Uniform grid decode via turboq5_dequant_element.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_turboq5_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_turboq5_0 * x = (const block_turboq5_0 *) vx;
+
+    const int64_t ib   = i0 / QK_TURBOQ5;
+    const int     j0   = i0 % QK_TURBOQ5;
+    const float   norm = __half2float(x[ib].norm);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    if constexpr (ne == 4) {
+        const float v0 = turboq5_dequant_element(&x[ib], j0,   norm);
+        const float v1 = turboq5_dequant_element(&x[ib], j0+1, norm);
+        const float v2 = turboq5_dequant_element(&x[ib], j0+2, norm);
+        const float v3 = turboq5_dequant_element(&x[ib], j0+3, norm);
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+            ((half2 *) dst)[1] = make_half2(__float2half(v2), __float2half(v3));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *) dst)[0] = make_float2(v0, v1);
+            ((float2 *) dst)[1] = make_float2(v2, v3);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    } else { // ne == 2
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            const float v0 = turboq5_dequant_element(&x[ib], j0,   norm);
+            const float v1 = turboq5_dequant_element(&x[ib], j0+1, norm);
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[0] = turboq5_dequant_element(&x[ib], j0,   norm);
+            ((float *) dst)[1] = turboq5_dequant_element(&x[ib], j0+1, norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    }
+}
+
+// TurboQuant6 V dequantize: extract `ne` float/half values at position i0.
+// 6-bit, block size 128. Uniform grid decode via turboq6_dequant_element.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_turboq6_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_turboq6_0 * x = (const block_turboq6_0 *) vx;
+
+    const int64_t ib   = i0 / QK_TURBOQ6;
+    const int     j0   = i0 % QK_TURBOQ6;
+    const float   norm = __half2float(x[ib].norm);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    if constexpr (ne == 4) {
+        const float v0 = turboq6_dequant_element(&x[ib], j0,   norm);
+        const float v1 = turboq6_dequant_element(&x[ib], j0+1, norm);
+        const float v2 = turboq6_dequant_element(&x[ib], j0+2, norm);
+        const float v3 = turboq6_dequant_element(&x[ib], j0+3, norm);
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+            ((half2 *) dst)[1] = make_half2(__float2half(v2), __float2half(v3));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *) dst)[0] = make_float2(v0, v1);
+            ((float2 *) dst)[1] = make_float2(v2, v3);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    } else { // ne == 2
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            const float v0 = turboq6_dequant_element(&x[ib], j0,   norm);
+            const float v1 = turboq6_dequant_element(&x[ib], j0+1, norm);
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[0] = turboq6_dequant_element(&x[ib], j0,   norm);
+            ((float *) dst)[1] = turboq6_dequant_element(&x[ib], j0+1, norm);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    }
+}
+
 // TURBOQ2_TCQ V dequantize: 2-bit sliding-window trellis decode.
 // Block size QK_TURBOQ2_TCQ = 128. Bit position of element t = t*2.
 // _cb variant takes explicit codebook pointer (port buun 692cffde1). The thin
@@ -1505,6 +1685,10 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_turboq4_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ8_0) {
         return vec_dot_fattn_vec_KQ_turboq8_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TURBOQ5_0) {
+        return vec_dot_fattn_vec_KQ_turboq5_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TURBOQ6_0) {
+        return vec_dot_fattn_vec_KQ_turboq6_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ2_TCQ) {
         return vec_dot_fattn_vec_KQ_turboq2_tcq<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_TURBOQ3_TCQ) {
@@ -1547,6 +1731,10 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_turboq4_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ8_0) {
         return dequantize_V_turboq8_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TURBOQ5_0) {
+        return dequantize_V_turboq5_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TURBOQ6_0) {
+        return dequantize_V_turboq6_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ2_TCQ) {
         return dequantize_V_turboq2_tcq<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ3_TCQ) {

@@ -415,6 +415,26 @@ static __device__ __forceinline__ float turboq8_dequant_element(
     return ((float)x->qs[j] - 127.5f) * (1.0f / 127.5f) * norm;
 }
 
+// ---- TURBOQ5: 5-bit uniform-grid decode (centroid[i]=(i-15.5)/15.5; per-block absmax in norm) ----
+// Index split: low 4 bits in qs (nibble), high 1 bit in qh. value = (idx-15.5)/15.5 * norm.
+static __device__ __forceinline__ float turboq5_dequant_element(
+        const block_turboq5_0 * __restrict__ x, int j, float norm) {
+    const uint8_t lo  = (x->qs[j / 2] >> ((j & 1) * 4)) & 0xF;
+    const uint8_t hi  = (x->qh[j / 8] >> (j & 7)) & 0x1;
+    const int     idx = lo | (hi << 4);
+    return ((float)idx - 15.5f) * (1.0f / 15.5f) * norm;
+}
+
+// ---- TURBOQ6: 6-bit uniform-grid decode (centroid[i]=(i-31.5)/31.5; per-block absmax in norm) ----
+// Index split: low 4 bits in qs (nibble), high 2 bits in qh. value = (idx-31.5)/31.5 * norm.
+static __device__ __forceinline__ float turboq6_dequant_element(
+        const block_turboq6_0 * __restrict__ x, int j, float norm) {
+    const uint8_t lo  = (x->qs[j / 2] >> ((j & 1) * 4)) & 0xF;
+    const uint8_t hi  = (x->qh[j / 4] >> ((j & 3) * 2)) & 0x3;
+    const int     idx = lo | (hi << 4);
+    return ((float)idx - 31.5f) * (1.0f / 31.5f) * norm;
+}
+
 // ---- Nearest 3-bit centroid index ----
 
 static __device__ __forceinline__ uint8_t turbo_nearest_centroid_3bit(float val) {
