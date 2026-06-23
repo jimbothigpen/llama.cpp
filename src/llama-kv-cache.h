@@ -263,8 +263,6 @@ public:
     // Returns true on success; false if unsupported (multi-stream) or invalid input.
     bool triattention_compact(const std::vector<uint32_t> & keep_positions);
 
-    ggml_tensor * get_turbo_innerq_scale_inv() const;
-
     //
     // graph_build API
     //
@@ -401,11 +399,6 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
-
-    // Per-channel InnerQ scale_inv tensor: F32[INNERQ_MAX_CHANNELS].
-    // Non-null only when the K or V cache type is a TURBOQ_INNERQ variant.
-    // Lives in the same ggml context/buffer as the K/V tensors.
-    ggml_tensor * turbo_innerq_scale_inv = nullptr;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -546,8 +539,6 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
-
-    ggml_tensor * get_turbo_innerq_scale_inv() const;
 
 private:
     llama_memory_status status;

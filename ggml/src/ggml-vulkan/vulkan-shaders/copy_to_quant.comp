@@ -907,9 +907,8 @@ const float TCQ3_TS2[128] = float[128](
     -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
 );
 const float TCQ3_TINV = 0.08838834764831845;  // 1 / sqrt(128)
-// Norm correction: matches CUDA d_tcq_norm_alpha_v. The CUDA K-side uses a
-// calibrated d_tcq_norm_alpha; without InnerQ calibration on Vulkan we apply
-// the V default to both K and V (see commit 37a02f4abe).
+// Norm correction: matches CUDA d_tcq_norm_alpha_v. Vulkan applies the V default
+// to both K and V (see commit 37a02f4abe).
 const float TCQ3_NORM_ALPHA = 1.04;
 
 shared float wht_tcq3[128];

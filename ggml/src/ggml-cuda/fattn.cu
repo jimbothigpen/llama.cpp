@@ -5,13 +5,6 @@
 #include "fattn-vec.cuh"
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
-#include "turbo-innerq.cuh"
-
-// InnerQ per-channel scale_inv (identity until calibration finalizes).
-// Accessed cross-TU via extern __device__ in turbo-innerq-buun-stubs.cu when
-// GGML_INNERQ_FA_DEVICE_SCALES is defined (requires -fgpu-rdc, Phase X-4).
-static __device__ float d_innerq_channel_scale_inv_fattn[INNERQ_MAX_CHANNELS];
-
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;

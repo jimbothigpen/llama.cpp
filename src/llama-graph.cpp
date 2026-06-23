@@ -2571,61 +2571,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // <Q_rot, K_rot> = <Q, K> to hold and produce correct attention scores.
     if (k->type == GGML_TYPE_TURBOQ2_0 || k->type == GGML_TYPE_TURBOQ3_0 || k->type == GGML_TYPE_TURBOQ4_0 || k->type == GGML_TYPE_TURBOQ8_0 || k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ) {
         if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-        // InnerQ×TCQ hybrid: for TCQ K types, when InnerQ is ACTIVE the TCQ encode
-        // pre-scales K[j] by d_innerq_scale[j] before FWHT; compensate by multiplying Q[j] by
-        // scale_inv[j] before Q's WHT rotation so that dot(Q_rot, K_rot) = dot(Q, K).
-        // §-FLAG-B (batch2 2026-06-06): the innerq WHT variant must be engaged ONLY when InnerQ
-        // is actually active. Relying on a "scale_inv == 1.0" tensor for the default path is
-        // fragile (the buffer is cleared to 0 by ggml_backend_buffer_clear; if the 1.0 init does
-        // not land on the exact graph tensor, Q is zeroed → ~2x PPL). Gating on TURBO_INNERQ (the
-        // same env that arms the encode-side d_innerq_scale) makes the default path call plain
-        // ggml_turbo_wht — byte-identical to the non-hybrid baseline (verified: no regression).
-        // TODO 236 (2026-06-18): the env gate is INSUFFICIENT. When TURBO_INNERQ is set but
-        // calibration auto-disables (channels already balanced, turbo-quant.cuh:276) or has not
-        // yet finalized, turbo_innerq_publish() is never called → the scale_inv tensor is never
-        // synced and is zeroed by the per-chunk ggml_backend_buffer_clear → Q×0 → ~2.5x PPL
-        // (measured 7.07→15.6 on Qwen3.5-9B turboq3_tcq, TURBO_INNERQ=64). Gate additionally on
-        // g_innerq_finalized — set true ONLY by a successful publish, never on auto-disable — so
-        // the Q-rotation reads the real per-channel scale_inv (and K is actually pre-scaled) or
-        // falls back to plain ggml_turbo_wht (K unscaled, exact baseline).
-        const char * iq_env   = getenv("TURBO_INNERQ");
-        bool         innerq_on = iq_env && atoi(iq_env) != 0;
-#ifdef GGML_USE_CUDA
-        extern bool g_innerq_finalized;
-        innerq_on = innerq_on && g_innerq_finalized;
-#else
-        innerq_on = false;
-#endif
-        const bool   k_is_tcq  = (k->type == GGML_TYPE_TURBOQ2_TCQ || k->type == GGML_TYPE_TURBOQ3_TCQ);
-        ggml_tensor * iq_scale_inv = (k_is_tcq && innerq_on) ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
-        if (iq_scale_inv) {
-            q = ggml_turbo_wht_innerq(ctx0, q, 0, iq_scale_inv);
-        } else {
-            q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
-        }
-    }
-
-    // Calibrated OSCAR INT2 (InnerQ-fused, Track 1A / TODO 243): unlike Turbo, OSCAR rotates Q with the
-    // Hadamard INSIDE the FA kernel, so here we apply ONLY the per-channel inverse calibration scale
-    // (no WHT). The encode path stores K_enc = quant(H·diag(s)·K); multiplying Q by scale_inv = 1/s
-    // (per channel, before the in-kernel H·Q) yields dot(H·diag(1/s)·Q, H·diag(s)·K) = dot(Q,K).
-    // Gated on OSCAR_INNERQ/TURBO_INNERQ (the same env that arms the encode-side d_innerq_scale) so the
-    // default (uncalibrated) OSCAR path is byte-identical and never depends on a "ones" tensor (§-FLAG-B).
-    // Supports head_dim ∈ {128, 256} (<= INNERQ_MAX_CHANNELS); other head dims keep plain OSCAR.
-    if (k->type == GGML_TYPE_KV_OSCAR_INT2) {
-        const char * iq_env    = getenv("TURBO_INNERQ");
-        if (!iq_env || atoi(iq_env) == 0) { iq_env = getenv("OSCAR_INNERQ"); }
-        const bool   innerq_on = iq_env && atoi(iq_env) != 0;
-        ggml_tensor * iq_scale_inv = innerq_on ? mctx_cur->get_turbo_innerq_scale_inv() : nullptr;
-        // scale_inv is sized INNERQ_MAX_CHANNELS (256); view its first head_dim entries so the per-channel
-        // multiply aligns with Q's head dimension (OSCAR calibration supports head_dim ∈ {128, 256}).
-        if (iq_scale_inv && q->ne[0] <= iq_scale_inv->ne[0]) {
-            ggml_tensor * si = (q->ne[0] == iq_scale_inv->ne[0])
-                ? iq_scale_inv
-                : ggml_view_1d(ctx0, iq_scale_inv, q->ne[0], 0);
-            if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-            q = ggml_mul(ctx0, q, si); // broadcast [head_dim] over [head_dim, n_head, n_tokens]
-        }
+        q = ggml_turbo_wht(ctx0, q, 0);  // 0 = forward
     }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, k_res, oscar_res_window);
