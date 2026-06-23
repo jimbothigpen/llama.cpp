@@ -1,10 +1,10 @@
 # WQ3 TCQ — 3-bit Trellis-Coded Weight Quant (`WQ3_TCQ`)
 
-**Status: Phase 2 of 4 complete (quantizer + CPU dequant + imatrix).** The CUDA runtime (Ph1) plus the
-CPU Viterbi **encoder**, CPU **dequant**, `llama-quantize` ftype, codebook generator and GGUF metadata
-writer (Ph2) are in-tree. A real WQ3 GGUF can now be produced and decodes coherently on **both CPU and
-CUDA** with bit-identical codebook parity (validated on Qwen3.5-2B; see [Validation](#validation)).
-HIP/ROCm and Vulkan are Phases 3–4 (see the port plan).
+**Status: Phase 3 of 4 complete (quantizer + CPU dequant + imatrix + HIP/ROCm).** The CUDA runtime (Ph1)
+plus the CPU Viterbi **encoder**, CPU **dequant**, `llama-quantize` ftype, codebook generator and GGUF
+metadata writer (Ph2), and the **HIP/ROCm runtime** (Ph3) are in-tree. A real WQ3 GGUF can now be
+produced and decodes coherently on **CPU, CUDA, and HIP/ROCm (gfx1150)** with bit-identical codebook
+parity (validated on Qwen3.5-2B; see [Validation](#validation)). Vulkan is Phase 4 (see the port plan).
 
 > **Production trellis = k=3, L=10, 1024 states** (the older `tcq_rshift.py` prototype + some stale
 > comments say L=9/512; the authoritative CUDA decode uses L=10/1024 — that is what the encoder targets).
@@ -23,7 +23,7 @@ credit: TheTom (TurboQuant TCQ). See `PROVENANCE.md`.
 | Block layout | reuses `block_turboq3_tcq` — 52 bytes / 128 values, **3.25 bpv** (~4.9× vs fp16) |
 | Quantizes | **weights** (FFN/attention projections), not KV cache |
 | Dequant | **CPU + CUDA** (`to_float`/`from_float_ref` wired in Ph2; CUDA native + cuBLAS paths) |
-| Backends | CUDA ✅ (Ph1) · CPU ✅ (Ph2) · HIP ⏳ (Ph3) · Vulkan ⏳ (Ph4) |
+| Backends | CUDA ✅ (Ph1) · CPU ✅ (Ph2) · HIP/ROCm ✅ (Ph3, gfx1150) · Vulkan ⏳ (Ph4) |
 | CLI ftype | **`WQ3_TCQ`** = `LLAMA_FTYPE_MOSTLY_WQ3_TCQ` (59) — `llama-quantize … WQ3_TCQ` |
 
 ## Mechanism
@@ -109,18 +109,40 @@ End-to-end on **Qwen3.5-2B** (ai02, sm_75) — see scratch `VALIDATION-RESULTS.m
 - **Parity:** CUDA-loaded codebook amax (0.30662) == hardcoded table; CPU-C dequant vs independent
   Python reference **max-abs-err = 1.19e-7** (1 fp32 ULP). CPU↔CUDA difference bounded only by the CUDA
   fast kernel's fp16 store.
-- PPL deferred (non-blocking; Kaggle-T4 follow-up).
+
+**Phase 3 (HIP/ROCm, gfx1150 / ai00):**
+- **Build:** full ggml-hip backend, ROCm 7.2.4, `-DAMDGPU_TARGETS=gfx1150`, 0 errors. The `.cu`/`mmq*.cu`
+  globs auto-include `wq3-tcq.cu` + `mmq-instance-wq3_tcq.cu`; dispatch is the shared `ggml-cuda.cu`
+  (`is_tq_weight`/WQ3 guards), so no CMake/dispatch edits were needed — only source hipify shims.
+- **HIP decode** (`-ngl 99 -fa on --no-mmap -st`) **coherent** (correct "Paris", no NaN/abort), native
+  WQ3 mmvq path, ~52 t/s gen. Runtime log confirms codebook (amax 0.30662) + signs (seed 42) on device.
+- **PPL parity (15 chunks, wiki.test.raw, c=4096):** HIP/gfx1150 = **13.5502 ± 0.22144**; pure-CPU dequant
+  path cumulative tracks it bit-for-bit (chunk-1 cumulative CPU 16.0932 vs HIP 16.0681, **Δ0.16% ≪ 1σ**),
+  confirming the HIP decode is numerically equivalent to the CPU/CUDA codebook+signs+trellis math.
 
 ## Limitations
 
 - **MMQ batched path** asserts `ne12 == 1 && ne13 == 1` (batched src1 not implemented).
 - **CUDA get_rows** does not cover WQ3 (nor WHT3/4_0) — these weight quants aren't used with get_rows;
   `test-backend-ops` therefore can't sweep them (it also lacks the model-load codebook upload).
-- HIP/ROCm + Vulkan dequant pending Phases 3–4.
+- Vulkan dequant pending Phase 4.
 
 ## Port plan
 
-Multi-backend roadmap (Ph3 HIP/ROCm, Ph4 Vulkan) tracked in the orchestrator's `WQ3-PORT-PLAN.md`.
-Phase 2 delivered the quantizer + CPU dequant + imatrix decision and ran the deferred Ph1 smoke
-(quantize + dual-backend coherent decode + dequant parity), plus a minimal Ph1 CUDA dispatch fix
-(WHT-only `mul_mat_vec_tq` branch; WQ3 multi-token now uses dequant→cuBLAS).
+Multi-backend roadmap (Ph3 HIP/ROCm done, Ph4 Vulkan pending) tracked in the orchestrator's
+`WQ3-PORT-PLAN.md`. Phase 2 delivered the quantizer + CPU dequant + imatrix decision and ran the
+deferred Ph1 smoke (quantize + dual-backend coherent decode + dequant parity), plus a minimal Ph1 CUDA
+dispatch fix (WHT-only `mul_mat_vec_tq` branch; WQ3 multi-token now uses dequant→cuBLAS).
+
+**Phase 3 (HIP/ROCm)** was a mechanical hipify — the kernels use no WMMA/mma/tensor-core, only
+dp4a/MAD + `__shfl`. Three source shims were required (no CMake/dispatch changes):
+1. `__shfl_sync`/`__shfl_xor_sync` calls needed the explicit 4th `width` arg (`WARP_SIZE`) — the
+   `vendors/hip.h` macros expand to 4-param `__shfl(...)`/`__shfl_xor(...)`, so the WQ3 3-arg calls
+   failed to compile under hipcc (the rest of ggml-cuda already passes `width` for this reason).
+2. Two event aliases added to `vendors/hip.h` (`cudaEventDefault`→`hipEventDefault`,
+   `cudaEventElapsedTime`→`hipEventElapsedTime`) for the profiling scaffolding.
+3. The `wq3_tcq_mul_u32` NVPTX fast path (`asm("mad.lo.u32 …")`) was gated `&& !defined(GGML_USE_HIP)`
+   — `vendors/hip.h` defines `__CUDA_ARCH__`, so the PTX reached `amdgcn-link` and failed as an invalid
+   instruction; AMD/host now take the portable `x*c` (which lowers to the same instruction).
+Warp-size correctness: the 128-wide FWHT butterfly assumes 32-lane warps, which matches RDNA3.5
+wave32 (gfx1150/gfx1103 default; no `-mwavefrontsize64`).

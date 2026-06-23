@@ -554,7 +554,7 @@ float wq3_fwht128(float val, float * smem) {
     // Intra-warp butterfly: strides 1, 2, 4, 8, 16 via __shfl_xor_sync
     #pragma unroll
     for (int h = 1; h <= 16; h *= 2) {
-        const float other = __shfl_xor_sync(0xFFFFFFFF, val, h);
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, h, WARP_SIZE);
         val = (tid & h) ? (other - val) : (val + other);
     }
 
@@ -577,7 +577,7 @@ float wq3_fwht128(float val, float * smem) {
 static __device__ __forceinline__
 void wq3_store_half2(float val, half * dst) {
     const int tid = threadIdx.x & 127;
-    const float neighbor = __shfl_xor_sync(0xFFFFFFFF, val, 1);
+    const float neighbor = __shfl_xor_sync(0xFFFFFFFF, val, 1, WARP_SIZE);
     if ((tid & 1) == 0) {
         *((half2 *)(dst + tid)) = __floats2half2_rn(val, neighbor);
     }
@@ -770,11 +770,11 @@ static __global__ void k_wq3_tcq_mmvq_v2(
         const uint32_t * blk_u32 = reinterpret_cast<const uint32_t *>(blk);
         const uint32_t own_pair = (lane < 13) ? blk_u32[lane] : 0u;
 
-        const uint16_t norm_bits = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair, 0) & 0xFFFFu);
+        const uint16_t norm_bits = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair, 0, WARP_SIZE) & 0xFFFFu);
         const float    norm      = __half2float(__ushort_as_half(norm_bits)) * cb_scale;
 
-        const uint32_t p_lo = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_lo);
-        const uint32_t p_hi = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_hi);
+        const uint32_t p_lo = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_lo, WARP_SIZE);
+        const uint32_t p_hi = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_hi, WARP_SIZE);
         const uint32_t w_lo = (p_lo >> pair_bit_lo) & 0xFFFFu;
         const uint32_t w_hi = (p_hi >> pair_bit_hi) & 0xFFFFu;
         const uint32_t merged = (w_hi << 16) | w_lo;
@@ -860,15 +860,15 @@ static __global__ void k_wq3_tcq_mmvq_v2_rowpair(
         const uint32_t own_pair0 = (lane < 13) ? blk0_u32[lane] : 0u;
         const uint32_t own_pair1 = (lane < 13) ? blk1_u32[lane] : 0u;
 
-        const uint16_t norm_bits0 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair0, 0) & 0xFFFFu);
-        const uint16_t norm_bits1 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair1, 0) & 0xFFFFu);
+        const uint16_t norm_bits0 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair0, 0, WARP_SIZE) & 0xFFFFu);
+        const uint16_t norm_bits1 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair1, 0, WARP_SIZE) & 0xFFFFu);
         const float    norm0      = __half2float(__ushort_as_half(norm_bits0)) * cb_scale;
         const float    norm1      = __half2float(__ushort_as_half(norm_bits1)) * cb_scale;
 
-        const uint32_t p0_lo = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_lo);
-        const uint32_t p0_hi = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_hi);
-        const uint32_t p1_lo = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_lo);
-        const uint32_t p1_hi = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_hi);
+        const uint32_t p0_lo = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_lo, WARP_SIZE);
+        const uint32_t p0_hi = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_hi, WARP_SIZE);
+        const uint32_t p1_lo = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_lo, WARP_SIZE);
+        const uint32_t p1_hi = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_hi, WARP_SIZE);
         const uint32_t w0_lo = (p0_lo >> pair_bit_lo) & 0xFFFFu;
         const uint32_t w0_hi = (p0_hi >> pair_bit_hi) & 0xFFFFu;
         const uint32_t w1_lo = (p1_lo >> pair_bit_lo) & 0xFFFFu;
@@ -974,15 +974,15 @@ static __global__ void k_wq3_tcq_mmvq_q8_1_rowpair(
         const uint32_t own_pair0 = (lane < 13) ? blk0_u32[lane] : 0u;
         const uint32_t own_pair1 = (lane < 13) ? blk1_u32[lane] : 0u;
 
-        const uint16_t norm_bits0 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair0, 0) & 0xFFFFu);
-        const uint16_t norm_bits1 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair1, 0) & 0xFFFFu);
+        const uint16_t norm_bits0 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair0, 0, WARP_SIZE) & 0xFFFFu);
+        const uint16_t norm_bits1 = (uint16_t)(__shfl_sync(0xFFFFFFFFu, own_pair1, 0, WARP_SIZE) & 0xFFFFu);
         const float    norm0      = __half2float(__ushort_as_half(norm_bits0)) * cb_scale;
         const float    norm1      = __half2float(__ushort_as_half(norm_bits1)) * cb_scale;
 
-        const uint32_t p0_lo = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_lo);
-        const uint32_t p0_hi = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_hi);
-        const uint32_t p1_lo = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_lo);
-        const uint32_t p1_hi = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_hi);
+        const uint32_t p0_lo = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_lo, WARP_SIZE);
+        const uint32_t p0_hi = __shfl_sync(0xFFFFFFFFu, own_pair0, pair_src_hi, WARP_SIZE);
+        const uint32_t p1_lo = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_lo, WARP_SIZE);
+        const uint32_t p1_hi = __shfl_sync(0xFFFFFFFFu, own_pair1, pair_src_hi, WARP_SIZE);
         const uint32_t w0_lo = (p0_lo >> pair_bit_lo) & 0xFFFFu;
         const uint32_t w0_hi = (p0_hi >> pair_bit_hi) & 0xFFFFu;
         const uint32_t w1_lo = (p1_lo >> pair_bit_lo) & 0xFFFFu;
@@ -1100,19 +1100,19 @@ static __global__ void k_wq3_tcq_mmvq_q8_1_dual_rowpair_glu(
         const uint32_t gate_pair0 = (lane < 13) ? gate0_u32[lane] : 0u;
         const uint32_t gate_pair1 = (lane < 13) ? gate1_u32[lane] : 0u;
 
-        const float up_norm0 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, up_pair0, 0) & 0xFFFFu))) * cb_scale;
-        const float up_norm1 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, up_pair1, 0) & 0xFFFFu))) * cb_scale;
-        const float gate_norm0 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, gate_pair0, 0) & 0xFFFFu))) * cb_scale;
-        const float gate_norm1 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, gate_pair1, 0) & 0xFFFFu))) * cb_scale;
+        const float up_norm0 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, up_pair0, 0, WARP_SIZE) & 0xFFFFu))) * cb_scale;
+        const float up_norm1 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, up_pair1, 0, WARP_SIZE) & 0xFFFFu))) * cb_scale;
+        const float gate_norm0 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, gate_pair0, 0, WARP_SIZE) & 0xFFFFu))) * cb_scale;
+        const float gate_norm1 = __half2float(__ushort_as_half((uint16_t)(__shfl_sync(0xFFFFFFFFu, gate_pair1, 0, WARP_SIZE) & 0xFFFFu))) * cb_scale;
 
-        const uint32_t up0_lo = __shfl_sync(0xFFFFFFFFu, up_pair0, pair_src_lo);
-        const uint32_t up0_hi = __shfl_sync(0xFFFFFFFFu, up_pair0, pair_src_hi);
-        const uint32_t up1_lo = __shfl_sync(0xFFFFFFFFu, up_pair1, pair_src_lo);
-        const uint32_t up1_hi = __shfl_sync(0xFFFFFFFFu, up_pair1, pair_src_hi);
-        const uint32_t gate0_lo = __shfl_sync(0xFFFFFFFFu, gate_pair0, pair_src_lo);
-        const uint32_t gate0_hi = __shfl_sync(0xFFFFFFFFu, gate_pair0, pair_src_hi);
-        const uint32_t gate1_lo = __shfl_sync(0xFFFFFFFFu, gate_pair1, pair_src_lo);
-        const uint32_t gate1_hi = __shfl_sync(0xFFFFFFFFu, gate_pair1, pair_src_hi);
+        const uint32_t up0_lo = __shfl_sync(0xFFFFFFFFu, up_pair0, pair_src_lo, WARP_SIZE);
+        const uint32_t up0_hi = __shfl_sync(0xFFFFFFFFu, up_pair0, pair_src_hi, WARP_SIZE);
+        const uint32_t up1_lo = __shfl_sync(0xFFFFFFFFu, up_pair1, pair_src_lo, WARP_SIZE);
+        const uint32_t up1_hi = __shfl_sync(0xFFFFFFFFu, up_pair1, pair_src_hi, WARP_SIZE);
+        const uint32_t gate0_lo = __shfl_sync(0xFFFFFFFFu, gate_pair0, pair_src_lo, WARP_SIZE);
+        const uint32_t gate0_hi = __shfl_sync(0xFFFFFFFFu, gate_pair0, pair_src_hi, WARP_SIZE);
+        const uint32_t gate1_lo = __shfl_sync(0xFFFFFFFFu, gate_pair1, pair_src_lo, WARP_SIZE);
+        const uint32_t gate1_hi = __shfl_sync(0xFFFFFFFFu, gate_pair1, pair_src_hi, WARP_SIZE);
 
         const uint32_t up_merged0 = (((up0_hi >> pair_bit_hi) & 0xFFFFu) << 16) | ((up0_lo >> pair_bit_lo) & 0xFFFFu);
         const uint32_t up_merged1 = (((up1_hi >> pair_bit_hi) & 0xFFFFu) << 16) | ((up1_lo >> pair_bit_lo) & 0xFFFFu);
@@ -1243,7 +1243,10 @@ static __global__ void k_wq3_tcq_mmvq_q8_1_rowpair_cached(
 }
 
 static __device__ __forceinline__ uint32_t wq3_tcq_mul_u32(uint32_t x, uint32_t c) {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) && !defined(GGML_USE_HIP)
+    // NVPTX-only fast path: mad.lo.u32 == x*c (low 32 bits). Under HIP, __CUDA_ARCH__
+    // is defined too (vendors/hip.h), but this PTX is not valid amdgcn — fall through
+    // to the portable multiply, which lowers to the same instruction on AMD.
     uint32_t r;
     asm ("mad.lo.u32 %0, %1, %2, 0;" : "=r"(r) : "r"(x), "r"(c));
     return r;
@@ -1307,8 +1310,8 @@ static __device__ __forceinline__ uint32_t wq3_tcq_load_merged_words(
     } else {
         const uint32_t * blk_u32 = reinterpret_cast<const uint32_t *>(blk);
         const uint32_t own_pair = (lane < 13) ? blk_u32[lane] : 0u;
-        const uint32_t p_lo = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_lo);
-        const uint32_t p_hi = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_hi);
+        const uint32_t p_lo = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_lo, WARP_SIZE);
+        const uint32_t p_hi = __shfl_sync(0xFFFFFFFFu, own_pair, pair_src_hi, WARP_SIZE);
         const uint32_t w_lo = (p_lo >> pair_bit_lo) & 0xFFFFu;
         const uint32_t w_hi = (p_hi >> pair_bit_hi) & 0xFFFFu;
         return (w_hi << 16) | w_lo;
