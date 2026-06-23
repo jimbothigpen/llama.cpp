@@ -1267,15 +1267,6 @@ static __global__ void k_set_rows_turboq5(
     x[j] = src_row[i_blk * QK_TURBOQ5 + j];
     __syncthreads();
 
-    if (d_innerq_calibrating) {
-        atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
-        if (j == 0) atomicAdd(&d_innerq_count, 1);
-    }
-    if (d_innerq_active) {
-        x[j] *= d_innerq_scale[j];
-    }
-    __syncthreads();
-
     constexpr int n_warps = 128 / WARP_SIZE;
     __shared__ float warp_accum[n_warps];
     float v  = x[j];
@@ -1384,8 +1375,6 @@ static void set_rows_cuda_turboq5(
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
 
-    turbo_innerq_check_finalize(QK_TURBOQ5, ne00);
-
     if (n_blocks > 0) {
         const int64_t ne_total = n_blocks * ne01 * ne02 * ne03;
         k_set_rows_turboq5<idx_t><<<(int)ne_total, 128, 0, stream>>>(
@@ -1442,15 +1431,6 @@ static __global__ void k_set_rows_turboq6(
 
     __shared__ float x[128];
     x[j] = src_row[i_blk * QK_TURBOQ6 + j];
-    __syncthreads();
-
-    if (d_innerq_calibrating) {
-        atomicAdd(&d_innerq_sq_accum[j], x[j] * x[j]);
-        if (j == 0) atomicAdd(&d_innerq_count, 1);
-    }
-    if (d_innerq_active) {
-        x[j] *= d_innerq_scale[j];
-    }
     __syncthreads();
 
     constexpr int n_warps = 128 / WARP_SIZE;
@@ -1560,8 +1540,6 @@ static void set_rows_cuda_turboq6(
     const int64_t s10 = nb10/sizeof(idx_t);
     const int64_t s11 = nb11/sizeof(idx_t);
     const int64_t s12 = nb12/sizeof(idx_t);
-
-    turbo_innerq_check_finalize(QK_TURBOQ6, ne00);
 
     if (n_blocks > 0) {
         const int64_t ne_total = n_blocks * ne01 * ne02 * ne03;
