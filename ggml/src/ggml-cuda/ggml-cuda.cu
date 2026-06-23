@@ -2594,8 +2594,12 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    src0->view_src;
 
     const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
+    // Wider WHT weight types (5/6/8-bit) have no fused mmvq/mmq kernel yet; they use the
+    // dequant→cuBLAS path only. Keep them out of mmvq (its default branch would otherwise
+    // accept them and abort in mul_mat_vec_q_switch_type).
+    const bool is_wht_dequant = (src0->type == GGML_TYPE_WHT5_0 || src0->type == GGML_TYPE_WHT6_0 || src0->type == GGML_TYPE_WHT8_0);
     const bool is_iqk_mmvq = ggml_cuda_iqk_mmvq_supported(src0->type);
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_iqk_mmvq &&
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_wht_dequant && !is_iqk_mmvq &&
                              src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 
@@ -2640,6 +2644,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels)
     const bool is_tq_weight = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
+    // Wider WHT weight types (5/6/8-bit) now have a fused single-token mmvq kernel
+    // (vec_dot decode-then-MAC, see mmvq.cu). They are admitted to mmvq for decode /
+    // small-batch (ne[1] <= MMVQ_MAX_BATCH_SIZE). They have NO mmq kernel, so keep them
+    // out of mmq → prefill (ne[1] > MMVQ_MAX_BATCH_SIZE) falls through to cuBLAS-dequant.
+    const bool is_wht_no_mmq = (src0->type == GGML_TYPE_WHT5_0 || src0->type == GGML_TYPE_WHT6_0 || src0->type == GGML_TYPE_WHT8_0);
     // IQK base weight types: unconditional guard keeps them out of mmvq/mmq for ALL batch sizes.
     // mul_mat_vec_q_switch_type has no IQK case → GGML_ABORT for batch 2-8 without this guard.
     const bool is_iqk_weight = ggml_cuda_iqk_mmvq_supported(src0->type);
@@ -2650,7 +2659,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_iqk_weight
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
-    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_iqk_weight
+    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear && !is_tq_weight && !is_wht_no_mmq && !is_iqk_weight
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     bool any_gpus_with_slow_fp16 = false;
@@ -2756,12 +2765,14 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     // TQ weight types use dequant-to-f16 cuBLAS path only (no mmvq/mmq kernels)
     const bool is_tq_weight_id = (src0->type == GGML_TYPE_WHT4_0 || src0->type == GGML_TYPE_WHT3_0);
+    // Wider WHT weight types (5/6/8-bit): no mul_mat_id MMVQ kernel; fall through to cuBLAS-dequant.
+    const bool is_wht_dequant_id = (src0->type == GGML_TYPE_WHT5_0 || src0->type == GGML_TYPE_WHT6_0 || src0->type == GGML_TYPE_WHT8_0);
     // IQK base weight types: no mul_mat_id MMVQ support yet; fall through to cuBLAS-dequant
     const bool is_iqk_weight_id = ggml_cuda_iqk_mmvq_supported(src0->type);
     if (allow_mmid_fast_path && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
-            if (ggml_is_quantized(src0->type) && !is_tq_weight_id && !is_iqk_weight_id) {
+            if (ggml_is_quantized(src0->type) && !is_tq_weight_id && !is_wht_dequant_id && !is_iqk_weight_id) {
                 const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
                 if (ne2 <= mmvq_mmid_max) {
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
@@ -3393,11 +3404,13 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         const bool is_tq_w = (node->src[0]->type == GGML_TYPE_WHT4_0 || node->src[0]->type == GGML_TYPE_WHT3_0);
+        // Wider WHT types (5/6/8-bit) take the sync'd cuBLAS-dequant mul_mat_id path → no CUDA graphs.
+        const bool is_wht_dequant_w = (node->src[0]->type == GGML_TYPE_WHT5_0 || node->src[0]->type == GGML_TYPE_WHT6_0 || node->src[0]->type == GGML_TYPE_WHT8_0);
         const bool is_iqk_w = ggml_cuda_iqk_mmvq_supported(node->src[0]->type);
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
             const int mmvq_mmid_max = get_mmvq_mmid_max_batch(node->src[0]->type, cc);
-            if (!ggml_is_quantized(node->src[0]->type) || is_tq_w || is_iqk_w || node->ne[2] > mmvq_mmid_max) {
+            if (!ggml_is_quantized(node->src[0]->type) || is_tq_w || is_wht_dequant_w || is_iqk_w || node->ne[2] > mmvq_mmid_max) {
                 // under these conditions, the mul_mat_id operation will need to synchronize the stream, so we cannot use CUDA graphs
                 // TODO: figure out a way to enable for larger batch sizes, without hurting performance
                 // ref: https://github.com/ggml-org/llama.cpp/pull/18958
@@ -5324,6 +5337,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_BF16:
                     case GGML_TYPE_WHT4_0:
                     case GGML_TYPE_WHT3_0:
+                    case GGML_TYPE_WHT5_0:
+                    case GGML_TYPE_WHT6_0:
+                    case GGML_TYPE_WHT8_0:
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ2_K:
@@ -5363,6 +5379,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_WHT4_0:
                     case GGML_TYPE_WHT3_0:
+                    case GGML_TYPE_WHT5_0:
+                    case GGML_TYPE_WHT6_0:
+                    case GGML_TYPE_WHT8_0:
                     case GGML_TYPE_TURBOQ3_TCQ:
                     case GGML_TYPE_TURBOQ2_TCQ:
                     case GGML_TYPE_KV_OSCAR_INT2:

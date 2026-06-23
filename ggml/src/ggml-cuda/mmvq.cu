@@ -2,12 +2,62 @@
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
+// WHT5/6/8 fused mmvq vec_dot reuses the block reconstruct helpers (centroid LUT +
+// inverse RHT) and the centroid tables (pulled in transitively via turbo-quant.cuh).
+#include "dequantize.cuh"
 
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
+
+// ---------------------------------------------------------------------------
+// Fused single-token mmvq vec_dot for the WHT5/6/8 weight quants.
+//
+// Unlike linear per-element quants (Q5_0/Q8_0/…), a WHT block must be decoded as a whole:
+// the dequant is centroid-lookup → inverse Walsh-Hadamard over all 32 elements, which is
+// not separable into dp4a sub-dots on the raw indices. So the vec_dot reconstructs the 32
+// float weights in registers (byte-identical to the dequant→cuBLAS path) and does a plain
+// float MAC against the q8_1-quantized activations:  d8 * Σ_k w[k] * a_q[k].
+//
+// The weights are symmetric (zero-offset centroids, linear RHT) so the q8_1 "s" min-term
+// is not needed. Each thread owns one full block (type traits qi == vdr == 2 ⇒ iqs == 0).
+// ---------------------------------------------------------------------------
+template <int n>
+static __device__ __forceinline__ float vec_dot_wht_q8_1_buf(const float * buf, const block_q8_1 * __restrict__ bq8_1) {
+    const float d8 = __low2float(bq8_1->ds);
+    float sumf = 0.0f;
+#pragma unroll
+    for (int k = 0; k < n; ++k) {
+        sumf += buf[k] * (float) bq8_1->qs[k];
+    }
+    return d8 * sumf;
+}
+
+static __device__ __forceinline__ float vec_dot_wht5_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    GGML_UNUSED(iqs);
+    float buf[32];
+    wht5_0_reconstruct(vbq, kbx, buf);
+    return vec_dot_wht_q8_1_buf<32>(buf, bq8_1);
+}
+
+static __device__ __forceinline__ float vec_dot_wht6_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    GGML_UNUSED(iqs);
+    float buf[32];
+    wht6_0_reconstruct(vbq, kbx, buf);
+    return vec_dot_wht_q8_1_buf<32>(buf, bq8_1);
+}
+
+static __device__ __forceinline__ float vec_dot_wht8_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    GGML_UNUSED(iqs);
+    float buf[32];
+    wht8_0_reconstruct(vbq, kbx, buf);
+    return vec_dot_wht_q8_1_buf<32>(buf, bq8_1);
+}
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
@@ -33,6 +83,9 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         case GGML_TYPE_IQ4_NL:  return vec_dot_iq4_nl_q8_1;
         case GGML_TYPE_IQ4_XS:  return vec_dot_iq4_xs_q8_1;
         case GGML_TYPE_IQ3_S:   return vec_dot_iq3_s_q8_1;
+        case GGML_TYPE_WHT5_0:  return vec_dot_wht5_0_q8_1;
+        case GGML_TYPE_WHT6_0:  return vec_dot_wht6_0_q8_1;
+        case GGML_TYPE_WHT8_0:  return vec_dot_wht8_0_q8_1;
         default:                return nullptr;
     }
 }
@@ -59,6 +112,10 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
         case GGML_TYPE_IQ3_S:   return VDR_IQ3_S_Q8_1_MMVQ;
         case GGML_TYPE_IQ4_NL:  return VDR_IQ4_NL_Q8_1_MMVQ;
         case GGML_TYPE_IQ4_XS:  return VDR_IQ4_XS_Q8_1_MMVQ;
+        // qi == vdr (== 2) ⇒ one thread per WHT block (whole-block decode, see vec_dot above).
+        case GGML_TYPE_WHT5_0:  return 2;
+        case GGML_TYPE_WHT6_0:  return 2;
+        case GGML_TYPE_WHT8_0:  return 2;
         default:                return 1;
     }
 }
@@ -1153,6 +1210,24 @@ static void mul_mat_vec_q_switch_type(
             break;
         case GGML_TYPE_IQ3_S:
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_IQ3_S>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
+        case GGML_TYPE_WHT5_0:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_WHT5_0>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
+        case GGML_TYPE_WHT6_0:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_WHT6_0>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
+        case GGML_TYPE_WHT8_0:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_WHT8_0>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);

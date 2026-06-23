@@ -409,6 +409,42 @@ typedef struct {
 } block_wht4_0;                         // 20 bytes total
 static_assert(sizeof(block_wht4_0) == 20, "wrong wht4_0 block size");
 
+// WHT5_0: WHT-rotated 5-bit weight quantization (32-level Lloyd-Max for N(0,1))
+// Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
+// Per block: d0(fp16) + d1(fp16) + 5-bit indices packed (20 bytes: 4 groups of 8 in 5 bytes)
+// = 24 bytes per 32 values = 6.0 bits/value
+#define QK_WHT5_0 32
+typedef struct {
+    ggml_half d0;                       //  2 bytes: scale for first 16 elements
+    ggml_half d1;                       //  2 bytes: scale for last 16 elements
+    uint8_t   qs[QK_WHT5_0 * 5 / 8];  // 20 bytes: 5-bit indices packed (8 indices -> 5 bytes per group)
+} block_wht5_0;                         // 24 bytes total
+static_assert(sizeof(block_wht5_0) == 24, "wrong wht5_0 block size");
+
+// WHT6_0: WHT-rotated 6-bit weight quantization (64-level Lloyd-Max for N(0,1))
+// Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
+// Per block: d0(fp16) + d1(fp16) + 6-bit indices packed (24 bytes: 8 groups of 4 in 3 bytes)
+// = 28 bytes per 32 values = 7.0 bits/value
+#define QK_WHT6_0 32
+typedef struct {
+    ggml_half d0;                       //  2 bytes: scale for first 16 elements
+    ggml_half d1;                       //  2 bytes: scale for last 16 elements
+    uint8_t   qs[QK_WHT6_0 * 6 / 8];  // 24 bytes: 6-bit indices packed (4 indices -> 3 bytes per group)
+} block_wht6_0;                         // 28 bytes total
+static_assert(sizeof(block_wht6_0) == 28, "wrong wht6_0 block size");
+
+// WHT8_0: WHT-rotated 8-bit weight quantization (256-level Lloyd-Max for N(0,1))
+// Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
+// Per block: d0(fp16) + d1(fp16) + 8-bit indices (32 bytes, 1 index per byte)
+// = 36 bytes per 32 values = 9.0 bits/value
+#define QK_WHT8_0 32
+typedef struct {
+    ggml_half d0;                       //  2 bytes: scale for first 16 elements
+    ggml_half d1;                       //  2 bytes: scale for last 16 elements
+    uint8_t   qs[QK_WHT8_0];          // 32 bytes: 8-bit indices (1 per byte)
+} block_wht8_0;                         // 36 bytes total
+static_assert(sizeof(block_wht8_0) == 36, "wrong wht8_0 block size");
+
 // IQ4_K: ik_llama.cpp 4-bit imatrix quantization (4.50 bpw) — source: ik_llama
 // 256-element superblock with per-16-element scales (6 bits each: 4 low + 2 high bits).
 // extra: 16-bit field, 1 bit per 16-element half-sub-block selects between iq4k_values and shifted iq4k_values.

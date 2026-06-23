@@ -820,6 +820,30 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_wht4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_wht4_0_ref,
     },
+    [GGML_TYPE_WHT5_0] = {
+        .type_name                = "wht5_0",
+        .blck_size                = QK_WHT5_0,
+        .type_size                = sizeof(block_wht5_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_wht5_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_wht5_0_ref,
+    },
+    [GGML_TYPE_WHT6_0] = {
+        .type_name                = "wht6_0",
+        .blck_size                = QK_WHT6_0,
+        .type_size                = sizeof(block_wht6_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_wht6_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_wht6_0_ref,
+    },
+    [GGML_TYPE_WHT8_0] = {
+        .type_name                = "wht8_0",
+        .blck_size                = QK_WHT8_0,
+        .type_size                = sizeof(block_wht8_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_wht8_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_wht8_0_ref,
+    },
     // Phase 5b-1a: ik_llama base IK weight quant family (source: ik_llama)
     [GGML_TYPE_IQ4_K] = {
         .type_name                = "iq4_k",
@@ -8120,6 +8144,9 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_KV_OSCAR_INT2: result = quantize_kv_oscar_int2(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT3_0:  result = quantize_wht3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT4_0:  result = quantize_wht4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_WHT5_0:  result = quantize_wht5_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_WHT6_0:  result = quantize_wht6_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_WHT8_0:  result = quantize_wht8_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_K:   result = quantize_iq4_k(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_K:   result = quantize_iq3_k(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_K:   result = quantize_iq2_k(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

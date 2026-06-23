@@ -142,6 +142,21 @@ GGML_API void quantize_row_wht4_0_ref(const float * GGML_RESTRICT x, block_wht4_
 GGML_API void dequantize_row_wht4_0(const block_wht4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_wht4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+// WHT5_0: WHT-rotated 5-bit weight quantization (32-level Lloyd-Max)
+GGML_API void quantize_row_wht5_0_ref(const float * GGML_RESTRICT x, block_wht5_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_wht5_0(const block_wht5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_wht5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// WHT6_0: WHT-rotated 6-bit weight quantization (64-level Lloyd-Max)
+GGML_API void quantize_row_wht6_0_ref(const float * GGML_RESTRICT x, block_wht6_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_wht6_0(const block_wht6_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_wht6_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// WHT8_0: WHT-rotated 8-bit weight quantization (256-level Lloyd-Max)
+GGML_API void quantize_row_wht8_0_ref(const float * GGML_RESTRICT x, block_wht8_0 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_wht8_0(const block_wht8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_wht8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 // IQ4_K: ik_llama 4-bit imatrix-aware weight quant (4.50 bpw) — source: ik_llama
 GGML_API void quantize_row_iq4_k_ref(const float * GGML_RESTRICT x, block_iq4_k * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_k    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);

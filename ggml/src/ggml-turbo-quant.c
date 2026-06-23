@@ -1354,3 +1354,377 @@ size_t quantize_wht4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
     }
     return nrows * row_size;
 }
+
+/* ================================================================== */
+/* WHT5_0 / WHT6_0 / WHT8_0: wider WHT-rotated weight quants          */
+/* (TheTom WHT lineage extended to 5/6/8-bit Lloyd-Max codebooks)     */
+/* ================================================================== */
+
+/* Lloyd-Max centroids for N(0,1), shared with the CUDA dequant LUTs in
+ * ggml-cuda/turbo-quant.cuh (must stay byte-identical: quantize on CPU,
+ * dequant on GPU). Generated via Lloyd-Max iteration on the standard normal. */
+static const float WHT5_0_CENTROIDS[32] = {
+    -3.306977f, -2.743463f, -2.373790f, -2.086874f,
+    -1.846140f, -1.634667f, -1.443105f, -1.265837f,
+    -1.099088f, -0.940214f, -0.787267f, -0.638812f,
+    -0.493706f, -0.351051f, -0.210053f, -0.069926f,
+    +0.069926f, +0.210053f, +0.351051f, +0.493706f,
+    +0.638812f, +0.787267f, +0.940214f, +1.099088f,
+    +1.265837f, +1.443105f, +1.634667f, +1.846140f,
+    +2.086874f, +2.373790f, +2.743463f, +3.306977f,
+};
+
+static const float WHT6_0_CENTROIDS[64] = {
+    -3.893790f, -3.407069f, -3.095908f, -2.860111f,
+    -2.666715f, -2.500529f, -2.353306f, -2.219923f,
+    -2.096971f, -1.982186f, -1.873854f, -1.770651f,
+    -1.671515f, -1.575626f, -1.482432f, -1.391417f,
+    -1.302149f, -1.214268f, -1.127500f, -1.041686f,
+    -0.956668f, -0.872203f, -0.788178f, -0.704550f,
+    -0.621201f, -0.538050f, -0.455059f, -0.372227f,
+    -0.289475f, -0.206762f, -0.124049f, -0.041336f,
+    +0.041336f, +0.124049f, +0.206762f, +0.289475f,
+    +0.372227f, +0.455059f, +0.538050f, +0.621201f,
+    +0.704550f, +0.788178f, +0.872203f, +0.956668f,
+    +1.041686f, +1.127500f, +1.214268f, +1.302149f,
+    +1.391417f, +1.482432f, +1.575626f, +1.671515f,
+    +1.770651f, +1.873854f, +1.982186f, +2.096971f,
+    +2.219923f, +2.353306f, +2.500529f, +2.666715f,
+    +2.860111f, +3.095908f, +3.407069f, +3.893790f,
+};
+
+static const float WHT8_0_CENTROIDS[256] = {
+    -4.494738f, -4.070394f, -3.806497f, -3.612556f,
+    -3.458994f, -3.332198f, -3.224712f, -3.131952f,
+    -3.050840f, -2.979183f, -2.915394f, -2.858259f,
+    -2.806758f, -2.760063f, -2.717380f, -2.678123f,
+    -2.641768f, -2.607846f, -2.575994f, -2.545898f,
+    -2.517235f, -2.489729f, -2.463180f, -2.437389f,
+    -2.412276f, -2.387641f, -2.363366f, -2.339368f,
+    -2.315613f, -2.292136f, -2.268777f, -2.245418f,
+    -2.222059f, -2.198700f, -2.175341f, -2.151941f,
+    -2.128503f, -2.105064f, -2.081625f, -2.058186f,
+    -2.034747f, -2.011308f, -1.987869f, -1.964430f,
+    -1.940991f, -1.917552f, -1.894113f, -1.870715f,
+    -1.847315f, -1.823876f, -1.800438f, -1.776999f,
+    -1.753560f, -1.730121f, -1.706682f, -1.683243f,
+    -1.659804f, -1.636365f, -1.612926f, -1.589487f,
+    -1.566048f, -1.542609f, -1.519170f, -1.495732f,
+    -1.472293f, -1.448854f, -1.425455f, -1.402137f,
+    -1.378898f, -1.355780f, -1.332701f, -1.309622f,
+    -1.286543f, -1.263464f, -1.240385f, -1.217306f,
+    -1.194227f, -1.171148f, -1.148069f, -1.124990f,
+    -1.101911f, -1.078832f, -1.055753f, -1.032674f,
+    -1.009595f, -0.986516f, -0.963437f, -0.940358f,
+    -0.917279f, -0.894200f, -0.871121f, -0.848042f,
+    -0.824963f, -0.801885f, -0.778805f, -0.755727f,
+    -0.732647f, -0.709569f, -0.686489f, -0.663411f,
+    -0.640372f, -0.617333f, -0.594294f, -0.571255f,
+    -0.548216f, -0.525177f, -0.502138f, -0.479099f,
+    -0.456060f, -0.432981f, -0.409822f, -0.386583f,
+    -0.363263f, -0.339864f, -0.316426f, -0.292987f,
+    -0.269548f, -0.246109f, -0.222670f, -0.199231f,
+    -0.175792f, -0.152353f, -0.128914f, -0.105475f,
+    -0.082036f, -0.058597f, -0.035158f, -0.011719f,
+    +0.011719f, +0.035158f, +0.058597f, +0.082036f,
+    +0.105475f, +0.128914f, +0.152353f, +0.175792f,
+    +0.199231f, +0.222670f, +0.246109f, +0.269548f,
+    +0.292987f, +0.316426f, +0.339864f, +0.363263f,
+    +0.386583f, +0.409822f, +0.432981f, +0.456060f,
+    +0.479099f, +0.502138f, +0.525177f, +0.548216f,
+    +0.571255f, +0.594294f, +0.617333f, +0.640372f,
+    +0.663411f, +0.686489f, +0.709569f, +0.732647f,
+    +0.755727f, +0.778805f, +0.801885f, +0.824963f,
+    +0.848042f, +0.871121f, +0.894200f, +0.917279f,
+    +0.940358f, +0.963437f, +0.986516f, +1.009595f,
+    +1.032674f, +1.055753f, +1.078832f, +1.101911f,
+    +1.124990f, +1.148069f, +1.171148f, +1.194227f,
+    +1.217306f, +1.240385f, +1.263464f, +1.286543f,
+    +1.309622f, +1.332701f, +1.355780f, +1.378898f,
+    +1.402137f, +1.425455f, +1.448854f, +1.472293f,
+    +1.495732f, +1.519170f, +1.542609f, +1.566048f,
+    +1.589487f, +1.612926f, +1.636365f, +1.659804f,
+    +1.683243f, +1.706682f, +1.730121f, +1.753560f,
+    +1.776999f, +1.800438f, +1.823876f, +1.847315f,
+    +1.870715f, +1.894113f, +1.917552f, +1.940991f,
+    +1.964430f, +1.987869f, +2.011308f, +2.034747f,
+    +2.058186f, +2.081625f, +2.105064f, +2.128503f,
+    +2.151941f, +2.175341f, +2.198700f, +2.222059f,
+    +2.245418f, +2.268777f, +2.292136f, +2.315613f,
+    +2.339368f, +2.363366f, +2.387641f, +2.412276f,
+    +2.437389f, +2.463180f, +2.489729f, +2.517235f,
+    +2.545898f, +2.575994f, +2.607846f, +2.641768f,
+    +2.678123f, +2.717380f, +2.760063f, +2.806758f,
+    +2.858259f, +2.915394f, +2.979183f, +3.050840f,
+    +3.131952f, +3.224712f, +3.332198f, +3.458994f,
+    +3.612556f, +3.806497f, +4.070394f, +4.494738f,
+};
+
+/* Nearest centroid in a sorted-ascending codebook. Linear scan with an early
+ * break once we pass the value (distance is monotonic on each side). Used at
+ * quantize time only, so the O(nlev) scan is not on any hot path. */
+static int wht_nearest_index(float val, const float * cents, int nlev) {
+    int   best = 0;
+    float best_d = fabsf(val - cents[0]);
+    for (int i = 1; i < nlev; i++) {
+        float d = fabsf(val - cents[i]);
+        if (d < best_d) { best_d = d; best = i; }
+        if (cents[i] > val) break; /* past val: subsequent centroids only farther */
+    }
+    return best;
+}
+
+/* Shared quantize core for the wider WHT types. Mirrors quantize_block_wht3_0
+ * exactly (forward RHT, dual half-block RMS, 9-point scale search, 6-iteration
+ * least-squares refinement) but parameterized over the codebook. Fills d0/d1
+ * and the per-element centroid indices; packing is per-type. iw is intentionally
+ * ignored (see quantize_block_wht3_0 — RHT misaligns original-basis importance). */
+static void wht_quant_core(const float * GGML_RESTRICT src_blk,
+                           const float * cents, int nlev,
+                           float * d0_out, float * d1_out, int * idx_out /* [32] */) {
+    /* 1. Forward RHT (shared 32-element transform). */
+    float buf[TQ_BLOCK_SIZE];
+    memcpy(buf, src_blk, TQ_BLOCK_SIZE * sizeof(float));
+    tq3_0_rht_forward(buf);
+
+    /* 2. Per-half RMS. */
+    float rms0 = 0.0f, rms1 = 0.0f;
+    for (int j = 0; j < 16; j++) rms0 += buf[j] * buf[j];
+    for (int j = 16; j < 32; j++) rms1 += buf[j] * buf[j];
+    rms0 = sqrtf(rms0 / 16.0f);
+    rms1 = sqrtf(rms1 / 16.0f);
+
+    /* 3. Scale search (9 points), unweighted least-squares in rotated space. */
+    static const float scales[] = { 0.6f, 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.35f, 1.5f };
+    float best_d0 = rms0, best_d1 = rms1;
+    float best_err = 1e30f;
+    for (int si = 0; si < 9; si++) {
+        float d0 = rms0 * scales[si];
+        float d1 = rms1 * scales[si];
+        float inv0 = (d0 > 1e-10f) ? 1.0f / d0 : 0.0f;
+        float inv1 = (d1 > 1e-10f) ? 1.0f / d1 : 0.0f;
+        float err = 0.0f;
+        for (int j = 0; j < 16; j++) {
+            int idx = wht_nearest_index(buf[j] * inv0, cents, nlev);
+            float diff = buf[j] - cents[idx] * d0;
+            err += diff * diff;
+        }
+        for (int j = 16; j < 32; j++) {
+            int idx = wht_nearest_index(buf[j] * inv1, cents, nlev);
+            float diff = buf[j] - cents[idx] * d1;
+            err += diff * diff;
+        }
+        if (err < best_err) { best_err = err; best_d0 = d0; best_d1 = d1; }
+    }
+
+    /* 4. Iterative LS refinement (6 iterations) in rotated space. */
+    for (int iter = 0; iter < 6; iter++) {
+        float inv0 = (best_d0 > 1e-10f) ? 1.0f / best_d0 : 0.0f;
+        float inv1 = (best_d1 > 1e-10f) ? 1.0f / best_d1 : 0.0f;
+        float num0 = 0.0f, den0 = 0.0f, num1 = 0.0f, den1 = 0.0f;
+        for (int j = 0; j < 16; j++) {
+            int idx = wht_nearest_index(buf[j] * inv0, cents, nlev);
+            float c = cents[idx];
+            num0 += buf[j] * c; den0 += c * c;
+        }
+        for (int j = 16; j < 32; j++) {
+            int idx = wht_nearest_index(buf[j] * inv1, cents, nlev);
+            float c = cents[idx];
+            num1 += buf[j] * c; den1 += c * c;
+        }
+        if (den0 > 1e-10f) best_d0 = num0 / den0;
+        if (den1 > 1e-10f) best_d1 = num1 / den1;
+    }
+
+    /* 5. Final per-element indices. */
+    float inv0 = (best_d0 > 1e-10f) ? 1.0f / best_d0 : 0.0f;
+    float inv1 = (best_d1 > 1e-10f) ? 1.0f / best_d1 : 0.0f;
+    for (int j = 0; j < 32; j++) {
+        float inv = (j < 16) ? inv0 : inv1;
+        idx_out[j] = wht_nearest_index(buf[j] * inv, cents, nlev);
+    }
+    *d0_out = best_d0;
+    *d1_out = best_d1;
+}
+
+/* Shared inverse-RHT dequant core: indices -> centroid*scale -> inverse RHT. */
+static void wht_dequant_core(const int * idx, const float * cents,
+                             float d0, float d1, float * GGML_RESTRICT out /* [32] */) {
+    float buf[32];
+    for (int j = 0; j < 32; j++) {
+        float d = (j < 16) ? d0 : d1;
+        buf[j] = cents[idx[j]] * d;
+    }
+    tq3_0_rht_inverse(buf);
+    memcpy(out, buf, 32 * sizeof(float));
+}
+
+/* ---------- WHT5_0 (5-bit, 32 levels): 8 indices packed into 5 bytes ---------- */
+
+static void quantize_block_wht5_0(const float * GGML_RESTRICT src_blk,
+                                  block_wht5_0 * GGML_RESTRICT blk, const float * iw) {
+    (void) iw;
+    int idx[32];
+    float d0, d1;
+    wht_quant_core(src_blk, WHT5_0_CENTROIDS, 32, &d0, &d1, idx);
+    blk->d0 = GGML_FP32_TO_FP16(d0);
+    blk->d1 = GGML_FP32_TO_FP16(d1);
+    memset(blk->qs, 0, QK_WHT5_0 * 5 / 8);
+    /* 4 groups of 8 indices; pack each group's 40 bits into 5 little-endian bytes. */
+    for (int g = 0; g < 4; g++) {
+        uint64_t acc = 0;
+        for (int i = 0; i < 8; i++) acc |= (uint64_t)(idx[g * 8 + i] & 0x1F) << (5 * i);
+        uint8_t * qp = blk->qs + g * 5;
+        for (int b = 0; b < 5; b++) qp[b] = (uint8_t)((acc >> (8 * b)) & 0xFF);
+    }
+}
+
+void quantize_row_wht5_0_ref(const float * GGML_RESTRICT x, block_wht5_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT5_0 == 0);
+    const int nb = k / QK_WHT5_0;
+    for (int block = 0; block < nb; block++) {
+        quantize_block_wht5_0(x + block * QK_WHT5_0, &y[block], NULL);
+    }
+}
+
+void dequantize_row_wht5_0(const block_wht5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT5_0 == 0);
+    const int nb = k / QK_WHT5_0;
+    for (int blk_i = 0; blk_i < nb; blk_i++) {
+        float d0 = GGML_FP16_TO_FP32(x[blk_i].d0);
+        float d1 = GGML_FP16_TO_FP32(x[blk_i].d1);
+        int idx[32];
+        for (int g = 0; g < 4; g++) {
+            const uint8_t * qp = x[blk_i].qs + g * 5;
+            uint64_t acc = 0;
+            for (int b = 0; b < 5; b++) acc |= (uint64_t)qp[b] << (8 * b);
+            for (int i = 0; i < 8; i++) idx[g * 8 + i] = (acc >> (5 * i)) & 0x1F;
+        }
+        wht_dequant_core(idx, WHT5_0_CENTROIDS, d0, d1, y + blk_i * QK_WHT5_0);
+    }
+}
+
+size_t quantize_wht5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_WHT5_0 == 0);
+    const int64_t nb_per_row = n_per_row / QK_WHT5_0;
+    size_t row_size = nb_per_row * sizeof(block_wht5_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        block_wht5_0 * y_row = (block_wht5_0 *)((char *)dst + row * row_size);
+        const float * x_row = src + row * n_per_row;
+        for (int64_t b = 0; b < nb_per_row; b++) {
+            const float * iw = imatrix ? (imatrix + b * QK_WHT5_0) : NULL;
+            quantize_block_wht5_0(x_row + b * QK_WHT5_0, &y_row[b], iw);
+        }
+    }
+    return nrows * row_size;
+}
+
+/* ---------- WHT6_0 (6-bit, 64 levels): 4 indices packed into 3 bytes ---------- */
+
+static void quantize_block_wht6_0(const float * GGML_RESTRICT src_blk,
+                                  block_wht6_0 * GGML_RESTRICT blk, const float * iw) {
+    (void) iw;
+    int idx[32];
+    float d0, d1;
+    wht_quant_core(src_blk, WHT6_0_CENTROIDS, 64, &d0, &d1, idx);
+    blk->d0 = GGML_FP32_TO_FP16(d0);
+    blk->d1 = GGML_FP32_TO_FP16(d1);
+    memset(blk->qs, 0, QK_WHT6_0 * 6 / 8);
+    /* 8 groups of 4 indices; pack each group's 24 bits into 3 little-endian bytes. */
+    for (int g = 0; g < 8; g++) {
+        uint32_t acc = 0;
+        for (int i = 0; i < 4; i++) acc |= (uint32_t)(idx[g * 4 + i] & 0x3F) << (6 * i);
+        uint8_t * qp = blk->qs + g * 3;
+        for (int b = 0; b < 3; b++) qp[b] = (uint8_t)((acc >> (8 * b)) & 0xFF);
+    }
+}
+
+void quantize_row_wht6_0_ref(const float * GGML_RESTRICT x, block_wht6_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT6_0 == 0);
+    const int nb = k / QK_WHT6_0;
+    for (int block = 0; block < nb; block++) {
+        quantize_block_wht6_0(x + block * QK_WHT6_0, &y[block], NULL);
+    }
+}
+
+void dequantize_row_wht6_0(const block_wht6_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT6_0 == 0);
+    const int nb = k / QK_WHT6_0;
+    for (int blk_i = 0; blk_i < nb; blk_i++) {
+        float d0 = GGML_FP16_TO_FP32(x[blk_i].d0);
+        float d1 = GGML_FP16_TO_FP32(x[blk_i].d1);
+        int idx[32];
+        for (int g = 0; g < 8; g++) {
+            const uint8_t * qp = x[blk_i].qs + g * 3;
+            uint32_t acc = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
+            for (int i = 0; i < 4; i++) idx[g * 4 + i] = (acc >> (6 * i)) & 0x3F;
+        }
+        wht_dequant_core(idx, WHT6_0_CENTROIDS, d0, d1, y + blk_i * QK_WHT6_0);
+    }
+}
+
+size_t quantize_wht6_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_WHT6_0 == 0);
+    const int64_t nb_per_row = n_per_row / QK_WHT6_0;
+    size_t row_size = nb_per_row * sizeof(block_wht6_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        block_wht6_0 * y_row = (block_wht6_0 *)((char *)dst + row * row_size);
+        const float * x_row = src + row * n_per_row;
+        for (int64_t b = 0; b < nb_per_row; b++) {
+            const float * iw = imatrix ? (imatrix + b * QK_WHT6_0) : NULL;
+            quantize_block_wht6_0(x_row + b * QK_WHT6_0, &y_row[b], iw);
+        }
+    }
+    return nrows * row_size;
+}
+
+/* ---------- WHT8_0 (8-bit, 256 levels): 1 index per byte ---------- */
+
+static void quantize_block_wht8_0(const float * GGML_RESTRICT src_blk,
+                                  block_wht8_0 * GGML_RESTRICT blk, const float * iw) {
+    (void) iw;
+    int idx[32];
+    float d0, d1;
+    wht_quant_core(src_blk, WHT8_0_CENTROIDS, 256, &d0, &d1, idx);
+    blk->d0 = GGML_FP32_TO_FP16(d0);
+    blk->d1 = GGML_FP32_TO_FP16(d1);
+    for (int j = 0; j < QK_WHT8_0; j++) blk->qs[j] = (uint8_t)(idx[j] & 0xFF);
+}
+
+void quantize_row_wht8_0_ref(const float * GGML_RESTRICT x, block_wht8_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT8_0 == 0);
+    const int nb = k / QK_WHT8_0;
+    for (int block = 0; block < nb; block++) {
+        quantize_block_wht8_0(x + block * QK_WHT8_0, &y[block], NULL);
+    }
+}
+
+void dequantize_row_wht8_0(const block_wht8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_WHT8_0 == 0);
+    const int nb = k / QK_WHT8_0;
+    for (int blk_i = 0; blk_i < nb; blk_i++) {
+        float d0 = GGML_FP16_TO_FP32(x[blk_i].d0);
+        float d1 = GGML_FP16_TO_FP32(x[blk_i].d1);
+        int idx[32];
+        for (int j = 0; j < 32; j++) idx[j] = x[blk_i].qs[j];
+        wht_dequant_core(idx, WHT8_0_CENTROIDS, d0, d1, y + blk_i * QK_WHT8_0);
+    }
+}
+
+size_t quantize_wht8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    assert(n_per_row % QK_WHT8_0 == 0);
+    const int64_t nb_per_row = n_per_row / QK_WHT8_0;
+    size_t row_size = nb_per_row * sizeof(block_wht8_0);
+    for (int64_t row = 0; row < nrows; row++) {
+        block_wht8_0 * y_row = (block_wht8_0 *)((char *)dst + row * row_size);
+        const float * x_row = src + row * n_per_row;
+        for (int64_t b = 0; b < nb_per_row; b++) {
+            const float * iw = imatrix ? (imatrix + b * QK_WHT8_0) : NULL;
+            quantize_block_wht8_0(x_row + b * QK_WHT8_0, &y_row[b], iw);
+        }
+    }
+    return nrows * row_size;
+}
