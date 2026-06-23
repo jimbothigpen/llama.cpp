@@ -190,7 +190,13 @@ static __global__ void flash_attn_ext_vec(
     // Turbo KQ dot does byte extraction + centroid lookup + scalar mul, not vectorized f16 loads.
     // nthreads_KQ=1: each thread computes a full KQ product alone — eliminates warp_reduce_sum
     // shuffle and halves KQ loop iterations. Each thread holds full Q vector in registers.
-    constexpr int nthreads_KQ = K_is_turbo ? 1 : (K_is_unquantized ? 128 / cpy_nb : nthreads_KQ_q);
+    // turbo-kv-prefill-fix-2026-06-22: for the turboq2/turboq4 PREFILL tile (ncols>2) switch to the
+    // cooperative nthreads_KQ=8 path (same value the f16 path uses) so per-thread Q footprint is
+    // D/8 per column instead of full-D — this is what lets cols_per_block grow to 8 without the
+    // register-spill→GPU-hang that motivated nthreads_KQ=1, and it pairs with the dequant-hoist
+    // tiled dot below. Decode (ncols==1) and all other turbo types keep nthreads_KQ=1 unchanged.
+    constexpr bool K_is_turbo_tileable = (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ4_0);
+    constexpr int nthreads_KQ = K_is_turbo ? ((K_is_turbo_tileable && ncols > 2) ? 8 : 1) : (K_is_unquantized ? 128 / cpy_nb : nthreads_KQ_q);
     constexpr bool V_is_turbo = (type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ);
     // Turbo V dequant is scalar (byte extract + LUT), not vectorized loads.
     // Halve nthreads_V to double V_cols_per_iter (process 2 V rows per loop iteration),
@@ -448,14 +454,30 @@ static __global__ void flash_attn_ext_vec(
             KQ_max_new[j] = KQ_max[j];
         }
 
+        // turbo-kv-prefill-fix-2026-06-22: prefill-tiled turbo path. Dequantize each K row once and
+        // reuse it across all ncols query columns, instead of the generic per-column re-dequant
+        // (vec_dot_KQ called inside the j loop). Cooperative across nthreads_KQ=8 lanes.
+        constexpr bool turbo_tiled = K_is_turbo_tileable && ncols > 2;
+
 #pragma unroll
         for (int i_KQ_0 = 0; i_KQ_0 < nthreads_KQ; ++i_KQ_0) {
             const int i_KQ = threadIdx.y*WARP_SIZE + (nthreads_KQ == WARP_SIZE ? 0 : (threadIdx.x & ~(nthreads_KQ-1))) + i_KQ_0;
 
+            float tiled_sums[ncols];
+            if constexpr (turbo_tiled) {
+                if constexpr (type_K == GGML_TYPE_TURBOQ2_0) {
+                    vec_dot_fattn_vec_KQ_turboq2_0_tiled<D, nthreads_KQ, ncols>(K + i_KQ*nb11, Q_reg, tiled_sums);
+                } else {
+                    vec_dot_fattn_vec_KQ_turboq4_0_tiled<D, nthreads_KQ, ncols>(K + i_KQ*nb11, Q_reg, tiled_sums);
+                }
+            }
+
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
                 float sum;
-                if constexpr (n_centroids_lut > 0 && ncols == 1 && type_K == GGML_TYPE_TURBOQ3_0) {
+                if constexpr (turbo_tiled) {
+                    sum = warp_reduce_sum<nthreads_KQ>(tiled_sums[j]);
+                } else if constexpr (n_centroids_lut > 0 && ncols == 1 && type_K == GGML_TYPE_TURBOQ3_0) {
                     // LUT scoring: 8 elements per iteration (2 qs bytes + 1 signs byte)
                     const block_turboq3_0 * K_turbo = (const block_turboq3_0 *)(K + i_KQ*nb11);
                     sum = 0.0f;
@@ -1011,6 +1033,18 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
     launch_fattn<D, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
+// turbo-kv-prefill-fix-2026-06-22: prefill tile width for the turboq2/turboq4 D=128 tiled path.
+// Runtime-overridable via LLAMA_TURBO_PREFILL_COLS (2|4|8; default 8) so the tile can be tuned or
+// backed off (register-spill→GPU-hang on RDNA3.5) without a rebuild. 2 == legacy behavior.
+static inline int ggml_cuda_turbo_prefill_cols() {
+    static const int v = []{
+        const char * s = getenv("LLAMA_TURBO_PREFILL_COLS");
+        const int c = s ? atoi(s) : 8;
+        return (c == 2 || c == 4 || c == 8) ? c : 8;
+    }();
+    return v;
+}
+
 template <int D, ggml_type type_K, ggml_type type_V>
 void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
@@ -1029,6 +1063,27 @@ void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_ten
             ggml_cuda_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
         }
         return;
+    }
+
+    // turbo-kv-prefill-fix-2026-06-22: prefill (ne[1] > 1) for symmetric turboq2/turboq4 at D=128 uses
+    // the wider tiled tile (cols_per_block 4 or 8) so the K dequant is amortized across the query tile.
+    // Gated by `if constexpr` so cols=4/8 kernels are instantiated ONLY for these types — all other
+    // K/V types keep the legacy cols=2 prefill path (no new instances, no scope creep).
+    constexpr bool turbo_tileable = (D == 128) && (type_K == type_V) &&
+        (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ4_0);
+    if constexpr (turbo_tileable) {
+        const int pcols = ggml_cuda_turbo_prefill_cols();
+        if (pcols == 8) {
+            if (logit_softcap == 0.0f) ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, false>(ctx, dst);
+            else                       ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, true >(ctx, dst);
+            return;
+        }
+        if (pcols == 4) {
+            if (logit_softcap == 0.0f) ggml_cuda_flash_attn_ext_vec_case_impl<D, 4, type_K, type_V, false>(ctx, dst);
+            else                       ggml_cuda_flash_attn_ext_vec_case_impl<D, 4, type_K, type_V, true >(ctx, dst);
+            return;
+        }
+        // pcols == 2 → fall through to the legacy cols=2 path below.
     }
 
     constexpr int cols_per_block = 2;
