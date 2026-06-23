@@ -190,11 +190,14 @@ static __global__ void flash_attn_ext_vec(
     // Turbo KQ dot does byte extraction + centroid lookup + scalar mul, not vectorized f16 loads.
     // nthreads_KQ=1: each thread computes a full KQ product alone — eliminates warp_reduce_sum
     // shuffle and halves KQ loop iterations. Each thread holds full Q vector in registers.
-    // turbo-kv-prefill-fix-2026-06-22: for the turboq2/turboq4 PREFILL tile (ncols>2) switch to the
-    // cooperative nthreads_KQ=8 path (same value the f16 path uses) so per-thread Q footprint is
-    // D/8 per column instead of full-D — this is what lets cols_per_block grow to 8 without the
-    // register-spill→GPU-hang that motivated nthreads_KQ=1, and it pairs with the dequant-hoist
-    // tiled dot below. Decode (ncols==1) and all other turbo types keep nthreads_KQ=1 unchanged.
+    // turbo-kv-prefill-fix-2026-06-22 + d256-2026-06-23: for the turboq2/turboq4 PREFILL tile (ncols>2)
+    // switch to the cooperative nthreads_KQ=8 path (same value the f16 path uses) so per-thread Q
+    // footprint is (D/2)/8 half2 per column instead of full-D — this is what lets cols_per_block grow
+    // without the register-spill→GPU-hang that motivated nthreads_KQ=1, and it pairs with the
+    // dequant-hoist tiled dot below. This is D-generic: D=128 dispatches ncols up to 8, D=256 up to 4
+    // (capped in the launcher for VGPR parity with the proven D=128/cols=8 footprint). Note nthreads_KQ=8
+    // here also dodges the ~256 VGPR/thread nthreads_KQ=1 spill at D=256 flagged for the RQ K types above.
+    // Decode (ncols==1) and all other turbo types keep nthreads_KQ=1 unchanged.
     constexpr bool K_is_turbo_tileable = (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ4_0);
     constexpr int nthreads_KQ = K_is_turbo ? ((K_is_turbo_tileable && ncols > 2) ? 8 : 1) : (K_is_unquantized ? 128 / cpy_nb : nthreads_KQ_q);
     constexpr bool V_is_turbo = (type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ2_TCQ || type_V == GGML_TYPE_TURBOQ3_TCQ);
@@ -1045,6 +1048,23 @@ static inline int ggml_cuda_turbo_prefill_cols() {
     return v;
 }
 
+// turbo-kv-prefill-d256-2026-06-23 (TODO 260): per-head_dim safe tile-width cap. The tiled path's
+// per-thread Q footprint is Q_reg[ncols][(D/2)/nthreads_KQ] half2 = ncols*(D/2)/8 (nthreads_KQ=8).
+//   D=128, cols=8 -> 64 half2/thread (PROVEN safe, no spill, no hang — the D=128 fix).
+//   D=256, cols=4 -> 64 half2/thread (SAME footprint as the proven case -> within VGPR budget).
+//   D=256, cols=8 -> 128 half2/thread (DOUBLES it -> register-spill -> GPU hang on RDNA3.5).
+// So D>=256 is hard-capped at 4 here AND the cols=8 dispatch is `if constexpr (D == 128)`-gated in
+// the launcher, so the spilling D=256/cols=8 kernel is NEVER instantiated. If a VGPR/occupancy check
+// ever shows even cols=4 spills on a target arch, set GGML_TURBO_PREFILL_D256_MAX_COLS to 2 to fall
+// back to the legacy untiled cols=2 path (no speedup, but a guaranteed no-hang floor).
+#define GGML_TURBO_PREFILL_D256_MAX_COLS 4
+static inline int ggml_cuda_turbo_prefill_cols_for_D(int D) {
+    int c = ggml_cuda_turbo_prefill_cols();            // env-selected, in {2,4,8}, default 8
+    const int cap = (D >= 256) ? GGML_TURBO_PREFILL_D256_MAX_COLS : 8;
+    if (c > cap) c = cap;                              // clamp the env override too -> hang impossible
+    return c;
+}
+
 template <int D, ggml_type type_K, ggml_type type_V>
 void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
@@ -1065,18 +1085,32 @@ void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_ten
         return;
     }
 
-    // turbo-kv-prefill-fix-2026-06-22: prefill (ne[1] > 1) for symmetric turboq2/turboq4 at D=128 uses
-    // the wider tiled tile (cols_per_block 4 or 8) so the K dequant is amortized across the query tile.
-    // Gated by `if constexpr` so cols=4/8 kernels are instantiated ONLY for these types — all other
-    // K/V types keep the legacy cols=2 prefill path (no new instances, no scope creep).
-    constexpr bool turbo_tileable = (D == 128) && (type_K == type_V) &&
-        (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ4_0);
+    // turbo-kv-prefill-fix-2026-06-22 + d256-2026-06-23 (TODO 260): prefill (ne[1] > 1) for turbo KV uses
+    // the wider tiled tile so the K dequant is amortized across the query tile. The tiled dot is K-ONLY
+    // (it hoists the K dequant; the V-aggregation path is untouched), so it is valid for ANY V type.
+    //   D=128: UNCHANGED from the original fix — symmetric turboq2/turboq2 or turboq4/turboq4 only,
+    //          cols_per_block 4 or 8. (Hard requirement: do not alter the proven D=128 behavior.)
+    //   D=256: cols_per_block 4 ONLY, and the V constraint is relaxed to the turbo KV family so the
+    //          ASYMMETRIC production config (Qwen3.6-35B-A3B / Qwen3.5-9B: -ctk turboq4_0 -ctv turboq3_0,
+    //          head_dim=256) actually engages — a symmetric-only gate would be inert on it, repeating the
+    //          D=128-on-hd256 trap. cols=8 is `if constexpr (D == 128)`-gated below, so the high-VGPR
+    //          D=256/cols=8 kernel that would register-spill→GPU-hang on RDNA3.5 is NEVER instantiated;
+    //          the cap is also enforced at runtime by ggml_cuda_turbo_prefill_cols_for_D(D).
+    // Gated by `if constexpr` so the tiled kernels are instantiated ONLY for these K/V pairs — all other
+    // types keep the legacy cols=2 prefill path (no scope creep).
+    constexpr bool K_tileable = (type_K == GGML_TYPE_TURBOQ2_0 || type_K == GGML_TYPE_TURBOQ4_0);
+    constexpr bool V_turbo_kv = (type_V == GGML_TYPE_TURBOQ2_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ4_0);
+    constexpr bool turbo_tileable_128 = (D == 128) && (type_K == type_V) && K_tileable;
+    constexpr bool turbo_tileable_256 = (D == 256) && K_tileable && V_turbo_kv;
+    constexpr bool turbo_tileable     = turbo_tileable_128 || turbo_tileable_256;
     if constexpr (turbo_tileable) {
-        const int pcols = ggml_cuda_turbo_prefill_cols();
-        if (pcols == 8) {
-            if (logit_softcap == 0.0f) ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, false>(ctx, dst);
-            else                       ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, true >(ctx, dst);
-            return;
+        const int pcols = ggml_cuda_turbo_prefill_cols_for_D(D);
+        if constexpr (D == 128) {
+            if (pcols == 8) {
+                if (logit_softcap == 0.0f) ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, false>(ctx, dst);
+                else                       ggml_cuda_flash_attn_ext_vec_case_impl<D, 8, type_K, type_V, true >(ctx, dst);
+                return;
+            }
         }
         if (pcols == 4) {
             if (logit_softcap == 0.0f) ggml_cuda_flash_attn_ext_vec_case_impl<D, 4, type_K, type_V, false>(ctx, dst);
