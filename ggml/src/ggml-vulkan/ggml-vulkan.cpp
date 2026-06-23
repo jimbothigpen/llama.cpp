@@ -4731,6 +4731,17 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     const bool     wht4_0_use_subgroups      = false;
     const shader_reduction_mode wht4_0_reduc = SHADER_REDUCTION_MODE_SHMEM;
 
+    // WQ3_TCQ mirrors the WHT contract but on 128-element FWHT blocks: one element
+    // per thread => a fixed 128-thread workgroup cooperating on the 128-pt Hadamard
+    // butterfly in shared memory. SHMEM reduction (no subgroup ops) sidesteps the
+    // RADV wave64 subgroup hazard. NUM_ROWS=4 keeps reduce_result LDS in budget
+    // (NUM_COLS*4*128 floats <= 16 KiB) given the larger 128-thread block.
+    const uint32_t wq3_tcq_wg_size            = 128u;
+    const uint32_t wq3_tcq_num_rows           = 4u;
+    const uint32_t wq3_tcq_force_sg_size      = 0u;
+    const bool     wq3_tcq_use_subgroups      = false;
+    const shader_reduction_mode wq3_tcq_reduc = SHADER_REDUCTION_MODE_SHMEM;
+
     static constexpr uint32_t mul_mat_vec_num_bindings = 5;
     static constexpr uint32_t mul_mat_vec_id_num_bindings = 6;
 
@@ -4777,6 +4788,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             // across 8 output rows per workgroup.
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_WHT4_0][i],  "mul_mat_vec_wht4_0_f32_f32",  arr_dmmv_wht4_0_f32_f32_len[wht4_0_reduc],  arr_dmmv_wht4_0_f32_f32_data[wht4_0_reduc],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8, i+1}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_WHT3_0][i],  "mul_mat_vec_wht3_0_f32_f32",  arr_dmmv_wht3_0_f32_f32_len[wht4_0_reduc],  arr_dmmv_wht3_0_f32_f32_data[wht4_0_reduc],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8, i+1}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
+            // WQ3_TCQ: fixed 128-thread workgroup, shared-memory FWHT butterfly + reduction.
+            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_WQ3_TCQ][i], "mul_mat_vec_wq3_tcq_f32_f32", arr_dmmv_wq3_tcq_f32_f32_len[wq3_tcq_reduc], arr_dmmv_wq3_tcq_f32_f32_data[wq3_tcq_reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {wq3_tcq_num_rows, 1, 1}, {wq3_tcq_wg_size, wq3_tcq_num_rows, i+1}, 1, true, wq3_tcq_use_subgroups, wq3_tcq_force_sg_size);
             // KS/KL-family: row-meta weight-only matvecs (256-element super-block, 16 threads/block).
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_IQ3_KS][i],  "mul_mat_vec_iq3_ks_f32_f32",  arr_dmmv_iq3_ks_f32_f32_len[reduc16],  arr_dmmv_iq3_ks_f32_f32_data[reduc16],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_IQ2_KS][i],  "mul_mat_vec_iq2_ks_f32_f32",  arr_dmmv_iq2_ks_f32_f32_len[reduc16],  arr_dmmv_iq2_ks_f32_f32_data[reduc16],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
@@ -4822,6 +4835,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_NVFP4][i],   "mul_mat_vec_nvfp4_f16_f32",   arr_dmmv_nvfp4_f16_f32_len[reduc16],   arr_dmmv_nvfp4_f16_f32_data[reduc16],   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {wg_size_subgroup16, rm_iq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_WHT4_0][i],  "mul_mat_vec_wht4_0_f16_f32",  arr_dmmv_wht4_0_f16_f32_len[wht4_0_reduc],  arr_dmmv_wht4_0_f16_f32_data[wht4_0_reduc],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8, i+1}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_WHT3_0][i],  "mul_mat_vec_wht3_0_f16_f32",  arr_dmmv_wht3_0_f16_f32_len[wht4_0_reduc],  arr_dmmv_wht3_0_f16_f32_data[wht4_0_reduc],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {8, 1, 1}, {wht4_0_wg_size, 8, i+1}, 1, true, wht4_0_use_subgroups, wht4_0_force_sg_size);
+            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_WQ3_TCQ][i], "mul_mat_vec_wq3_tcq_f16_f32", arr_dmmv_wq3_tcq_f16_f32_len[wq3_tcq_reduc], arr_dmmv_wq3_tcq_f16_f32_data[wq3_tcq_reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {wq3_tcq_num_rows, 1, 1}, {wq3_tcq_wg_size, wq3_tcq_num_rows, i+1}, 1, true, wq3_tcq_use_subgroups, wq3_tcq_force_sg_size);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_IQ3_KS][i],  "mul_mat_vec_iq3_ks_f16_f32",  arr_dmmv_iq3_ks_f16_f32_len[reduc16],  arr_dmmv_iq3_ks_f16_f32_data[reduc16],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_IQ2_KS][i],  "mul_mat_vec_iq2_ks_f16_f32",  arr_dmmv_iq2_ks_f16_f32_len[reduc16],  arr_dmmv_iq2_ks_f16_f32_data[reduc16],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_IQ4_KS][i],  "mul_mat_vec_iq4_ks_f16_f32",  arr_dmmv_iq4_ks_f16_f32_len[reduc16],  arr_dmmv_iq4_ks_f16_f32_data[reduc16],  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
@@ -4974,6 +4988,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_NVFP4],   "dequant_nvfp4",   dequant_nvfp4_len,   dequant_nvfp4_data,   "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_WHT4_0],  "dequant_wht4_0",  dequant_wht4_0_len,  dequant_wht4_0_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 32, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_WHT3_0],  "dequant_wht3_0",  dequant_wht3_0_len,  dequant_wht3_0_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 32, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_WQ3_TCQ], "dequant_wq3_tcq", dequant_wq3_tcq_len, dequant_wq3_tcq_data, "main", 2, 5 * sizeof(uint32_t), {64 * 128, 1, 1}, {}, 1);
     // IQ2_K / IQ3_K / IQ4_K / IQ5_K / IQ6_K dequant: 1 WG per 256-element super-block, 64 threads × 4 elements.
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_IQ2_K],   "dequant_iq2_k",   dequant_iq2_k_len,   dequant_iq2_k_data,   "main", 2, 5 * sizeof(uint32_t), {256, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_IQ3_K],   "dequant_iq3_k",   dequant_iq3_k_len,   dequant_iq3_k_data,   "main", 2, 5 * sizeof(uint32_t), {256, 1, 1}, {}, 1);
@@ -7119,6 +7134,7 @@ static vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type 
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_WHT4_0:
         case GGML_TYPE_WHT3_0:
+        case GGML_TYPE_WQ3_TCQ:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_K:
@@ -7306,6 +7322,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_WHT4_0:
         case GGML_TYPE_WHT3_0:
+        case GGML_TYPE_WQ3_TCQ:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_K:
@@ -7336,9 +7353,11 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
             if (m < 4096 && k >= 1024) {
                 dmmv_wg = DMMV_WG_SIZE_LARGE;
             }
-        } else if (a_type == GGML_TYPE_WHT4_0 || a_type == GGML_TYPE_WHT3_0) {
-            // WHT4_0 / WHT3_0 need exactly 32 threads (one subgroup) to cooperate on the
-            // 32-element WHT butterfly in shared memory. Force SUBGROUP-sized wg.
+        } else if (a_type == GGML_TYPE_WHT4_0 || a_type == GGML_TYPE_WHT3_0 || a_type == GGML_TYPE_WQ3_TCQ) {
+            // WHT4_0 / WHT3_0 (32-thread) and WQ3_TCQ (128-thread) bake a fixed
+            // workgroup size at pipeline creation to cooperate on the FWHT butterfly
+            // in shared memory. Bucket choice is immaterial (both buckets register the
+            // same fixed-size pipeline); keep SUBGROUP.
             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
         } else {
             if (m <= 8192 && k >= 1024) {
@@ -7541,9 +7560,11 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
             if (m < 4096 && k >= 1024) {
                 dmmv_wg = DMMV_WG_SIZE_LARGE;
             }
-        } else if (a_type == GGML_TYPE_WHT4_0 || a_type == GGML_TYPE_WHT3_0) {
-            // WHT4_0 / WHT3_0 need exactly 32 threads (one subgroup) to cooperate on the
-            // 32-element WHT butterfly in shared memory. Force SUBGROUP-sized wg.
+        } else if (a_type == GGML_TYPE_WHT4_0 || a_type == GGML_TYPE_WHT3_0 || a_type == GGML_TYPE_WQ3_TCQ) {
+            // WHT4_0 / WHT3_0 (32-thread) and WQ3_TCQ (128-thread) bake a fixed
+            // workgroup size at pipeline creation to cooperate on the FWHT butterfly
+            // in shared memory. Bucket choice is immaterial (both buckets register the
+            // same fixed-size pipeline); keep SUBGROUP.
             dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
         } else {
             if (m <= 8192 && k >= 1024) {
@@ -17411,6 +17432,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_NVFP4:
                     case GGML_TYPE_WHT4_0:
                     case GGML_TYPE_WHT3_0:
+                    case GGML_TYPE_WQ3_TCQ:
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:

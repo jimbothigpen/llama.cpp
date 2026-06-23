@@ -1938,6 +1938,26 @@ struct block_wht3_0
 #define A_TYPE block_wht3_0
 #endif
 
+#define QUANT_K_WQ3_TCQ 128
+#define QUANT_R_WQ3_TCQ 1
+
+// WQ3_TCQ: 3-bit trellis-coded WEIGHT quant (k=3, L=10) + FWHT rotation.
+// 52 bytes/block: float16 norm + 390-bit trellis bitstream. qs is declared as 50
+// bytes (49 stream bytes + the original 1 pad byte = 0) so the t=127 sliding
+// 10-bit window read of qs[49] stays in bounds.
+struct block_wq3_tcq
+{
+    float16_t norm;    // corrected group L2 norm
+    uint8_t   qs[50];  // qs[0..48] = trellis stream, qs[49] = pad byte (0)
+};
+
+#if defined(DATA_A_WQ3_TCQ)
+#define QUANT_K QUANT_K_WQ3_TCQ
+#define QUANT_R QUANT_R_WQ3_TCQ
+#define QUANT_AUXF 1
+#define A_TYPE block_wq3_tcq
+#endif
+
 // IQ2_K — ik_llama.cpp 2-bit imatrix (2.375 bpw, no row_meta).
 // Per block (76 bytes): float16 d | uint16 extra | uint8[8] scales | uint8[64] qs.
 // 8 sub-blocks of 32 elements (2 halves of 16 each); per-half 4-bit scale
