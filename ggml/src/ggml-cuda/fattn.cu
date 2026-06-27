@@ -441,6 +441,41 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_F16)
     FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_BF16)
     FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_Q8_0)
+
+    // OScaR-as-V: K=any (bpw(K) >= 2.25) × V=oscar_int2 — completes the asymmetric KV matrix.
+    // OScaR V is plain min-max INT2 (no WHT). D in {128,256} only (QK_OSCAR_INT2=128 blocks).
+    // Excludes K bpw < 2.25 (turboq2/turboq2_tcq/q1_0 → K<V) per the K>=V asymmetric directive.
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ3_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ3_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ3_TCQ,   GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ3_TCQ,   GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ4_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ4_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ5_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ5_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ6_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ6_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_TURBOQ8_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_TURBOQ8_0,     GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_Q4_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_Q4_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_Q4_1,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_Q4_1,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_Q5_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_Q5_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_Q5_1,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_Q5_1,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_Q8_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_Q8_0,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_IQ4_NL,        GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_IQ4_NL,        GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_F16,           GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_F16,           GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_BF16,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_BF16,          GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(128, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_KV_OSCAR_INT2)
+    FATTN_VEC_CASE(256, GGML_TYPE_KV_OSCAR_INT2, GGML_TYPE_KV_OSCAR_INT2)
+
     // Mixed TCQ3/TCQ2
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ3_TCQ, GGML_TYPE_TURBOQ2_TCQ)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBOQ2_TCQ, GGML_TYPE_TURBOQ3_TCQ)
@@ -717,7 +752,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     if (is_turbo_type(K->type) || is_turbo_type(V->type)) {
         const bool tcq_kv = K->type == GGML_TYPE_TURBOQ2_TCQ || K->type == GGML_TYPE_TURBOQ3_TCQ ||
                             V->type == GGML_TYPE_TURBOQ2_TCQ || V->type == GGML_TYPE_TURBOQ3_TCQ;
+        // OScaR (K or V) is instantiated for D in {128,256} only (QK_OSCAR_INT2=128 blocks).
+        // Cap d_limit and require D % 128 == 0 so we never route D=64/512 to a non-existent
+        // OScaR VEC instance (would fall through to GGML_ABORT at the FATTN_VEC_CASE dispatch).
+        const bool oscar_kv = K->type == GGML_TYPE_KV_OSCAR_INT2 || V->type == GGML_TYPE_KV_OSCAR_INT2;
         int d_limit = tcq_kv ? 256 : 512;
+        if (oscar_kv && d_limit > 256) {
+            d_limit = 256;
+        }
         // TODO 135: on pre-Ampere (sm_60/sm_70/sm_75) the turbo VEC kernel at D=512 needs
         // >48 KB static shared memory and is compiled as NO_DEVICE_CODE there (see
         // fattn-vec.cuh). Cap to D=256 so we never launch a stubbed kernel; D<=256 turbo
@@ -725,7 +767,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         if (cc < GGML_CUDA_CC_AMPERE && d_limit > 256) {
             d_limit = 256;
         }
-        if (Q->ne[0] <= d_limit && Q->ne[0] % 64 == 0 && Q->ne[0] != 192) {
+        if (Q->ne[0] <= d_limit && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 &&
+            (!oscar_kv || Q->ne[0] % 128 == 0)) {
             return BEST_FATTN_KERNEL_VEC;
         }
         return BEST_FATTN_KERNEL_NONE;

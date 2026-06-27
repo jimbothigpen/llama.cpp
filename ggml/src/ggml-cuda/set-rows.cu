@@ -2501,12 +2501,17 @@ static void set_rows_cuda_oscar_int2(
         const int64_t wht_group = (ne00 % OSCAR_WHT_FULL_DIM == 0) ? OSCAR_WHT_FULL_DIM : QK_OSCAR_INT2;
         const int64_t n_groups  = ne00 / wht_group; // groups per row (= n_kv_heads for head_dim=256)
         const int64_t ne_total  = n_groups * ne01 * ne02 * ne03;
+        // op_params[0] gates the Walsh-Hadamard rotation: K writes (cpy_k) set it to 1 so K is
+        // stored WHT-rotated (decoded by applying the forward WHT to Q); V writes (cpy_v) leave it
+        // 0 → plain min-max INT2, no WHT (FA V-accumulation needs no inverse transform). Mirrors the
+        // CPU/Vulkan op_params[0] gate (ops.cpp is_oscar; ggml-cpu c52607674c).
+        const bool apply_wht = (dst->op_params[0] != 0);
         k_set_rows_oscar_int2<idx_t><<<(int)ne_total, (int)wht_group, 0, stream>>>(
             src0_d, src1_d, (block_kv_oscar_int2 *)dst->data,
             ne00, ne01, ne10, ne11, ne12, ne13,
             s01, s02, s03, s10, s11, s12,
             nb1, nb2, nb3,
-            true);
+            apply_wht);
     }
 }
 

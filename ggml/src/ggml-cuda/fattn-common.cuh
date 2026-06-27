@@ -1769,6 +1769,66 @@ static __device__ __forceinline__ void dequantize_V_turboq3_tcq(
     dequantize_V_turboq3_tcq_cb<T, ne>(vx, dst, i0, d_turboq3_tcq_codebook);
 }
 
+// OScaR INT2 V dequantize: plain affine min-max INT2 (val = m + d*q), NO inverse-WHT.
+// Unlike OScaR K (stored WHT-rotated, decoded by applying the forward WHT to Q so the two
+// 1/sqrt(D) factors cancel), the V cache is written un-rotated: the SET_ROWS encode leaves
+// op_params[0]==0 → plain min-max INT2, no Hadamard. FA V-accumulation (sum_j P_j * V_j) is a
+// linear combination with no Q to rotate, so a WHT-rotated V would need an inverse-WHT on the
+// FA output; storing V plain avoids that entirely. Exact CUDA mirror of the CPU decoder
+// dequantize_row_kv_oscar_int2 (ggml-turbo-quant.c): val = d*q + m. i0 is a multiple of
+// V_rows_per_thread (==4 on the quantized-V path) from the VEC kernel access pattern.
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_kv_oscar_int2(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_kv_oscar_int2 * x = (const block_kv_oscar_int2 *) vx;
+
+    const int64_t ib = i0 / QK_OSCAR_INT2;
+    const int     j0 = i0 % QK_OSCAR_INT2;
+    const float   d  = __half2float(x[ib].d);
+    const float   m  = __half2float(x[ib].m);
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    if constexpr (ne == 4) {
+        // j0 is always a multiple of 4 from the VEC kernel access pattern.
+        // 4 consecutive 2-bit codes share one qs byte.
+        const uint8_t qs_byte = x[ib].qs[j0 / 4];
+
+        const float v0 = m + d * (float)((qs_byte >> 0) & 0x3);
+        const float v1 = m + d * (float)((qs_byte >> 2) & 0x3);
+        const float v2 = m + d * (float)((qs_byte >> 4) & 0x3);
+        const float v3 = m + d * (float)((qs_byte >> 6) & 0x3);
+
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+            ((half2 *) dst)[1] = make_half2(__float2half(v2), __float2half(v3));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float2 *) dst)[0] = make_float2(v0, v1);
+            ((float2 *) dst)[1] = make_float2(v2, v3);
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    } else { // ne == 2 — both codes lie within one qs byte (j0 is a multiple of 2).
+        const uint8_t qs_byte = x[ib].qs[j0 / 4];
+        const int     sh      = (j0 % 4) * 2;
+        const float   v0      = m + d * (float)((qs_byte >> sh)       & 0x3);
+        const float   v1      = m + d * (float)((qs_byte >> (sh + 2)) & 0x3);
+#ifdef FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, half>) {
+            ((half2 *) dst)[0] = make_half2(__float2half(v0), __float2half(v1));
+        } else
+#endif // FP16_AVAILABLE
+        if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[0] = v0;
+            ((float *) dst)[1] = v1;
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -1851,6 +1911,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_turboq2_tcq<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_TURBOQ3_TCQ) {
         return dequantize_V_turboq3_tcq<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_KV_OSCAR_INT2) {
+        return dequantize_V_kv_oscar_int2<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
