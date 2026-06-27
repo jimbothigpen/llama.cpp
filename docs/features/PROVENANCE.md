@@ -98,6 +98,7 @@ Platform-specific kernel tuning ported from external contributors. No converter 
 | Feature | Upstream source | Tracked ref | In-repo paths | In-tree since | Last-verified | Status |
 |---|---|---|---|---|---|---|
 | RDNA3.5 MMQ + FATTN tile tuning (gfx1150/gfx1151/gfx1152/gfx1153) | **justinappler** (commits `5dc18d7f4`+`3511e7d1c`; net: MMQ y=64, nwarps=4, dense-aware x_max=48 for MoE layers; FATTN tile config D=256 override) | upstream justinappler `3511e7d1c` (net of both) | `ggml/src/ggml-cuda/mmq.cuh`, `ggml/src/ggml-cuda/fattn-tile.cuh` | commits `006252e63`+`3c3838ff2` (2026-05-31) | 2026-06-23 | VERIFIED — §-FLAG-PENDING-BENCH: FATTN tile override (`3c3838ff2`) unbenched on gfx1150; MMQ tuning (`006252e63`) confirmed present |
+| Asymmetric KV-quant FA matrix (K-bpw ≥ V-bpw) | **this fork** (original impl; wired all 57 missing flash-attn vec K×V pairs where bpw(K) ≥ bpw(V) across 17 KV-capable types — 174 total K≥V pairs; fixes `fattn.cu` vec-dispatch `GGML_ABORT` for unwired combos, e.g. turboq6×turboq3 SIGABRT rc=134 — NOT OOM) | n/a | `ggml/src/ggml-cuda/fattn.cu`, `ggml/src/ggml-cuda/fattn-vec-f16.cu` (FA_ALL_QUANTS dispatch) | `393307e58` (2026-06-26) | 2026-06-26 | CUDA/HIP only; Vulkan FA path separate/unaffected |
 
 ## Tracked but NOT currently in-tree (drift watch only)
 
