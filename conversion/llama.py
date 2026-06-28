@@ -92,7 +92,7 @@ class LlamaModel(TextModel):
                 else:
                     target_layers = [1, 18, 35]
                     logger.info(f"EAGLE-3: target_layers = {target_layers} (default; no eagle_config or target config)")
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+            self.gguf_writer.add_target_layers(target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config, then draft config
             if eagle3_raw_config.get("target_hidden_size") is not None:
@@ -102,12 +102,12 @@ class LlamaModel(TextModel):
                 target_hidden_size = target_config.get("hidden_size") or self.hparams.get("hidden_size")
                 src = "target/draft model config"
             logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
-            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+            self.gguf_writer.add_target_hidden_size(target_hidden_size)
 
             # norm_before_residual (RedHat-style eagle3 specific)
             norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
             logger.info(f"EAGLE-3: norm_before_residual = {norm_before_residual}")
-            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+            self.gguf_writer.add_norm_before_residual(norm_before_residual)
 
     def set_vocab(self):
         # eagle3: use tokenizer from target model if provided
