@@ -1484,6 +1484,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--checkpoint-eviction"}, "NAME",
+        "checkpoint eviction strategy: auto, fifo, variance (default: auto = variance)",
+        [](common_params & params, const std::string & value) {
+            if (value == "fifo") {
+                params.checkpoint_eviction = 1;
+            } else if (value == "variance") {
+                params.checkpoint_eviction = 2;
+            } else if (value == "auto") {
+                params.checkpoint_eviction = 0;
+            } else {
+                throw std::invalid_argument("unknown checkpoint eviction strategy: " + value);
+            }
+        }
+    ).set_env("LLAMA_ARG_CHECKPOINT_EVICTION").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),

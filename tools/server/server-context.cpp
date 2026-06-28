@@ -1511,8 +1511,9 @@ private:
         SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         if (params_base.n_ctx_checkpoints > 0) {
-            SRV_INF("context checkpoints enabled, max = %d, min spacing = %d\n",
-                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
+            const char * eviction_name = params_base.checkpoint_eviction == 1 ? "fifo" : "variance";
+            SRV_INF("context checkpoints enabled, max = %d, min spacing = %d, eviction = %s\n",
+                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step, eviction_name);
         } else {
             SRV_INF("%s", "context checkpoints disabled\n");
         }
@@ -2566,16 +2567,62 @@ private:
         return true;
     }
 
+    static std::list<common_prompt_checkpoint>::iterator evict_checkpoint_by_variance(
+            std::list<common_prompt_checkpoint> & ckpts) {
+        auto it = ckpts.begin();
+        if (ckpts.size() < 3) {
+            return it;
+        } else if (ckpts.size() == 3) {
+            std::advance(it, 1);
+            return it;
+        }
+
+        std::vector<int64_t> positions;
+        positions.reserve(ckpts.size());
+        for (const auto & ckpt : ckpts) {
+            positions.push_back(int64_t(ckpt.pos_max));
+        }
+
+        // Remove the checkpoint whose removal yields the most uniform spacing.
+        // For each interior checkpoint, the resulting variance differs only in
+        // the product of the two adjacent gaps that merge — minimizing that
+        // product minimizes the post-removal variance (first+last are pinned).
+        const size_t n     = positions.size();
+        const size_t start = 1;
+        const size_t end   = n - 1;
+        const double scale = 1.0 / positions[n - 1];
+
+        size_t best_idx = start;
+        double best_val = (positions[start] - positions[start - 1])
+                        * (positions[start + 1] - positions[start]) * scale;
+
+        for (size_t i = start + 1; i < end; i++) {
+            double val = (positions[i] - positions[i - 1])
+                       * (positions[i + 1] - positions[i]) * scale;
+            if (val < best_val) {
+                best_val = val;
+                best_idx = i;
+            }
+        }
+
+        std::advance(it, best_idx);
+        return it;
+    }
+
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
             // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+            auto it = slot.prompt.checkpoints.begin();
+            if (params_base.checkpoint_eviction != 1) {
+                it = evict_checkpoint_by_variance(slot.prompt.checkpoints);
+            }
+            const auto & cur = *it;
 
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                     cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+            slot.prompt.checkpoints.erase(it);
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
