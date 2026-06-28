@@ -50,6 +50,14 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DeepseekV2ForCausalLM": "deepseek",
     "DeepseekV3ForCausalLM": "deepseek",
     "DeepseekV32ForCausalLM": "deepseek",
+    # COLLISION (TODO 259 recon, 2026-07-01): mainline's native DFlash (PR #22105) independently
+    # registers its own HF wrapper class under the identical literal "DFlashDraftModel" string
+    # (conversion/qwen.py DFlashModel). architectures-string dispatch is single-valued (see
+    # get_model_class), so only one of the two can own this key. We keep ours (dflash_draft ->
+    # LLM_ARCH_DFLASH_DRAFT, our production cross-attention-ring drafters, recon-measured 25.1%
+    # accept) as the default; mainline's class is registered under a disambiguated string in
+    # qwen.py (search "DFlashDraftModel-mainline-native") since it is not reachable via a real
+    # checkpoint's architectures field. See HEAD-TO-HEAD-PLAN.md for the disambiguation plan.
     "DFlashDraftModel": "dflash_draft",
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",

@@ -167,13 +167,14 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // multi-token prediction head loaded from the target GGUF
+    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // mainline-native DFlash (KV-injection, block-masked; PR #22105)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
     COMMON_SPECULATIVE_TYPE_PHANTOM,       // phantom: bloom + adaptive γ + fallback + ghost buffer
-    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash block-diffusion speculative decoding
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // buun-sourced DFlash (cross-attention ring, block-masked; ours)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -416,6 +417,9 @@ struct common_params_speculative {
         // The server and imatrix already force n_rs_seq=0 for their MTP contexts; returning 0 here
         // keeps the bundled speculative-simple path consistent with them. (If/when RS-snapshot
         // rollback is taught to restore recurrent state, this can return draft.n_max again.)
+        // NOTE: mainline's d1b34251b (DFlash PR #22105) reintroduces type-based RS-seq branching
+        // (adding COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH to a needs_rs_seq list) — deliberately NOT
+        // taken here, since it would resurrect the TODO 233 regression this function fixes.
         return 0u;
     }
 

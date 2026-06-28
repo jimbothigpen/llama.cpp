@@ -625,3 +625,67 @@ class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReor
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+
+
+# COLLISION (TODO 259 recon, 2026-07-01): a real checkpoint's config.json architectures string
+# for mainline-native DFlash drafters is "DFlashDraftModel" (mainline PR #22105), which is the
+# SAME literal string our own buun-sourced dflash_draft.py registers for its (architecturally
+# different, KV-cross-attn-ring) drafters. architectures-string -> class dispatch is single-valued
+# (conversion/__init__.py TEXT_MODEL_MAP + get_model_class), so both cannot own "DFlashDraftModel".
+# We keep TEXT_MODEL_MAP pointing at dflash_draft.py (our production path); this class is
+# registered under a disambiguated name so it can still be exercised explicitly
+# (get_model_class("DFlashDraftModel-mainline-native")) without silently shadowing ours in any
+# process that imports every model module (e.g. --print-supported-models). To convert a real
+# mainline-native drafter checkpoint today, edit its config.json's "architectures" field to
+# "DFlashDraftModel-mainline-native" before running convert_hf_to_gguf.py. See HEAD-TO-HEAD-PLAN.md.
+@ModelBase.register("DFlashDraftModel-mainline-native")
+class DFlashModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError(
+                "DFlash draft model requires --target-model-dir to be specified. "
+                "Please provide the path to the target model directory containing the tokenizer."
+            )
+        logger.info(f"DFlash: Using tokenizer from target model: {self.target_model_dir}")
+        original_dir = self.dir_model
+        self.dir_model = self.target_model_dir
+        super().set_vocab()
+        self.dir_model = original_dir
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        block_size = self.hparams.get("block_size", 16)
+        self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.block_size", block_size)
+        dflash_config = self.hparams.get("dflash_config", {})
+
+        target_layer_ids = dflash_config.get("target_layer_ids", [])
+        if target_layer_ids:
+            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", extract_layer_ids)
+
+        mask_token_id = dflash_config.get("mask_token_id", None)
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+        use_sliding_window = self.hparams.get("use_sliding_window", False)
+        sliding_window = self.hparams.get("sliding_window")
+        layer_types = self.hparams.get("layer_types")
+        if use_sliding_window and sliding_window and layer_types:
+            is_swa = [lt == "sliding_attention" for lt in layer_types]
+            self.gguf_writer.add_sliding_window(sliding_window)
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "fc.weight":
+            yield (name, data_torch)
+            return
+        if name == "hidden_norm.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_OUTPUT_NORM), data_torch)
+            return
+        if not name.startswith("model."):
+            name = "model." + name
+        yield from super().modify_tensors(data_torch, name, bid)
