@@ -9,9 +9,54 @@ versioning is milestone-driven (one tag per phase completion), not semver.
 
 ## [Unreleased]
 
-HEAD: `0372c10e4` (2026-06-29 — Merge: server variance checkpoint-eviction). Prior: `83e7a17e3` (2026-06-29 — Merge: fwd-sync). Prior: `e6fc143f8` (2026-06-29 — provenance audit). Prior: `393307e58`/`fc1f979c2` (2026-06-29 — asym-KV FA matrix). Prior: `dc7236725` (2026-06-29 — OSCAR-V CUDA/HIP KV FA matrix). Prior: `e5c328187` (2026-06-18 — Merge: InnerQ Q-rotation gate on g_innerq_finalized, TODO 236). Prior: `6e5087c35` (2026-06-18 — Merge: opt-in --spec-ensemble pick-longest drafter, TODO 117). Prior: `3ff8220f3` (2026-06-14 — Merge: Vulkan `--no-mmap` MoE load deadlock fix, gfx1150/RADV `9447292d1`). Prior: `a4a92c62b`/`b22b6492d` (2026-06-14 — TURBOQ8_0 8-bit KV codec, port of buun `TURBO8_0`). Prior: `e40b79091`/`d487cece8` (2026-06-14 — EAGLE3 fc_norm converter variant + dead-entry cleanup). Prior: `5944b2de8`/`5bd9b5212`/`d66c1886e`/`df1d68f69` (2026-06-14 — EAGLE3 `t_layer_inp` per-layer hidden-state capture across 10 archs, TODO 240c). Prior: `50b747212` (2026-06-14 — vulkan: fix mul_mat_id expert offset for ik_llama IQK quants, qwen35moe MoE garbage gfx1150). Prior: `e54bdd9d3` (2026-06-14 — port buun batch: recurrent state-view fast-path + GDN tensor-split fix). Prior: `d1eda75f4` (2026-06-13 — Merge mainline ggml-org @ `c2ba3e47a`: cohere2-MoE arch #24260, jinja fixes, vulkan non-contig unary #24215). Prior: `aa395f8eb` (2026-06-13 — llama-grammar: clamp oversized repetition upper-bound instead of aborting). Prior: `3431f29d5` (2026-06-13 — gemma4-assistant: proportional RoPE fallback for spec-decode accuracy). Prior: `dedc7787e`/`c3b5c1b82` (2026-06-13 — docs: scrub private-infra leaks, reconcile drifted feature-doc code refs). Prior: `2ef6c9d3a` (2026-06-10 — fix(merge): GGML_OP_COUNT static_assert 98→99). Prior: `0d08feeaf` (2026-06-10 — cuda: guard mul_mat_id fast path on pascal). Prior: `ea5f6c658` (2026-06-10 — graph: extend iswa kq_mask null-buffer guard to local src_kv_iswa, MTP draft). Prior: `abe20ebea` (2026-06-10 — context: output_reorder() use n_embd_out() for embd/embd_nextn stride, TODO 221). Prior: `e65fe2ae6` (2026-06-10 — Merge mainline-38 / b1144 into fork main; ggml-vulkan.cpp + ggml.c conflicts resolved; 0/519 behind, GitHub behind-banner cleared). Prior: `d964e3a2f` (2026-06-09 — tria-gen: support qwen35 hybrid arch — Qcur_full de-interleave + linear-layer zero-fill; Qwen3.5/3.6 calibration now captures full-attention layers correctly). Prior: `81ca6b749` (2026-06-07 — WHT3_0/WHT4_0 Vulkan MoE expert dispatch). Prior: `d8393c386` (2026-06-07 — iq4_nl FA-vec KV CUDA/HIP kernel; Kaggle-T4 PPL 7.3941 ≈ f16 7.4047). Prior: `4f39662dd` (2026-06-06 — TODO 217: Vulkan mul_mat_vec_id adds IQ5_KS/IQ2_KS/IQ1_KT). Prior: `ae6bc152c` (2026-06-06 — TODO 207 scrub: private infra purged). Prior: `031e87b57` (2026-06-06 — TODO 212: Vulkan TURBOQ{2,3}_INNERQ KV alias support). Prior: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256; `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed. /opt: b1144 shipped 2026-06-10.
+HEAD: `1abca5d4d` (2026-06-29 — perf: remove n_acc_tokens_per_pos hot-path vector). Prior: `67120d2e4` (2026-06-29 — adopt: turboq4/turboq3 Lloyd-Max centroid corrections). Prior: `1289ee3cc`/`459e0b8b7`/`43919f495`/`e3f11fc9c` (2026-06-29 — docs hygiene passes P0–P3 + WQ3_TCQ ftype). Prior: `0372c10e4` (2026-06-29 — Merge: server variance checkpoint-eviction). Prior: `83e7a17e3` (2026-06-29 — Merge: fwd-sync). Prior: `e6fc143f8` (2026-06-29 — provenance audit). Prior: `393307e58`/`fc1f979c2` (2026-06-29 — asym-KV FA matrix). Prior: `dc7236725` (2026-06-29 — OSCAR-V CUDA/HIP KV FA matrix). Prior: `e5c328187` (2026-06-18 — Merge: InnerQ Q-rotation gate on g_innerq_finalized, TODO 236). Prior: `6e5087c35` (2026-06-18 — Merge: opt-in --spec-ensemble pick-longest drafter, TODO 117). Prior: `3ff8220f3` (2026-06-14 — Merge: Vulkan `--no-mmap` MoE load deadlock fix, gfx1150/RADV `9447292d1`). Prior: `a4a92c62b`/`b22b6492d` (2026-06-14 — TURBOQ8_0 8-bit KV codec, port of buun `TURBO8_0`). Prior: `e40b79091`/`d487cece8` (2026-06-14 — EAGLE3 fc_norm converter variant + dead-entry cleanup). Prior: `5944b2de8`/`5bd9b5212`/`d66c1886e`/`df1d68f69` (2026-06-14 — EAGLE3 `t_layer_inp` per-layer hidden-state capture across 10 archs, TODO 240c). Prior: `50b747212` (2026-06-14 — vulkan: fix mul_mat_id expert offset for ik_llama IQK quants, qwen35moe MoE garbage gfx1150). Prior: `e54bdd9d3` (2026-06-14 — port buun batch: recurrent state-view fast-path + GDN tensor-split fix). Prior: `d1eda75f4` (2026-06-13 — Merge mainline ggml-org @ `c2ba3e47a`: cohere2-MoE arch #24260, jinja fixes, vulkan non-contig unary #24215). Prior: `aa395f8eb` (2026-06-13 — llama-grammar: clamp oversized repetition upper-bound instead of aborting). Prior: `3431f29d5` (2026-06-13 — gemma4-assistant: proportional RoPE fallback for spec-decode accuracy). Prior: `dedc7787e`/`c3b5c1b82` (2026-06-13 — docs: scrub private-infra leaks, reconcile drifted feature-doc code refs). Prior: `2ef6c9d3a` (2026-06-10 — fix(merge): GGML_OP_COUNT static_assert 98→99). Prior: `0d08feeaf` (2026-06-10 — cuda: guard mul_mat_id fast path on pascal). Prior: `ea5f6c658` (2026-06-10 — graph: extend iswa kq_mask null-buffer guard to local src_kv_iswa, MTP draft). Prior: `abe20ebea` (2026-06-10 — context: output_reorder() use n_embd_out() for embd/embd_nextn stride, TODO 221). Prior: `e65fe2ae6` (2026-06-10 — Merge mainline-38 / b1144 into fork main; ggml-vulkan.cpp + ggml.c conflicts resolved; 0/519 behind, GitHub behind-banner cleared). Prior: `d964e3a2f` (2026-06-09 — tria-gen: support qwen35 hybrid arch — Qcur_full de-interleave + linear-layer zero-fill; Qwen3.5/3.6 calibration now captures full-attention layers correctly). Prior: `81ca6b749` (2026-06-07 — WHT3_0/WHT4_0 Vulkan MoE expert dispatch). Prior: `d8393c386` (2026-06-07 — iq4_nl FA-vec KV CUDA/HIP kernel; Kaggle-T4 PPL 7.3941 ≈ f16 7.4047). Prior: `4f39662dd` (2026-06-06 — TODO 217: Vulkan mul_mat_vec_id adds IQ5_KS/IQ2_KS/IQ1_KT). Prior: `ae6bc152c` (2026-06-06 — TODO 207 scrub: private infra purged). Prior: `031e87b57` (2026-06-06 — TODO 212: Vulkan TURBOQ{2,3}_INNERQ KV alias support). Prior: `6fcd17fce` (2026-06-05 — WHT `ne1=1` decode to fused `*_multi<1>` kernel, retire fp32 v12). Prior: `3abe1c048` (WHT3_0/WHT4_0 small-batch throughput: route ne1≤8 to fused TQ kernel, +290% WHT3_0 pp at -ub8 on RDNA3). Prior: `a7a2a1d0d` (2026-06-04 — weight-quant matrix PPL-reference + bench-only methodology). Prior: `55bb0d418` (2026-06-02 — remove RotorQuant iso/planar KV family (slots 72-75) — zero-rotation scalar dup, strictly dominated). Prior: `d0773ae2d` IQ2_KT: fix GS=8 cluster-index Phase 2 + k=256; `38c8ce589` port carlosfundora#109: ROCm KV-guardrails tests and arg docs; `9fdf82344` port carlosfundora#108: bounds-check multi-token extraction tensor copy; `cf81fa92b` common: warn when mmap + -ngl>0 is used with an integrated GPU; `a937c23f6` feat(bench/ppl): wire TriAttention + PFlash enable flags into bench + perplexity tools; `570953782` chore: remove external companion-project references; `48dd0b3b8` speculative-simple: allow self-spec types without external draft model; `851b3a88d` Merge mainline ggml-org/llama.cpp @95b8b8ec1 (forward-sync); `7337523e6` oscar: full-dim D=256 WHT for INT2 KV + GGML_OP_FWHT removed. /opt: b1144 shipped 2026-06-10.
 
 In-flight: EAGLE3 catch-up-decode PORT (C1 stash+prepend, ~80-110 LOC); Trellis P3c (IQ1_KT weight quant port); IQ2_KT cluster-accel PPL retune to k=80–100 (late-stage polish); mainline PORT-NOW fixes; PFlash non-Qwen live-scorer validation (§-FLAG). §-FLAG-ATTN_ROT_KSHIFT: OScaR INT2 K-shift for streaming inference unverified. Known-issue TODO 213: gfx1103 ROCm PPL rc=134 (transient; no-repro; no code fix). Vulkan TURBOQ INNERQ KV DONE (`031e87b57`); 207 scrub DONE (`ae6bc152c`); 217 Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT DONE (`4f39662dd`); iq4_nl FA-vec KV DONE (`d8393c386`); WHT3_0/WHT4_0 mul_mat_vec_id DONE (`81ca6b749`); RotorQuant iso/planar removal DONE (was in-flight; now `55bb0d418`).
+
+### Performance — remove `n_acc_tokens_per_pos` hot-path vector (turbotan ADOPT perf-half) (2026-06-29)
+
+`1abca5d4d`. Port of turbotan `44da65ea1` (perf-half only). The
+`n_acc_tokens_per_pos` vector — a per-draft-position acceptance counter
+used only for the `'#acc rate/pos'` log suffix — was being resized and
+incremented on every accepted token in the MTP hot path, costing ~4 tok/s.
+The vector and the log suffix are removed; the `'#mean acc len'` stat is
+retained. Behavior-neutral: no change to draft generation, acceptance
+logic, or output.
+
+The server checkpoint-gate half of turbotan `44da65ea1` is **held** pending
+server-side spec-decode acceptance validation (`feat/adopt1-mtp-tps-fix-2026-06-29`,
+`0d02fb8ce`).
+
+Changed: `common/speculative.cpp` (+1/−19).
+
+### Fixed — turboq4/turboq3 Lloyd-Max centroid corrections (thetom ADOPT-2 + ADOPT-4) (2026-06-29)
+
+`67120d2e4`. Ports two centroid table corrections from TheTom
+(`77ab7e988` + `545092c36`).
+
+**ADOPT-2** (`77ab7e988`): turboq4 extreme centroid −0.173926f → −0.241529f;
+full 16-entry table + 15 midpoints corrected in both CPU
+(`ggml-turbo-quant.c`, 3×) and CUDA/HIP (`turbo-quant.cuh`, 1×). Also
+drops a dead `rnorm` zero-write.
+
+**ADOPT-4** (`545092c36`): turboq3 outer centroid −0.190685f → −0.190207f;
+8-entry table + 7 midpoints corrected in both backends.
+
+Quality (pure-CPU, Qwen3.5-9B-Q4_K_M, c=512, 10 chunks):
+
+| KV type  | PPL         | vs f16 |
+|----------|-------------|--------|
+| f16      | 9.3831±0.488 | —      |
+| turboq4  | 9.4491±0.491 | +0.7%  |
+| turboq3  | 9.4699±0.494 | +0.9%  |
+
+Mean KLD @2048 −4.3% (turboq3). GPU PPL and KV-quant matrix rerun owed
+post-merge (tracked separately).
+
+Attribution: TheTom (`tturney1@gmail.com`).
+
+Changed: `ggml/src/ggml-turbo-quant.c` (+29/−28),
+`ggml/src/ggml-cuda/turbo-quant.cuh` (+13/−15).
 
 ### Added — opt-in `--spec-ensemble` pick-longest ensemble drafter for speculative decode (TODO 117) (2026-06-18)
 
