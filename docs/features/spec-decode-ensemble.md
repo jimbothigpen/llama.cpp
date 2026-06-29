@@ -2,7 +2,7 @@
 
 ## Summary
 
-The yggdrasil fork's `--spec-type` flag accepts a comma-separated list of speculative
+This fork's `--spec-type` flag accepts a comma-separated list of speculative
 strategies. When multiple types are listed, `common_speculative_draft()` applies them in
 **priority order**: the first impl that proposes a non-empty draft wins for that step; later
 impls are skipped. This is the **cascade ensemble** — it is already shipped and requires no
@@ -52,7 +52,7 @@ tracking for the arms follows their respective rows in
 ## Benchmark results (TODO 117, 2026-06-12)
 
 Host: gfx1103 (ROCm, `HSA_OVERRIDE_GFX_VERSION=11.0.2`).
-Binary: `/opt/llama-yggdrasil-rocm/bin/llama-speculative-simple` v733 (`d4a3c802c`).
+Binary: `llama-speculative-simple` v733 (`d4a3c802c`).
 Model: `Qwen3.5-9B-MTP-Q4_K_M.gguf`. Prompt: 649-tok Wikipedia "Robert Boulter" passage.
 Sampler: `--temp 0 --seed 1`. Context: `-n 256 -c 4096 -fa on -ngl 99 --no-mmap`.
 
@@ -100,4 +100,4 @@ throughput is still higher.
 - `common/speculative.cpp` — `common_speculative_draft()` dispatch → `_cascade` (default) /
   `_ensemble` (pick-longest, `--spec-ensemble`)
 - `docs/features/mtp.md` — MTP speculative decoding
-- TODO 117 measurement data: `kernel-work/worker-scratch/117-ngram-neural-ensemble-2026-06-12/`
+- TODO 117 measurement data

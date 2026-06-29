@@ -102,7 +102,7 @@ returns false for WQ3_TCQ.
 
 ## Validation
 
-End-to-end on **Qwen3.5-2B** (ai02, sm_75) — see scratch `VALIDATION-RESULTS.md`:
+End-to-end on **Qwen3.5-2B** (sm_75):
 - Quantize RC=0 → 4.15 BPW (931.78 MiB), GGUF header valid (file_type=59, codebook=1024, sign_seed=42,
   320 tensors: 186 WQ3_TCQ / 133 F32 / 1 Q6_K).
 - **CPU decode** (`-ngl 0`) and **CUDA decode** (`-ngl 99`) both **coherent** (correct, no NaN/abort).
@@ -110,7 +110,7 @@ End-to-end on **Qwen3.5-2B** (ai02, sm_75) — see scratch `VALIDATION-RESULTS.m
   Python reference **max-abs-err = 1.19e-7** (1 fp32 ULP). CPU↔CUDA difference bounded only by the CUDA
   fast kernel's fp16 store.
 
-**Phase 3 (HIP/ROCm, gfx1150 / ai00):**
+**Phase 3 (HIP/ROCm, gfx1150):**
 - **Build:** full ggml-hip backend, ROCm 7.2.4, `-DAMDGPU_TARGETS=gfx1150`, 0 errors. The `.cu`/`mmq*.cu`
   globs auto-include `wq3-tcq.cu` + `mmq-instance-wq3_tcq.cu`; dispatch is the shared `ggml-cuda.cu`
   (`is_tq_weight`/WQ3 guards), so no CMake/dispatch edits were needed — only source hipify shims.
@@ -129,8 +129,8 @@ End-to-end on **Qwen3.5-2B** (ai02, sm_75) — see scratch `VALIDATION-RESULTS.m
 
 ## Port plan
 
-Multi-backend roadmap (Ph3 HIP/ROCm done, Ph4 Vulkan pending) tracked in the orchestrator's
-`WQ3-PORT-PLAN.md`. Phase 2 delivered the quantizer + CPU dequant + imatrix decision and ran the
+Multi-backend roadmap (Ph3 HIP/ROCm done, Ph4 Vulkan pending).
+Phase 2 delivered the quantizer + CPU dequant + imatrix decision and ran the
 deferred Ph1 smoke (quantize + dual-backend coherent decode + dequant parity), plus a minimal Ph1 CUDA
 dispatch fix (WHT-only `mul_mat_vec_tq` branch; WQ3 multi-token now uses dequant→cuBLAS).
 
@@ -164,5 +164,5 @@ zero/garbage codebook → systematic garbage. Q4_K_M uses no such device symbol 
 
 **Durable fix (recommended, not yet landed):** replace the `__constant__`/`cudaMemcpyToSymbol`
 codebook+signs with `cudaMalloc`'d device buffers passed to the kernels as pointer arguments, removing
-the driver-fragile symbol-registration path. Validation requires a driver-580 box (Kaggle T4); ai02
+the driver-fragile symbol-registration path. Validation requires a driver-580 box (Kaggle T4); older drivers
 (driver 550) cannot reproduce.

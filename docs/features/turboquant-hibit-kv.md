@@ -108,7 +108,7 @@ types pair naturally as the high-precision K anchor against a more aggressive V,
 
 ### Functional validation
 
-Both types pass a functional smoke on ai00 (gfx1150 ROCm/HIP) with Qwen3.5-9B-Q4_K_M, `-fa on
+Both types pass a functional smoke on AMD RDNA3.5 gfx1150 GPU (ROCm/HIP) with Qwen3.5-9B-Q4_K_M, `-fa on
 --no-mmap -ngl 99`, symmetric K=V: coherent generation, no assert/crash, RC=0. This is a **functional**
 check only — not a TPS/PPL measurement.
 
