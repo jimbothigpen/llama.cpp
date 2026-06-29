@@ -38,7 +38,7 @@ which names these types `TURBO2_TCQ` and `TURBO3_TCQ`.
 
 **Naming.** This fork renames them to `turboq2_tcq` / `turboq3_tcq`
 (enum symbols `GGML_TYPE_TURBOQ2_TCQ` = 66 / `GGML_TYPE_TURBOQ3_TCQ` = 67,
-`ggml/include/ggml.h:438-439`). The `q`-prefix and `_tcq` suffix
+`ggml/include/ggml.h:439-440`). The `q`-prefix and `_tcq` suffix
 unambiguously distinguish these from the base PolarQuant family
 (`turboq2`/`turboq3`, slots 60–61) and from each other. Because KV cache types
 are runtime-only identifiers (never serialized into `.gguf`), the rename has no

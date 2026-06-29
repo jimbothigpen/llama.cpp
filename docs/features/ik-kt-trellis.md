@@ -12,9 +12,9 @@
 
 | Type | ggml ID | LLAMA_FTYPE | CLI name | bpw (block) | bpw (w/ row-meta) | Backends | State |
 |---|---|---|---|---|---|---|---|
-| `IQ4_KT` | 155 (`ggml.h:468`) | `MOSTLY_IQ4_KT`=49 (`llama.h:168`) | "4.0 bpw ik_llama row-meta trellis" | **4.0** | **4.125** | CPU, CUDA/HIP, Vulkan | **Stable** |
-| `IQ3_KT` | 154 (`ggml.h:467`) | `MOSTLY_IQ3_KT`=54 (`llama.h:174`) | "3.0 bpw ik_llama row-meta trellis" | **3.0** | **3.125** | CPU, CUDA/HIP, Vulkan | **Stable** |
-| `IQ2_KT` | 153 (`ggml.h:466`) | `MOSTLY_IQ2_KT`=55 (`llama.h:175`) | "2.0 bpw ik_llama row-meta trellis 2-bit" | **2.0** | **2.125** | CPU, CUDA/HIP, Vulkan | **§-FLAG — DO NOT USE** |
+| `IQ4_KT` | 155 (`ggml.h:476`) | `MOSTLY_IQ4_KT`=49 (`llama.h:168`) | "4.0 bpw ik_llama row-meta trellis" | **4.0** | **4.125** | CPU, CUDA/HIP, Vulkan | **Stable** |
+| `IQ3_KT` | 154 (`ggml.h:475`) | `MOSTLY_IQ3_KT`=54 (`llama.h:174`) | "3.0 bpw ik_llama row-meta trellis" | **3.0** | **3.125** | CPU, CUDA/HIP, Vulkan | **Stable** |
+| `IQ2_KT` | 153 (`ggml.h:474`) | `MOSTLY_IQ2_KT`=55 (`llama.h:175`) | "2.0 bpw ik_llama row-meta trellis 2-bit" | **2.0** | **2.125** | CPU, CUDA/HIP, Vulkan | **§-FLAG — DO NOT USE** |
 
 Row-meta overhead: each row carries a 4-byte `float` prefix. For a 256-element row (single block) this adds 0.125 bpw; for larger rows (e.g. 4096 elements = 16 blocks) the overhead is ~0.008 bpw. The "w/ row-meta" column reports the per-block-equivalent at one block per row (the maximum overhead case).
 

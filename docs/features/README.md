@@ -11,9 +11,8 @@ Runtime KV cache compression — apply to any GGUF via `--cache-type-k`/`--cache
 | Feature | Status | Types | Compression vs fp16 |
 |---|---|---|---|
 | [TurboQuant KV base](turboquant-kv-base.md) | Stable (`turboq8` Preview, CPU + CUDA/HIP only) | `turboq2`, `turboq3`, `turboq4`, `turboq8` | ~7.5× / ~5.1× / ~3.8× / ~1.97× |
-| [TurboQuant high-bit KV](turboquant-hibit-kv.md) | Functional (perf TBD; CPU + CUDA/HIP only) | `turboq5`, `turboq6` | ~3.12× / ~2.61× |
+| [TurboQuant high-bit KV](turboquant-hibit-kv.md) | Functional (perf TBD; CPU + CUDA/HIP only) | `turboq5`, `turboq6` | ~3.12× / ~2.61× (dormant slots 64-65) |
 | [TCQ KV cache](tcq-kv.md) | Stable | `turboq2_tcq`, `turboq3_tcq` | ~7.1× / ~4.9× |
-| [InnerQ KV cache](innerq-kv.md) | Experimental (CUDA/HIP only) | `turboq2_innerq`, `turboq3_innerq` | ~7.5× / ~5.1× (same memory as base; quality improvement) |
 | [OScaR INT2 K-cache](oscar-kv.md) | Experimental (CUDA/HIP only, Phase 1) | `kv_oscar_int2` | ~8× K-only; FHT+INT2; residual window (`--cache-oscar-residual-window`); gate PASS 9B (+9.1% PPL); **DO NOT USE sub-1B** (architectural issue) |
 
 ## KV Cache Architecture
@@ -51,9 +50,10 @@ Offline quantization — produce a smaller GGUF from an F16/BF16 source with
 |---|---|---|---|
 | [IK Base-K weight quants](ik-base-k.md) | Stable | `IQ2_K`, `IQ3_K`, `IQ4_K` | 2–4.5 bpw; imatrix required; better PPL than mainline K-quants at matched bpw |
 | [IK High-Bit-K weight quants](ik-high-bit-k.md) | Stable | `IQ5_K`, `IQ6_K` | 5.5–6.625 bpw; imatrix required; near-lossless quality below Q8_0's footprint |
-| [IK Row-Meta weight quants](ik-ks-row-meta.md) | Stable | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL` | 2.6875–4.25 bpw; per-row scale prefix; imatrix required; near-twin IQ4_KS/IQ4_KSS differ by 0.25 bpw |
-| [IK KT/Trellis weight quants](ik-kt-trellis.md) | IQ4_KT/IQ3_KT: Stable; IQ2_KT: **§-FLAG DO NOT USE** | `IQ4_KT` (4.0 bpw), `IQ3_KT` (3.0 bpw), `IQ2_KT` (2.0 bpw §-FLAG) | No stored codebook — LCG hash regenerates 65,536-entry implicit codebook; cluster-accel NN search at quantize time; imatrix required; IQ2_KT has general codebook defect (PPL 33.96 at 9B) — use `IQ2_KL` instead |
-| [WHT weight quants](wht-weight-quants.md) | Stable | `WHT3_0` (~4.0 bpw), `WHT4_0` (~5.0 bpw) | TurboQuant weight family (TheTom); WHT rotation → Lloyd-Max codebook; calibration-free (imatrix not used); WHT4_0 peers Q5_K_M, WHT3_0 peers Q4_0/IQ4_XS |
+| [IK Row-Meta weight quants](ik-ks-row-meta.md) | Stable | `IQ4_KS`, `IQ3_KS`, `IQ4_KSS`, `IQ2_KL`, `IQ2_KS`, `IQ5_KS` | 2.6875–4.25 bpw; per-row scale prefix; imatrix required; near-twin IQ4_KS/IQ4_KSS differ by 0.25 bpw |
+| [IK KT/Trellis weight quants](ik-kt-trellis.md) | IQ4_KT/IQ3_KT: Stable; IQ2_KT: **§-FLAG DO NOT USE** | `IQ4_KT` (4.0 bpw), `IQ3_KT` (3.0 bpw), `IQ2_KT` (2.0 bpw §-FLAG), `IQ1_KT` (1.75 bpw) | No stored codebook — LCG hash regenerates 65,536-entry implicit codebook; cluster-accel NN search at quantize time; imatrix required; IQ2_KT has general codebook defect (PPL 33.96 at 9B) — use `IQ2_KL` instead |
+| [WHT weight quants](wht-weight-quants.md) | Stable | `WHT3_0` (~4.0 bpw), `WHT4_0` (~5.0 bpw), `WHT5_0`, `WHT6_0`, `WHT8_0` | TurboQuant weight family (TheTom); WHT rotation → Lloyd-Max codebook; calibration-free (imatrix not used); WHT4_0 peers Q5_K_M, WHT3_0 peers Q4_0/IQ4_XS |
+| [WQ3 TCQ](wq3-tcq.md) | Experimental | `WQ3_TCQ` (slot 92) | Trellis-coded weight quant, not recommended |
 
 More IK sub-family docs are in progress — see the
 [IK quantization family primer](concepts/ik-quantization-family.md) for the full
@@ -67,6 +67,7 @@ GGUF files produced from these converters load only in this fork.
 | Feature | Status | Architecture | Summary |
 |---|---|---|---|
 | [Zyphra ZAYA1-8B](zaya1.md) | Stable | `LLM_ARCH_ZAYA` | 8.4B hybrid MoE — 80 layers alternating CCA attention and 16-expert top-1 MoE; CPU/ROCm gfx1150/Vulkan RDNA3 validated |
+| [DiffusionGemma](nld-diffusion-self-spec.md) | Stable | `LLM_ARCH_DIFFUSION_GEMMA` | Diffusion-LM architecture |
 
 ## Speculative Decode
 
@@ -79,6 +80,7 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 | [NLD diffusion self-spec](nld-diffusion-self-spec.md) | Stable | Dream / LLaDA / LLaDA-MoE / RND1 | Bidirectional draft + causal verify on shared KV; ~3.7× over block-mode; CLI flag `--diffusion-self-spec`; server auto-detects |
 | [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 | [PHANTOM-X self-speculative n-gram drafter](phantom-x.md) | Stable | Any causal-LM GGUF | Bloom-filtered n-gram tables; no separate draft model; `--spec-type phantom`; +34% on repetitive code (86.6% accept); flat on prose; ported from carlosfundora 1-bit-turbo |
+| [Cascade Ensemble](spec-decode-ensemble.md) | Stable | Any | Prioritized cascade of n-gram and MTP drafters; `--spec-type ngram-map-k` |
 | [DFlash drafter spec-decode](dflash.md) | Preview — correct, **no speedup yet** | Any target + z-lab DFlash drafter | Cross-attention-ring drafter; 25.1% solo accept (gfx1150, Qwen3.6); S2 CPU path is net slowdown (~0.4×); `--spec-type dflash`; S3 GPU ring in progress |
 
 ## Prompt Compression

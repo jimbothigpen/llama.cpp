@@ -50,9 +50,9 @@ llama-server \
 
 ## §1 Provenance
 
-The **internal NextN-tail** path is mainline-aligned. The MTP head is bundled as extra layers in the target GGUF and loaded as a dedicated draft context (`LLAMA_CONTEXT_TYPE_MTP`, `include/llama.h:228`). The speculative loop runs through the shared driver in `common/speculative.cpp`.
+The **internal NextN-tail** path is mainline-aligned. The MTP head is bundled as extra layers in the target GGUF and loaded as a dedicated draft context (`LLAMA_CONTEXT_TYPE_MTP`, `include/llama.h:236`). The speculative loop runs through the shared driver in `common/speculative.cpp`.
 
-The **external-assistant** path for Gemma 4 is a guided port of mainline PR #23398. The assistant model uses `LLM_ARCH_GEMMA4_ASSISTANT` and runs through the NEXTN_PRE/POST projection path defined in `src/models/gemma4-assistant.cpp` (208 LOC). The older D1/ASSIST_ code path has been retired.
+The **external-assistant** path for Gemma 4 is a guided port of mainline PR #23398. The assistant model uses `LLM_ARCH_GEMMA4_ASSISTANT` and runs through the NEXTN_PRE/POST projection path defined in `src/models/gemma4-assistant.cpp` (203 LOC). The older D1/ASSIST_ code path has been retired.
 
 The Qwen3.5/3.6 *converter* that creates or splits MTP-bundled GGUFs at conversion time is a separate feature — see [`qwen35-mtp-converter.md`](qwen35-mtp-converter.md). This doc covers runtime speculative decode only.
 

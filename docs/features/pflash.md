@@ -99,7 +99,7 @@ inference is done.
 | **Phase 1 — base port** | buun `master` | Scorer loader (`pflash-loader.cpp`), graph builder (`pflash-graph.cpp`), CPU scorer path | ✅ Ported |
 | **Phase 2A — CPU baseline** | — | Scorer model weight storage on CPU; 9.89s → ~0.41s per scorer pass | ✅ Shipped |
 | **Phase 3 — HIP GPU scorer** | `abe0bb81a` | GPU scorer compute via `ggml_backend_dev_by_type(GPU)` in `pflash-loader.cpp` + `pflash-graph.cpp`; CPU fallback retained for Vulkan-only builds | ✅ Shipped 2026-05-19 |
-| **CLI wire** | `92c37266f` | `--pflash-*` flags wired in `tools/cli/cli.cpp`; compression logged as `pflash: N -> M tokens (X% kept)` | ✅ Shipped 2026-05-31 |
+| **CLI wire** | `92c37266f` | `--pflash-*` flags wired in `common/arg.cpp`; compression logged as `pflash: N -> M tokens (X% kept)` | ✅ Shipped 2026-05-31 |
 | **Server path** | `076f8c069` | PFlash wired into `llama-server` prefill path | ✅ Shipped |
 | **Scorer generalization** | `500046b0b` | Non-Qwen arch support (`llama_model_arch` switch covering qwen3/qwen35/qwen2/llama/mistral3/mistral4/gemma3/gemma4); NULL-deref guards | ✅ Shipped 2026-05-31 — **§-FLAG: unvalidated (see top of doc)** |
 | **Phase 4b / 4c** | — | Follow-up scorer-path refinements | 🔄 Deferred |
@@ -110,7 +110,7 @@ inference is done.
 
 The scorer generalization in `500046b0b` adds dispatch paths for
 non-Qwen architectures by extending the `llama_model_arch` switch in
-`tools/pflash/pflash-scorer.cpp`. The Qwen3.x regression test is byte-identical
+`common/pflash-score.cpp` (and `common/pflash.cpp`). The Qwen3.x regression test is byte-identical
 after the change. However, **no live scorer gate** (PPL measurement or
 compression quality check) has been run for Gemma3, Llama, Qwen2, or Mistral
 scorer models.
@@ -138,7 +138,7 @@ Tracking: PFlash non-Qwen live-scorer validation.
 
 - **Upstream source:** buun `master` (`spiritbuun/buun-llama-cpp`)
 - **Scorer sources:** `common/pflash-loader.cpp`, `common/pflash-graph.cpp`,
-  `common/pflash-score.cpp`, `tools/pflash/pflash-scorer.cpp`
+  `common/pflash-score.cpp`, `common/pflash.cpp`
 - **Feature index:** [docs/features/README.md](README.md)
 - **Related docs (this repo):**
   - [DFlash speculative decode](dflash.md) — buun-sourced spec-decode companion

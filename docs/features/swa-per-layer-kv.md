@@ -52,7 +52,7 @@ The SWA sub-cache is window-sized and padded to 256 cells for performance (upstr
 
 The ability to assign a *different* KV type to each sub-cache — the
 `--cache-type-k-swa` / `--cache-type-v-swa` CLI flags and the `type_k_swa` / `type_v_swa`
-fields in `llama_context_params` (`include/llama.h:394-395`) — is a contribution of
+fields in `llama_context_params` (`include/llama.h:403-404`) — is a contribution of
 **domvox**, ported to this fork.
 
 ### Differences from upstream
@@ -245,7 +245,7 @@ When `hparams.swa_type == LLAMA_SWA_TYPE_NONE` (`llama-model.cpp:2139`), a plain
 `type_v_swa` values resolved by the context are never passed to anything; the flags are
 fully inert.
 
-### API (`include/llama.h:394-395`)
+### API (`include/llama.h:403-404`)
 
 ```cpp
 enum ggml_type type_k_swa; // data type for K cache of SWA layers (GGML_TYPE_COUNT = use type_k)

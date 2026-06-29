@@ -23,7 +23,7 @@ The cascade ensemble is **this fork's own wiring** — the
 `common_speculative_draft()` priority-order dispatch in `common/speculative.cpp`.
 It composes existing pieces and introduces no new upstream code:
 
-- The **n-gram arms** (`ngram-simple`, `ngram-cache`, `ngram-mod`, `map-k`) are
+- The **n-gram arms** (`ngram-simple`, `ngram-cache`, `ngram-mod`, `ngram-map-k`) are
   the mainline ggml-org n-gram family.
 - The **MTP arm** (`draft-mtp`) is the MTP runtime feature — see
   [mtp.md](mtp.md) and [PROVENANCE.md](PROVENANCE.md).
