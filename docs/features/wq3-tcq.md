@@ -24,7 +24,7 @@ credit: TheTom (TurboQuant TCQ). See `PROVENANCE.md`.
 | Quantizes | **weights** (FFN/attention projections), not KV cache |
 | Dequant | **CPU + CUDA** (`to_float`/`from_float_ref` wired in Ph2; CUDA native + cuBLAS paths) |
 | Backends | CUDA ✅ (Ph1) · CPU ✅ (Ph2) · HIP/ROCm ✅ (Ph3, gfx1150) · Vulkan ⏳ (Ph4) |
-| CLI ftype | **`WQ3_TCQ`** = `LLAMA_FTYPE_MOSTLY_WQ3_TCQ` (59) — `llama-quantize … WQ3_TCQ` |
+| CLI ftype | **`WQ3_TCQ`** = `LLAMA_FTYPE_MOSTLY_WQ3_TCQ` (62) — `llama-quantize … WQ3_TCQ` |
 
 ## Mechanism
 
@@ -103,7 +103,7 @@ returns false for WQ3_TCQ.
 ## Validation
 
 End-to-end on **Qwen3.5-2B** (sm_75):
-- Quantize RC=0 → 4.15 BPW (931.78 MiB), GGUF header valid (file_type=59, codebook=1024, sign_seed=42,
+- Quantize RC=0 → 4.15 BPW (931.78 MiB), GGUF header valid (file_type=62, codebook=1024, sign_seed=42,
   320 tensors: 186 WQ3_TCQ / 133 F32 / 1 Q6_K).
 - **CPU decode** (`-ngl 0`) and **CUDA decode** (`-ngl 99`) both **coherent** (correct, no NaN/abort).
 - **Parity:** CUDA-loaded codebook amax (0.30662) == hardcoded table; CPU-C dequant vs independent
