@@ -1,11 +1,11 @@
 # DFlash Speculative Decode (`--spec-type dflash`)
 
-> **Status: Preview — functionally correct, net slowdown until S3 GPU ring lands**
+> **Status: Preview — S3 GPU ring buffer landed but unmeasured**
 >
 > Solo DFlash is verified end-to-end with 25.1 % draft accept and coherent output.
 > **It is not yet a performance win.** The S2 CPU cross-attention path is roughly
 > 2.5× slower than plain no-spec decode on the same hardware. A speedup requires
-> the S3 GPU ring buffer, which is still in progress.
+> the S3 GPU ring buffer (landed but unmeasured).
 
 ---
 
@@ -16,7 +16,7 @@
 | **What it is** | Drafter-model speculative decode via a cross-attention ring; drafter sees target hidden states |
 | **Flag** | `--spec-type dflash` (with `-md <dflash-draft.gguf>`) |
 | **Phase shipped** | S1 model loader (`b6a75e524`) + S2 dispatch (`ef80c728c`) |
-| **Phase in progress** | S3 GPU ring buffer + bulk argmax (Phase 7a — required for a speedup) |
+| **Phase in progress** | S3 GPU ring buffer + bulk argmax (Landed, pending performance measurement) |
 | **Solo accept rate** | **25.1 %** (`n_drafted=195`, `n_accept=49`; ROCm gfx1150, `--temp 0`) |
 | **Throughput vs no-spec** | **≈0.4× (net slowdown)** — S2 CPU path ≈10.7 tok/s vs ≈26.7 tok/s baseline |
 | **Runtime upstream** | buun `master` |
@@ -81,7 +81,7 @@ vocabulary projection; it produces a single drafted token per step.
 | **Converter** | `ee7d4f896` | safetensors → GGUF conversion for the z-lab DFlash drafter family | ✅ Shipped |
 | **KV-position correctness fix** | `003ecc2d1` | Anchors drafter batch to drafter KV pos (was: cross-attn ring length — see §4) | ✅ Shipped 2026-05-30 |
 | **Tokenizer bundling** | `f86a24a95` | `--target-model-dir <base-model-dir>` flag copies base-model tokenizer files alongside the output GGUF (required for z-lab models that omit a standalone tokenizer) | ✅ Shipped 2026-05-31 (CLOSED) |
-| **S3 — GPU ring buffer + bulk argmax + server `spec_type` wiring** | — | Eliminates per-iteration CPU cross-attention; required for a net speedup | 🔄 In progress |
+| **S3 — GPU ring buffer + bulk argmax + server `spec_type` wiring** | — | Eliminates per-iteration CPU cross-attention; required for a net speedup | ✅ Landed-but-unmeasured |
 
 **Known open items:**
 
@@ -189,10 +189,10 @@ impl and is byte-for-byte untouched.
 
 ### Limitations
 
-- **Net slowdown until S3.** The S2 CPU cross-attention path is the dominant
+- **Net slowdown.** The S2 CPU cross-attention path was the dominant
   cost: per-iteration hidden-state assembly + drafter decode + rejected-draft
-  target verification add up to roughly 2.5× the baseline decode time per
-  token. No speedup is possible until the S3 GPU ring buffer lands.
+  target verification added up to roughly 2.5× the baseline decode time per
+  token. The S3 GPU ring buffer has landed but remains unmeasured.
 - **Not a standard causal drafter.** The DFlash drafter GGUF is not
   interchangeable with a causal LM draft model. It must be paired with a
   matching target architecture and ring dimension.

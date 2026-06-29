@@ -3,7 +3,7 @@
 > **Status: Experimental — CUDA/HIP only (Phase 1 prototype)**
 >
 > OScaR INT2 (`GGML_TYPE_KV_OSCAR_INT2`, slot 71) is a Phase 1 CUDA-only
-> K-cache quantization type. Vulkan and ROCm backends are deferred to Phase 2.
+> K-cache quantization type. ROCm backend is deferred.
 > Phase 1 gate was run on Qwen3.5-9B; smaller models (0.8B) show architectural
 > underperformance — see PPL notes below.
 
@@ -17,7 +17,7 @@
 | **Slot** | 71 (`GGML_TYPE_KV_OSCAR_INT2`) |
 | **Effective bpw** | ~2.0 bits per element (INT2 with per-block scale + offset) |
 | **Block size** | `QK_OSCAR_INT2` (128 elements per block) |
-| **Backend** | CUDA/HIP only — Phase 2 (Vulkan/ROCm) deferred |
+| **Backend** | CPU, CUDA, Vulkan |
 | **Paper** | arXiv:2605.19660 |
 | **Ship commit** | `e1f3e7083` |
 | **CLI flag** | `--cache-type-k kv_oscar_int2` |
@@ -156,7 +156,7 @@ layer. For a 9B model (32 layers, 8 K-heads, head_dim=128): R=512 adds ~134 MB.
 | Phase | What | Status |
 |---|---|---|
 | **Phase 1 — CUDA prototype** | `GGML_TYPE_KV_OSCAR_INT2` type, FWHT encode/decode, residual window, CUDA flash-attn dispatch | ✅ Shipped `e1f3e7083` (2026-05-26) |
-| **Phase 2 — Vulkan/ROCm backends** | Port FWHT + INT2 decode to Vulkan compute shaders; ROCm HIP path | 🔄 Deferred |
+| **Phase 2 — Vulkan/ROCm backends** | Port FWHT + INT2 decode to Vulkan compute shaders; ROCm HIP path | ✅ Shipped |
 | **FOLLOWUP-F — full-dimension FWHT** | Architectural fix for 0.8B under-performance | 🔄 Identified, not scheduled |
 
 ---
@@ -164,7 +164,7 @@ layer. For a 9B model (32 layers, 8 K-heads, head_dim=128): R=512 adds ~134 MB.
 ## Backend notes
 
 - **CUDA (gfx1150):** Validated. Template instances for `kv_oscar_int2×{f16, bf16, q8_0}` query types in `ggml/src/ggml-cuda/template-instances/fattn-vec-instance-kv_oscar_int2-*.cu`.
-- **Vulkan:** Blocked at type dispatch (`ggml-vulkan.cpp`); flag raises a warning and falls back to F16 K-cache.
+- **Vulkan:** Supported (`ggml-vulkan.cpp`).
 - **ROCm:** Phase 1 is CUDA-only; no gfx1150/gfx1102 gate has been run. Use F16 or TurboQuant for ROCm K-cache until Phase 2 lands.
 - **`head_dim`:** CUDA dispatch requires `head_dim ≤ 128`. Models with larger head dimensions are not supported in Phase 1.
 

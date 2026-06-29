@@ -29,8 +29,8 @@ A unified downstream of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 that absorbs novel work from six sibling forks into a single coherent tree.
 
 
-**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `2ef6c9d3a`** on
-`main` (post-mainline-rebase to `b1144`). Recent ships (2026-06-10): **Mainline sync-38** — b1144 integrated (0/519 behind; GitHub behind-banner cleared; `e65fe2ae6`); **tria-gen qwen35 hybrid arch** — Qcur_full de-interleave + linear-layer zero-fill for Qwen3.5/3.6 TriAttention calibration (`d964e3a2f`); **MTP output_reorder fix** (TODO 221, embd/embd_nextn stride via n_embd_out(), `abe20ebea`); **iswa kq_mask guard** for MTP draft path (`ea5f6c658`). Prior (2026-06-07): **WHT3_0/WHT4_0 Vulkan MoE dispatch** (`81ca6b749`); **iq4_nl CUDA/HIP FA-vec KV kernel** — Kaggle T4 PPL 7.3941 (`d8393c386`). Prior (2026-06-06): **Private infra purge** (TODO 207, `ae6bc152c`); **Vulkan TURBOQ{2,3}_INNERQ KV** (TODO 212, `031e87b57`); **Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT** (TODO 217, `4f39662dd`). Prior (2026-06-05): **WHT small-batch +290%** + **ne1=1 fused decode** (`3abe1c048`, `6fcd17fce`). Prior (2026-06-02): **RotorQuant iso/planar removal** (`55bb0d418`). Prior (2026-05-30): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`). See [What's available now](#whats-available-now) and
+**Status:** Phases 0, 0.5, 0.7, 1, 2, 3, 5b-1a, 5b-1b, 5b-1c, 5b-2, 7a, 7b, MTP Migration 0-3, NLD COMPLETE, **MTP Convergence Phase A** — **HEAD `0372c10e4`** on
+`main` (post-mainline-rebase to `b1144`). Recent ships (2026-06-29): **Mainline sync-38** — b1144 integrated (0/519 behind; GitHub behind-banner cleared; `e65fe2ae6`); **tria-gen qwen35 hybrid arch** — Qcur_full de-interleave + linear-layer zero-fill for Qwen3.5/3.6 TriAttention calibration (`d964e3a2f`); **MTP output_reorder fix** (TODO 221, embd/embd_nextn stride via n_embd_out(), `abe20ebea`); **iswa kq_mask guard** for MTP draft path (`ea5f6c658`). Prior (2026-06-07): **WHT3_0/WHT4_0 Vulkan MoE dispatch** (`81ca6b749`); **iq4_nl CUDA/HIP FA-vec KV kernel** — Kaggle T4 PPL 7.3941 (`d8393c386`). Prior (2026-06-06): **Private infra purge** (TODO 207, `ae6bc152c`); **Vulkan TURBOQ{2,3}_INNERQ KV** (TODO 212, `031e87b57`); **Vulkan mul_mat_vec_id IQ5_KS/IQ2_KS/IQ1_KT** (TODO 217, `4f39662dd`). Prior (2026-06-05): **WHT small-batch +290%** + **ne1=1 fused decode** (`3abe1c048`, `6fcd17fce`). Prior (2026-06-02): **RotorQuant iso/planar removal** (`55bb0d418`). Prior (2026-05-30): **EAGLE3 B1+KV fixes** — accept rate 0%→33.3%, drafter-batch KV-position fix (`380c93384`), **TriAttention Phase C Part-2 SWA capture** — Gemma-4 hybrid SWA now supported, SWA-layer K/V captured (`086c8508f`); **backlog doc/comment corrections** (`b0ed983e5`). Prior (2026-05-30): **MTP C1 iGPU 1.16× speedup** — eliminates Qwen catch-up decode + iGPU auto-clamps n_max→1; **TriAttention Phase C GPU GQA scoring kernel (HIP + Vulkan)** — GPU-accelerated scoring on both backends, parity achieved; **MTP/TriAttention divergence fixes + Vulkan parity closure** (`7a9bbf4d5`, `c5f1d135f`, `73dcfce62`, `0d13ac92b`). Prior 2026-05-29 cascade: **IQ3_KT trellis 3-bit quant** — 3-bit PPL +23.5% vs IQ3_K (inherent to single-codebook design); cluster-accel k=60 CPU/ROCm/Vulkan; imatrix required (`623835cc9`); **IK weight-quant feature docs** — base-K (IQ2/3/4_K), high-bit-K (IQ5/6_K), row-meta (IQ4_KS/IQ3_KS/IQ4_KSS/IQ2_KL) + family primer (docs/features/ik-*.md); IQ2_KL phase fix 5b-2a→5b-1c (`7ca3e0e8c`). Prior 2026-05-28 wave: **Mainline rebase b745** — 68 mainline commits integrated; FWHT dual-pipeline resolution (`cf70bbd33`, `3caf1caa0`); ZAYA/TALKIE arch slot + Q1_0_G128 Vulkan dequant conflicts resolved; PPL 6.5453 PASS (gfx1103); **domvox SWA KV** — per-layer `--cache-type-k-swa` / `--cache-type-v-swa` for hybrid SWA-models; Gemma 4 PPL 27.7k vs >100k all-turbo3 (`30472d827`); **buun-3-fixes** — tensor-split with quantized KV unblocked (`6774410fa`) + TURBO_WHT added to split planner (`340f6fe21`); **ccee426 revert shipped** — KV cache reuse regression on multi-turn Qwen3.6-35B-A3B fixed, loader-smoke PASS (`f92e515f2`); **MTP convert fixes** — `attn_norm.weight` emission for bundled-MTP GGUFs (`c0d71d750`) + `block_count`/`nextn` metadata for `--no-mtp` GGUFs (`36164e428`). See [What's available now](#whats-available-now) and
 [In-flight workstreams](#in-flight-workstreams) for detail.
 
 ## What this fork is and isn't
@@ -86,8 +86,6 @@ cross-backend PPL matches within tolerance. See
 | 2 | MTP spec-decode — mainline-aligned driver layer; internal Qwen3.5/MoE NextN-tail MTP; foreign-KV Gemma 4 external-assistant MTP; MTP Migration 0-3 (mainline-convergent speculative driver, loader split, graph embed-norm masked); C1 iGPU tuning (1.16× speedup, n_max→1 clamp); Vulkan parity backend-agnostic tuning | mainline PR #22673 + mainline `#22738` (gemma4-assistant); migration to mainline b9246 arch | **complete — V-J accept-rate gap closed `705ffccb8` (38% → 70.28%); Migration phases 0-3 complete through `4a9977f49`; C1 iGPU tuning shipped (`54bd1e120`); Vulkan parity closure (`73dcfce62`)** |
 | 3a | TCQ KV cache — ROCm/CUDA/HIP (`TURBOQ{2,3}_TCQ`) | buun `master` | **complete (main v291)** |
 | 3c | TCQ KV cache — Vulkan (αA asymmetric pre-dequant FA path) | this fork's port | **complete (main v307)** |
-| 3d | InnerQ KV — calibrated `TURBOQ{2,3,4}_INNERQ` types + CUDA calibration engine | TheTom calibration engine; this fork's port | **merged to main; RDC enabled broadly in v368 (commit 5e314b5f5) for ggml-hip and ggml-cuda; Vulkan gap documented** |
-| 4a | RotorQuant KV cache — iso3/4 + planar3/4 (`iso3`, `iso4`, `planar3`, `planar4`) | carlosfundora | **complete — 34/34 K×V pairs shipped (`88afd0b5a`); iso3-K cross-V hang (4 pairs) RESOLVED 2026-05-24 (fix landed `16c1a0012` on 2026-05-19; previously tracked; 4/4 smokes PASS exit:0)** |
 | 4 | Carlosfundora dense bundle (EAGLE3, PHANTOM-X, DFlash S1, TurboMind allocator, Wave32 RDNA2) | carlosfundora `1-bit-turbo` / buun | **Q1_0_G128 ported (`87d3705e0`) then removed (pure duplicate of Q1_0, slot 43 returned to mainline reserve); EAGLE3 ported (`c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X ported + Phase 2 dispatch (`d6dc63224`, `388169995`); DFlash S1 model loader ported (`b6a75e524`); TurboMind allocator queued for opportunistic port (PORT-LATER); Wave32 RDNA2 out of scope** |
 | 5 | ik_llama subsystem backports (IK quants, BitNet, MLA, fused MoE, bf16 KV, MTP perf) | ik_llama (one subsystem at a time) | **5b-1a (IQ2_K/IQ3_K/IQ4_K) complete (`c12d37dbc`); 5b-1b (IQ4_KS/IQ4_KSS/IQ3_KS/IQ4_KT) complete (`63b754e84..a25ee1cf7`); 5b-1c (IQ2_KL type-157) complete CPU+CUDA/HIP+Vulkan (`f18a92a42` + `3723c1f61`); 5b-2 (IQ5_K/IQ6_K) complete CPU+CUDA/HIP+Vulkan (`8e19be061` + `0ade7ff86`); Trellis P3a IQ2_KT shipped CPU+ROCm+Vulkan (§-FLAG; `0dac276d9` + cluster-accel `1e8501e46`; Vulkan ported); P3b IQ3_KT complete CPU/ROCm/Vulkan, cluster-accel k=60, imatrix required (`623835cc9`, 2026-05-29); P3c IQ1_KT queued; MLA declined** |
 | 6 | RaBitQ TQ3 weight quants (`RBQ3_*`) | turbo-tan `main` | **pending — imatrix retrofit required (~6h) before port** |
@@ -102,7 +100,7 @@ Vulkan implementations for novel features, so this fork bears the Vulkan
 port burden in-house.
 ## What's available now
 
-As of **HEAD `2ef6c9d3a`**, the following features are on `main`.
+As of **HEAD `0372c10e4`**, the following features are on `main`.
 
 ---
 
@@ -186,34 +184,6 @@ pre-dequantizing V to F16 before FA dispatch, making Vulkan TCQ asymmetric
 
 ---
 
-### InnerQ KV types (`TURBOQ{2,3}_INNERQ`) — Phase 3d
-
-> **Full feature doc:** [docs/features/innerq-kv.md](docs/features/innerq-kv.md)
-
-Online-calibrated KV quantization types (CUDA/HIP only). InnerQ reuses the same
-block structs as `turboq2` / `turboq3` (identical memory footprint) and adds a
-per-session per-channel equalization pass that improves quality when K channels
-have unequal variance. No calibrated GGUF file is needed — calibration runs
-automatically during the first N tokens of inference when `TURBO_INNERQ=N` is set.
-
-| Type | Bits | Block | Notes |
-|---|---|---|---|
-| `turboq2_innerq` (slot 68) | 2.125 | 128 | Per-channel equalization + 2-bit PolarQuant |
-| `turboq3_innerq` (slot 69) | 3.125 | 128 | Per-channel equalization + 3-bit PolarQuant |
-
-> **No 4-bit InnerQ.** Per-channel equalization regresses quality at 4-bit (observed PPL
-> regression vs plain `turboq4`); slot 70 is retired. Use `turboq4` for 4-bit KV cache.
-
-Example:
-```bash
-TURBO_INNERQ=256 llama-cli --no-mmap -fa on \
-    -m Qwen3.5-9B-Q4_K_M.gguf \
-    --cache-type-k turboq3_innerq --cache-type-v turboq3_innerq \
-    -c 4096 -ngl 99
-```
-
-**Backend support:** CUDA/HIP only. No Vulkan encode (InnerQ types on Vulkan fall
-back to plain PolarQuant without equalization). Flash attention (`-fa on`) required.
 
 ---
 
@@ -244,30 +214,6 @@ PPL gate (Qwen3.5-9B-WHT4_0, 32 chunks, c=512, wikitext-2-raw-test;
 
 ---
 
-### RotorQuant KV cache types (`iso3`, `iso4`, `planar3`, `planar4`) — Phase 4a
-
-1-bit quantization for K and V caches with iso (isotropic) and planar variants.
-
-| Type | Bits | Block | Compression vs fp16 | Notes |
-|---|---|---|---|---|
-| `iso3` (slot 71) | 1.0 | 128 | ~16× | Isotropic 1-bit (3 codebook vectors) |
-| `iso4` (slot 72) | 1.0 | 128 | ~16× | Isotropic 1-bit (4 codebook vectors) |
-| `planar3` (slot 73) | 1.0 | 128 | ~16× | Planar 1-bit (3 codebook vectors) |
-| `planar4` (slot 74) | 1.0 | 128 | ~16× | Planar 1-bit (4 codebook vectors) |
-
-All 34 asymmetric K/V pairs are shipped as of `88afd0b5a`. Quality gate (PPL)
-validates planar variants. The iso3-K cross-V family (4 pairs: iso3×{iso4, f16,
-q8_0, planar4}) was historically gated by a HIP kernel hang on gfx1102;
-that fix landed in `16c1a0012` (replaces `#ifndef GGML_USE_HIP` with
-`if constexpr (!V_is_turbo) { __syncthreads(); }` at `fattn-vec.cuh:424`) plus
-dispatch entries in `71fe14e26` — 2026-05-24 retro-smoke verified 4/4 PASS
-(exit:0, ~14.0 t/s each; PPL sanity 6.5896 ±0.16099 on 5 chunks).
-
-Example:
-```bash
-llama-cli --no-mmap -fa on -m model.gguf \
-    --cache-type-k iso3 --cache-type-v iso3 -c 4096 -ngl 99
-```
 
 ---
 
@@ -680,10 +626,7 @@ All shipped features are built unconditionally as part of the standard cmake
 recipe; no new feature-gate flags are required. See [README.upstream.md](README.upstream.md)
 for the unchanged mainline build instructions.
 
-**InnerQ calibration:** RDC enabled broadly in v368 (commit 5e314b5f5) for
-ggml-hip and ggml-cuda. The CUDA/HIP separable compilation flag
-(`-fgpu-rdc` / `CUDA_SEPARABLE_COMPILATION`) is on by default; no manual
-RDC build is required.
+
 
 ## In-flight workstreams
 
@@ -693,9 +636,9 @@ Active feature branches / queued workers; not yet merged to `main`.
 |---|---|---|
 | Trellis IQ3_KT (Phase P3b) | `main` | **Complete** — CPU/ROCm/Vulkan shipped 2026-05-29 (`623835cc9`); ROCm GPU confirmed `c809225f6` (CLOSED, gfx1150 99% util); PPL +23.5% vs IQ3_K inherent to single-codebook design; cluster-accel k=60; imatrix required |
 | Trellis IQ1_KT (Phase P3c) | — | Queued behind P3b; IQKTParams<8,13,false> |
-| MTP Gemma4 §-FLAG-B fix | `main` | **SHIPPED** — `d2c332289`/`ca62c0756`/`190d83fed` landed; fix: move "mtp." rename after load_all_data (accept 0%→33.9–61.8%); convergence bridge cleared (sync-38 `e65fe2ae6` 2026-06-10) |
+| MTP Gemma4 §-FLAG-B fix | `main` | **SHIPPED** — `d2c332289`/`ca62c0756`/`190d83fed` landed; fix: move "mtp." rename after load_all_data (accept 0%→33.9–61.8%); convergence bridge cleared (sync-38 `e65fe2ae6` 2026-06-29) |
 | IQ2_KT cluster-accel PPL retune (k=80–100) | — | Late-stage-polish queue; current ship at k=60 has §-FLAG PPL +8.3% above ≤+5% clean threshold |
-| Full spec-decode validation matrix | — | 40-cell matrix (4 backends × 2 main models × 5 mechanisms); prerequisite gates cleared (EAGLE3 + DFlash + PHANTOM-X all landed; MTP V-J study done: TODO 230 — Gemma4-26B-A4B +28.7%, Qwen3.5-9B −15.3%); matrix bench in-progress 2026-06-10 |
+| Full spec-decode validation matrix | — | 40-cell matrix (4 backends × 2 main models × 5 mechanisms); prerequisite gates cleared (EAGLE3 + DFlash + PHANTOM-X all landed; MTP V-J study done: TODO 230 — Gemma4-26B-A4B +28.7%, Qwen3.5-9B −15.3%); matrix bench in-progress 2026-06-29 |
 | TriAttention Phase C GPU GQA kernel + SWA capture | `main` | **SHIPPED** — HIP `51a64b43c` + Vulkan `0d13ac92b` + SWA-layer capture `086c8508f`; all phases complete |
 | RBQ3 imatrix retrofit + port | — | turbo-tan RBQ3 family is sole pending weight quant needing imatrix retrofit (~6h); port follows |
 
@@ -760,7 +703,7 @@ to AMD upstream Tensile/hipBLAS GEMM gaps. See
 ## Build / usage
 
 This fork follows mainline's build system unchanged. All shipped features
-(TurboQuant KV + TCQ KV + InnerQ KV + WHT weight quants + sidecar engine)
+(TurboQuant KV + TCQ KV + WHT weight quants + sidecar engine)
 are built unconditionally — no new feature-gate flags. See
 [README.upstream.md](README.upstream.md) and the upstream `docs/`
 directory for build instructions.
@@ -781,9 +724,9 @@ conditionals.
 
 - Single long-lived downstream fork.
 - Mainline sync cadence: every 2 weeks (target). Current merge base:
-  mainline `b1144` (`e95dae18d`); sync-38 merged 2026-06-10 (0/519 behind;
+  mainline `b1144` (`e95dae18d`); sync-38 merged 2026-06-29 (0/519 behind;
   GitHub behind-banner cleared).
-- Trunk: `main` (HEAD `2ef6c9d3a`).
+- Trunk: `main` (HEAD `0372c10e4`).
 - Milestone tags on origin: `milestone/phase-0-foundation-complete`,
   `milestone/phase-0.7-sidecar-engine`,
   `milestone/phase-1-turboquant-kv-foundation`,
@@ -824,9 +767,9 @@ This fork is built on top of the [ggml-org/llama.cpp](https://github.com/ggml-or
 ### Direct lifts (substantial code or design imported)
 
 - **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** — base mainline; rebased forward on a ~2-week cadence
-- **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + InnerQ calibrated KV types (Phase 3d) + WHT weight quants
+- **[TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)** — TurboQuant KV cache quantization (Phase 1) + WHT weight quants
 - **[spiritbuun/buun-llama-cpp](https://github.com/spiritbuun/buun-llama-cpp)** — TCQ KV cache types (Phase 3a, 3c) + PFlash prompt compression (Phase 7b, Vulkan GPU scorer fix shipped in NEW-D) + DFlash S1 model loader (`b8bf27eda`); tensor-split with quantized KV unblocked + TURBO_WHT split-planner fix (shipped `6774410fa`, `340f6fe21`)
-- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, shipped); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope
+- **[carlosfundora/llama.cpp-1-bit-turbo](https://github.com/carlosfundora/llama.cpp-1-bit-turbo)** — RotorQuant KV V-cache variants (Phase 4a, ported then removed); EAGLE3 (shipped `c0f3c1486` + fc dtype-aware fix `4c38845c4`); PHANTOM-X (shipped `d6dc63224` + Phase 2 dispatch `388169995`); TurboMind allocator queued (PORT-LATER); Wave32 RDNA2 out of scope
 - **[Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp)** — DFlash spec-decode hardening (Phase 7a; DFlashDraftModel safetensors→GGUF converter ported `ee7d4f896`; S2 dispatch shipped; S3 GPU ring in progress)
 - **[turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)** — RaBitQ TQ3 weight quants (Phase 6, pending imatrix retrofit)
 - **[domvox/llama.cpp-turboquant-hip](https://github.com/domvox/llama.cpp-turboquant-hip)** — TriAttention KV compression (Phase 9, REVIVED 2026-05-25 — Phase A in-graph capture harness shipped, Phase B GQA CPU smoke GREEN, Phase C GPU GQA kernel pending); per-layer SWA KV cache type `--cache-type-{k,v}-swa` (shipped `d8ec65064`)
