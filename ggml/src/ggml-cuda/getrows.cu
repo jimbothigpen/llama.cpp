@@ -221,6 +221,14 @@ static void ggml_cuda_get_rows_switch_src0_type(
             get_rows_cuda_q<QK8_0, QR8_0, dequantize_q8_0>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
+        case GGML_TYPE_WHT4_0:
+            get_rows_cuda_q<QK_WHT4_0, QR_WHT4_0, dequantize_wht4_0>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_WHT3_0:
+            get_rows_cuda_q<QK_TQ3_0, QR_WHT3_0, dequantize_wht3_0>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
         case GGML_TYPE_TURBOQ3_TCQ:
         case GGML_TYPE_WQ3_TCQ: // WQ3 weight quant reuses the turboq3_tcq 52-byte block layout
             get_rows_cuda_q<QK_TURBOQ3_TCQ, QR_TURBOQ3_TCQ, dequantize_turboq3_tcq>(src0_d, src1_d, dst_d,
