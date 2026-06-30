@@ -580,7 +580,7 @@ constexpr int kIQ3KT_NumGroups  = QK_K / kIQ3KT_GroupSize;             // 32
 constexpr int kIQ3KT_OffsetA     = 4096;
 constexpr int kIQ3KT_OffsetB     = 4096 + 32768;  // second implicit codebook
 constexpr uint32_t kIQ3KT_SelBit = 1u << 24;       // shb[ib] bit 24 = use OffsetB
-constexpr int kIQ3KT_NeighboursPB = 60;
+constexpr int kIQ3KT_NeighboursPB = 256;
 
 struct IQ3KT_Codebook {
     IQKTCookedBook<kIQ3KT_GroupSize, kIQ3KT_NumBits> a;  // offset = kIQ3KT_OffsetA
@@ -1013,15 +1013,12 @@ static IQ1KT_Codebook g_iq1kt_codebook;
 static std::once_flag g_iq1kt_init_once;
 
 static void iq1kt_codebook_do_init() {
-    // k_neighbours must be large enough to populate the soft-bin index so the
-    // accelerated NN search actually reaches each query's true-nearest entry.
-    // ikllama constructs QuantizerIQ1KT(256, /*num_neighbours=*/32); IQ1_KT has
-    // only kNumVal=8192 entries spread over 3^8=6561 bins (~1.25 entries/bin), so
-    // k_neighbours=1 leaves most bins under-populated and the search misses the
-    // best codebook entry for the majority of groups (observed: 56% per-weight
-    // round-trip RMSE).  Match ikllama's 32 (cf. IQ2_KT=256, IQ3_KT=60 here).
+    // k_neighbours=256: matches IQ2_KT and IQ3_KT treatment (ripple from TODO 130).
+    // IQ1_KT has kNumVal=8192 over 3^8=6561 bins (~1.25 entries/bin); k=256 ensures
+    // boundary entries are not missed by the cluster-index directional bug (fixed in
+    // iqkt_build_cluster_index Phase 2, d0773ae2d). ikllama originally used k=32.
     iqkt_cooked_book_init<kIQ1KT_GroupSize, kIQ1KT_NumBits, false>(
-        g_iq1kt_codebook.cb, kIQ1KT_Offset, 32);
+        g_iq1kt_codebook.cb, kIQ1KT_Offset, 256);
     g_iq1kt_codebook.initialized = true;
 }
 static inline void iq1kt_codebook_init() {
