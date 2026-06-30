@@ -14,3 +14,11 @@ repos:
   hooks:
   -   id: flake8
       additional_dependencies: [flake8-no-print]
+- repo: local
+  hooks:
+  - id: no-infra-leak
+    name: Block private infra patterns in staged diff
+    entry: scripts/hooks/pre-commit
+    language: script
+    always_run: true
+    pass_filenames: false

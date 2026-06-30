@@ -1,7 +1,7 @@
 {
  "harness": "model-eval-framework",
- "model": "/home/builduser/local-models-ai02/Qwopus3.5-4B-Coder-IQ4_KS.gguf",
- "base_url": "http://192.168.3.95:8084",
+ "model": "Qwopus3.5-4B-Coder-IQ4_KS",
+ "base_url": "http://127.0.0.1:8080",
  "suite": "default-v1",
  "n_items": 20,
  "server_meta": {

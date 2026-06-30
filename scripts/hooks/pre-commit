@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-commit: block accidental infra leak into public repo.
+# Checks staged diff for private hostnames, IPs, and local paths.
+# Install: git config core.hooksPath scripts/hooks
+set -euo pipefail
+
+PATTERNS=(
+    'ai0[0-2]'
+    'myfacetwittertube'
+    '/mnt/cephfs/0/Container'
+    '/home/builduser'
+    '192\.168\.'
+    '10\.0\.'
+    '\.local-models'
+    'local-models-ai'
+)
+
+PATTERN=$(printf '%s\n' "${PATTERNS[@]}" | paste -sd '|')
+
+STAGED=$(git diff --cached --name-only 2>/dev/null) || STAGED=""
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+HITS=$(git diff --cached -- $STAGED 2>/dev/null | grep -E "^\+" | grep -vE "^\+\+\+" | grep -E "$PATTERN" || true)
+
+if [ -n "$HITS" ]; then
+    echo "ERROR: staged diff contains private infra patterns — commit blocked."
+    echo ""
+    echo "Matching lines:"
+    echo "$HITS" | head -20
+    echo ""
+    echo "Remove the private content before committing."
+    exit 1
+fi
+exit 0

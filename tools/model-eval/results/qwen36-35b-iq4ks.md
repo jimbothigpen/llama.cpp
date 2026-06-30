@@ -1,6 +1,6 @@
 # Model eval scorecard — qwen36-35b-iq4ks
 
-- endpoint: `http://127.0.0.1:8083`
+- endpoint: `http://127.0.0.1:8080`
 - suite: `default-v1` (20 items)
 - server: n_params=34660610688 n_ctx_train=786432 size=18766999552
 - policy: `tier-policy-v1`

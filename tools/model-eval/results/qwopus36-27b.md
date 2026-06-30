@@ -1,6 +1,6 @@
 # Model eval scorecard — qwopus36-27b
 
-- endpoint: `http://127.0.0.1:8183`
+- endpoint: `http://127.0.0.1:8080`
 - suite: `default-v1` (20 items)
 - server: n_params=26895998464 n_ctx_train=262144 size=14681798656
 - policy: `tier-policy-v1`

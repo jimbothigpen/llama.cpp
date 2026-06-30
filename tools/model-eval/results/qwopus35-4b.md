@@ -1,6 +1,6 @@
-# Model eval scorecard — /home/builduser/local-models-ai02/Qwopus3.5-4B-Coder-IQ4_KS.gguf
+# Model eval scorecard — Qwopus3.5-4B-Coder-IQ4_KS
 
-- endpoint: `http://192.168.3.95:8084`
+- endpoint: `http://127.0.0.1:8080`
 - suite: `default-v1` (20 items)
 - server: n_params=4205751296 n_ctx_train=393216 size=2425925632
 - policy: `tier-policy-v1`

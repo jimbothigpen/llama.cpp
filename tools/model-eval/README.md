@@ -64,12 +64,12 @@ python3 tiers.py  --selftest      # policy sanity
 
 # score one served model (queries an existing server)
 python3 eval_harness.py \
-    --base-url http://127.0.0.1:8083 --model qwen36-35b \
+    --base-url http://127.0.0.1:8080 --model qwen36-35b \
     --suite suites/default.json --rps 0.7 \
     --out results/qwen36-35b.json --md results/qwen36-35b.md
 
 # or the wrapper
-MODEL=qwen36-35b BASE_URL=http://127.0.0.1:8083 ./run_pilot.sh
+MODEL=qwen36-35b BASE_URL=http://127.0.0.1:8080 ./run_pilot.sh
 ```
 
 Per-deployment: bring each fleet model up on its own port and run the harness
@@ -101,7 +101,7 @@ harness is backend- or model-specific.
 ## Sample scorecard (35B pilot, 2026-06-20)
 
 Interim **qwen36-35b @ Q5_K_M** (not the final IQ4_KS deployment) on the live
-production server `http://127.0.0.1:8083`, suite `default-v1` (20 items):
+production server `http://127.0.0.1:8080`, suite `default-v1` (20 items):
 
 | dimension | n | mean |
 |---|---:|---:|

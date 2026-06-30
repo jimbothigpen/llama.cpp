@@ -1,7 +1,7 @@
 {
  "harness": "model-eval-framework",
  "model": "qwopus35-9b",
- "base_url": "http://127.0.0.1:8184",
+ "base_url": "http://127.0.0.1:8080",
  "suite": "default-v1",
  "n_items": 20,
  "server_meta": {

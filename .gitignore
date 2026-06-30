@@ -157,3 +157,13 @@ AGENTS.local.md
 .pi/SYSTEM.md
 worktrees/
 kernel-work/
+
+# Private infra / orchestrator context — NEVER commit
+context/STATE.md
+context/STATE-archive/
+context/
+*.flag
+orchestrator-inbox/
+worker-scratch/
+pubrepo-leak-audit*.md
+starter-prompt-*.md

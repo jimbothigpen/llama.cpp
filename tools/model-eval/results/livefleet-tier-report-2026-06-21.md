@@ -25,7 +25,7 @@ Status: **COMPLETE** — all 5 fleet models evaluated (122B + 35B-final added 20
 
 ### 1. Qwen3.6-35B-A3B (final IQ4_KS) — **S** (composite 1.000)
 
-> **Final production deployment** (`qwen36-35b-iq4ks` @ `:8083`, 768K ctx). Supersedes the interim Q5_K_M pilot. Perfect score across all 5 dimensions — only model on the fleet to pass robust-3. Confirms that IQ4_KS quantization introduces no degradation vs the pilot Q5_K_M (both 1.000). This is the strongest all-around model on the fleet at default-v1 granularity.
+> **Final production deployment** (`qwen36-35b-iq4ks`, 768K ctx). Supersedes the interim Q5_K_M pilot. Perfect score across all 5 dimensions — only model on the fleet to pass robust-3. Confirms that IQ4_KS quantization introduces no degradation vs the pilot Q5_K_M (both 1.000). This is the strongest all-around model on the fleet at default-v1 granularity.
 
 | dimension | n | score |
 |---|---:|---:|

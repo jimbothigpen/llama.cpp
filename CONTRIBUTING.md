@@ -189,3 +189,23 @@ Maintainers reserve the right to decline review or close pull requests for any r
 The Github issues, PRs and discussions contain a lot of information that can be useful to get familiar with the codebase. For convenience, some of the more important information is referenced from Github projects:
 
 https://github.com/ggml-org/llama.cpp/projects
+
+# Pre-commit hooks (infra-leak guard)
+
+This repo ships a pre-commit hook that blocks commits containing private
+infrastructure patterns (hostnames, LAN IPs, local paths).
+
+**Install via pre-commit framework (recommended):**
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+**Install manually (no pre-commit framework):**
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+The hook (`scripts/hooks/pre-commit`) is self-contained and runs on every
+`git commit`. It rejects staged diffs that contain patterns such as `ai0[0-2]`,
+`192.168.`, `/mnt/cephfs/0/Container`, `/home/builduser`, or `myfacetwittertube`.

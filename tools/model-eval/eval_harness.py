@@ -14,7 +14,7 @@ keep load modest.
 
 Usage:
     python3 eval_harness.py \\
-        --base-url http://127.0.0.1:8083 --model qwen36-35b \\
+        --base-url http://127.0.0.1:8080 --model qwen36-35b \\
         --suite suites/default.json \\
         --out results/qwen36-35b.json --md results/qwen36-35b.md
 
@@ -199,7 +199,7 @@ def render_md(scorecard):
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base-url", required=True, help="OpenAI-compat base, e.g. http://127.0.0.1:8083")
+    ap.add_argument("--base-url", required=True, help="OpenAI-compat base, e.g. http://127.0.0.1:8080")
     ap.add_argument("--model", required=True, help="served model id (from /v1/models)")
     ap.add_argument("--suite", default=os.path.join(HERE, "suites/default.json"))
     ap.add_argument("--out", default="", help="results JSON path")
