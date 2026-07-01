@@ -181,6 +181,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_WHT6_0        = 60, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT8_0        = 61, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WQ3_TCQ       = 62, // except 1d tensors (re-slotted 59→62: WHT5/6/8 claimed 59-61 in the same reship wave)
+        // imatrix-aggregate-driven per-tensor mix of WHT3_0..WHT8_0 widths (TODO 252)
+        LLAMA_FTYPE_MOSTLY_WHT_MIX       = 63, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

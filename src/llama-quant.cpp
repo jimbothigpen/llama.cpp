@@ -188,6 +188,11 @@ struct quantize_state_impl {
     // tensor type override patterns (compiled once, used twice)
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
 
+    // TODO 252: WHT_MIX per-tensor width assignment, keyed by tensor name.
+    // Populated once by wht_mix_assign_types() before the main quantize loop;
+    // consulted by llama_tensor_get_type_impl() for ftype == LLAMA_FTYPE_MOSTLY_WHT_MIX.
+    std::unordered_map<std::string, ggml_type> wht_mix_type;
+
     quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params):
         model(model), params(params)
     {
@@ -413,6 +418,143 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
     return return_type;
 }
 
+//
+// TODO 252: WHT_MIX importance-driven per-tensor width allocator
+//
+// [[rotation_defeats_imatrix_error_steering]]: the WHT family's within-block
+// Hadamard rotation makes a diagonal per-COORDINATE imatrix rotate to exactly
+// uniform (diag(H*diag(s)*Ht) = mean(s)), which is why WHT3_0/WHT4_0/etc.
+// quantize unweighted (see tensor_requires_imatrix below) -- per-coefficient
+// steering is provably dead. But block/row/tensor AGGREGATE importance is
+// TRACE-INVARIANT under that same rotation (trace(H*S*Ht) = trace(S)), so the
+// un-rotated imatrix mean per tensor is still a valid, rotation-robust signal
+// for choosing WHICH WIDTH a whole tensor gets. This allocator never touches
+// the rotated per-coefficient quantization itself -- it only decides, per
+// tensor, which of the existing WHT3_0..WHT8_0 encoders (unmodified, encode
+// side only) gets used.
+
+// WHT bpw ladder, low to high (see ggml-common.h block_wht*_0 layouts).
+static const ggml_type WHT_MIX_LADDER[] = {
+    GGML_TYPE_WHT3_0, GGML_TYPE_WHT4_0, GGML_TYPE_WHT5_0, GGML_TYPE_WHT6_0, GGML_TYPE_WHT8_0,
+};
+
+// Default target average bpw for WHT_MIX: WHT3_0 alone is already the 4.0 bpw
+// floor, so a modest fraction of tensors bumped toward WHT4_0/WHT5_0 lands in
+// the ~4.0-4.5 bpw band this is meant to compete in (vs Q4_K_M-class quants).
+static constexpr double WHT_MIX_TARGET_BPW = 4.25;
+
+static double wht_mix_type_bpw(ggml_type t) {
+    return 8.0 * (double) ggml_type_size(t) / (double) ggml_blck_size(t);
+}
+
+// Greedily bump the most importance-dense, still-upgradable tensor one ladder
+// step at a time (highest importance-per-added-bit first) until the
+// element-weighted average bpw across all WHT-eligible tensors reaches
+// target_bpw, or every tensor has hit the WHT8_0 ceiling. Populates
+// qs.wht_mix_type[name] for every WHT-eligible tensor (including ones left at
+// the WHT3_0 floor).
+static void wht_mix_assign_types(
+    quantize_state_impl & qs,
+    const std::vector<const llama_model_loader::llama_tensor_weight *> & tensors,
+    const std::map<int, std::string> & mapped,
+    const std::unordered_map<std::string, std::vector<float>> * imatrix_data,
+    double target_bpw
+) {
+    struct cand {
+        const ggml_tensor * tensor;
+        int64_t             nelements;
+        double              importance; // mean imatrix value (un-rotated, trace-style aggregate)
+        int                 level = 0;  // index into WHT_MIX_LADDER
+    };
+
+    std::vector<cand> cands;
+    cands.reserve(tensors.size());
+
+    int64_t total_elements = 0;
+    double  total_bits     = 0.0;
+
+    for (const auto * w : tensors) {
+        const ggml_tensor * t = w->tensor;
+        if (!tensor_allows_quantization(qs.params, qs.model.arch, t)) {
+            continue;
+        }
+        const tensor_category cat = tensor_get_category(ggml_get_name(t));
+        if (cat == tensor_category::OUTPUT || cat == tensor_category::TOKEN_EMBD) {
+            // output/embedding stay on the existing higher-precision path in
+            // llama_tensor_get_type_impl, not part of the WHT ladder mix
+            continue;
+        }
+
+        double importance = 0.0;
+        if (imatrix_data) {
+            const std::string remapped = remap_imatrix(ggml_get_name(t), mapped);
+            auto it = imatrix_data->find(remapped);
+            if (it != imatrix_data->end() && !it->second.empty()) {
+                double sum = 0.0;
+                for (float f : it->second) {
+                    sum += f;
+                }
+                importance = sum / (double) it->second.size();
+            }
+        }
+
+        cand c;
+        c.tensor     = t;
+        c.nelements  = ggml_nelements(t);
+        c.importance = importance;
+        cands.push_back(c);
+
+        total_elements += c.nelements;
+        total_bits      += (double) c.nelements / ggml_blck_size(GGML_TYPE_WHT3_0) * ggml_type_size(GGML_TYPE_WHT3_0) * 8.0;
+    }
+
+    if (cands.empty() || total_elements == 0) {
+        return;
+    }
+
+    const int n_levels = (int) (sizeof(WHT_MIX_LADDER) / sizeof(WHT_MIX_LADDER[0]));
+    double current_bpw = total_bits / (double) total_elements;
+
+    while (current_bpw < target_bpw) {
+        int best = -1;
+        double best_score = -1.0;
+        for (size_t i = 0; i < cands.size(); ++i) {
+            if (cands[i].level + 1 >= n_levels) {
+                continue;
+            }
+            const double delta_bpw = wht_mix_type_bpw(WHT_MIX_LADDER[cands[i].level + 1]) - wht_mix_type_bpw(WHT_MIX_LADDER[cands[i].level]);
+            const double score = cands[i].importance / delta_bpw;
+            if (best == -1 || score > best_score) {
+                best = (int) i;
+                best_score = score;
+            }
+        }
+        if (best == -1) {
+            break; // every tensor is already at the WHT8_0 ceiling
+        }
+
+        const double bits_before = (double) cands[best].nelements / ggml_blck_size(WHT_MIX_LADDER[cands[best].level])
+                                  * ggml_type_size(WHT_MIX_LADDER[cands[best].level]) * 8.0;
+        cands[best].level++;
+        const double bits_after = (double) cands[best].nelements / ggml_blck_size(WHT_MIX_LADDER[cands[best].level])
+                                 * ggml_type_size(WHT_MIX_LADDER[cands[best].level]) * 8.0;
+
+        total_bits  += (bits_after - bits_before);
+        current_bpw  = total_bits / (double) total_elements;
+    }
+
+    int level_counts[5] = {0, 0, 0, 0, 0};
+    for (const auto & c : cands) {
+        qs.wht_mix_type[ggml_get_name(c.tensor)] = WHT_MIX_LADDER[c.level];
+        level_counts[c.level]++;
+    }
+
+    LLAMA_LOG_INFO("%s: WHT_MIX allocator: %d tensors, target %.3f bpw, achieved %.3f bpw "
+                   "(WHT3_0=%d WHT4_0=%d WHT5_0=%d WHT6_0=%d WHT8_0=%d)\n",
+                   __func__, (int) cands.size(), target_bpw, current_bpw,
+                   level_counts[0], level_counts[1], level_counts[2], level_counts[3], level_counts[4]);
+}
+
 // internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
@@ -463,6 +605,16 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             else if (new_type != GGML_TYPE_Q8_0) {
                 new_type = GGML_TYPE_Q6_K;
             }
+        }
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_WHT_MIX) {
+        // TODO 252: consult the per-tensor width assigned by wht_mix_assign_types().
+        // Every WHT-eligible tensor (i.e. every tensor that reaches this branch,
+        // since OUTPUT/TOKEN_EMBD are handled above and MXFP4_MOE/IQx ftypes can't
+        // also be WHT_MIX) is populated by the allocator; fall back to new_type
+        // (the WHT3_0 default) defensively if a tensor was somehow missed.
+        auto it = qs.wht_mix_type.find(name);
+        if (it != qs.wht_mix_type.end()) {
+            new_type = it->second;
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
         // MoE   tensors -> MXFP4
@@ -866,6 +1018,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_WHT6_0:  return GGML_TYPE_WHT6_0;
         case LLAMA_FTYPE_MOSTLY_WHT8_0:  return GGML_TYPE_WHT8_0;
         case LLAMA_FTYPE_MOSTLY_WQ3_TCQ: return GGML_TYPE_WQ3_TCQ;
+        case LLAMA_FTYPE_MOSTLY_WHT_MIX: return GGML_TYPE_WHT3_0; // floor; per-tensor override via qs.wht_mix_type
         case LLAMA_FTYPE_MOSTLY_IQ4_K:   return GGML_TYPE_IQ4_K;
         case LLAMA_FTYPE_MOSTLY_IQ3_K:   return GGML_TYPE_IQ3_K;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   return GGML_TYPE_IQ2_K;
@@ -984,6 +1137,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    if (ftype == LLAMA_FTYPE_MOSTLY_WHT_MIX && !imatrix_data) {
+        // TODO 252: imatrix is the per-tensor width steering signal for WHT_MIX
+        // (not per-coefficient weighting, which the rotation defeats -- see
+        // wht_mix_assign_types() above). Without it there is nothing to steer
+        // on, so refuse rather than silently quantizing everything at the floor.
+        throw std::runtime_error("WHT_MIX requires an importance matrix (--imatrix); "
+                                  "it is the per-tensor width steering signal, not per-coefficient weighting");
+    }
+
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
@@ -1063,6 +1225,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
             return a->idx < b->idx;
         });
+    }
+
+    if (ftype == LLAMA_FTYPE_MOSTLY_WHT_MIX) {
+        wht_mix_assign_types(qs, tensors, mapped, imatrix_data, WHT_MIX_TARGET_BPW);
     }
 
     // compute tensor metadata once and cache it
