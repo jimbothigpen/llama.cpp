@@ -1315,7 +1315,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int  nbatch_V2       = ggml_cuda_fattn_mma_get_nbatch_V2     (DKQ, DV, ncols);
     constexpr int  nbatch_combine  = ggml_cuda_fattn_mma_get_nbatch_combine(DKQ, DV, ncols);
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols);
-    constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2);
+    // Turbo KV must stay single-stage synchronous here too (see flash_attn_ext_f16_iter):
+    // otherwise the multi-stage cp_async preload below (lines ~1416+) runs against raw
+    // turbo bytes as if they were half2 elements, causing a misaligned 16-byte read.
+    constexpr bool is_turbo_kv     = (type_K != GGML_TYPE_F16 || type_V != GGML_TYPE_F16);
+    constexpr int  nstages         = is_turbo_kv ? 0 : ggml_cuda_fattn_mma_get_nstages(DKQ, DV, ncols1, ncols2);
 
     if (cols_per_warp > ncols) {
         NO_DEVICE_CODE;
@@ -1944,10 +1948,15 @@ static __global__ void flash_attn_ext_f16(
 
     const int stride_Q1   = nb01 / sizeof(float2);
     const int stride_Q2   = nb02 / sizeof(float2);
-    const int stride_K    = nb11 / sizeof(half2);
+    // Turbo K/V tiles are loaded via raw char* arithmetic (stride_bytes, see
+    // flash_attn_ext_turbo{4,3,2}_load_tile) instead of half2-element indexing, so the
+    // stride must stay in true bytes for turbo instantiations. is_turbo_kv is constant
+    // per kernel instantiation (depends only on type_K/type_V), so this folds at compile time.
+    constexpr bool is_turbo_kv_stride = (type_K != GGML_TYPE_F16 || type_V != GGML_TYPE_F16);
+    const int stride_K    = is_turbo_kv_stride ? nb11 : nb11 / sizeof(half2);
     const int stride_mask = nb31 / sizeof(half);
 
-    const int stride_V = V_is_K_view ? stride_K : nb21 / sizeof(half2);
+    const int stride_V = V_is_K_view ? stride_K : (is_turbo_kv_stride ? nb21 : nb21 / sizeof(half2));
 
     const int iter_k     = (ne11      + (nbatch_fa - 1)) / nbatch_fa;
     const int iter_j     = (ne01.z    + (ncols1    - 1)) / ncols1;
