@@ -60,8 +60,8 @@ extracted from 3 auxiliary target layers** (`eagle3.extract_layers` GGUF key, ty
 **Native-vs-fork reconciled 2026-06-13.** Mainline (ggml-org) landed its own EAGLE3 loader in
 PR #18039 (`88a39274e`); rather than maintain two parallel implementations, this fork adopted
 mainline's version wholesale via a Path-A merge (`9d0602368`) and retired its own arch file. The
-fork's original converter, `conversion/eagle3.py`, is now dead code (conversion is handled by
-`conversion/llama.py`; see `d487cece8`) — fork-specific behavior (`fc_norm`, GGUF-key back-compat)
+fork's original converter, `conversion/eagle3.py`, is STILL REQUIRED for compact-vocab drafts (mainline
+`conversion/llama.py` incorrectly writes `d2t` as absolute IDs). Fork-specific behavior (`fc_norm`, GGUF-key back-compat)
 is layered on top of mainline's `src/models/eagle3.cpp` as additive patches.
 
 Three correctness bugs were fixed in `380c93384` (2026-05-30) before the current accept numbers
