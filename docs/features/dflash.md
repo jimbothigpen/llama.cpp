@@ -16,7 +16,7 @@
 | **What it is** | Drafter-model speculative decode via a cross-attention ring; drafter sees target hidden states |
 | **Flag** | `--spec-type dflash` (with `-md <dflash-draft.gguf>`) |
 | **Phase shipped** | S1 model loader (`b6a75e524`) + S2 dispatch (`ef80c728c`) |
-| **Phase in progress** | S3 GPU ring buffer + bulk argmax (Landed, pending performance measurement) |
+| **Phase COMPLETE (KEEP-BUUN)** | S3 GPU ring buffer + bulk argmax (Landed) |
 | **Solo accept rate** | **25.1 %** (`n_drafted=195`, `n_accept=49`; ROCm gfx1150, `--temp 0`) |
 | **Throughput vs no-spec** | **≈0.4× (net slowdown)** — S2 CPU path ≈10.7 tok/s vs ≈26.7 tok/s baseline |
 | **Runtime upstream** | buun `master` |
@@ -96,7 +96,7 @@ corroborating that no merge/collision applies here. No action needed; both may c
 - Gemma-4 DFlash converter path exists but is not yet smoke-tested. Use
   `--target-model-dir <gemma-4-model-dir>` to bundle the tokenizer (resolves
   the missing-tokenizer-files issue, CLOSED); Gemma-4 end-to-end
-  functional smoke is still pending.
+
 - Server multi-batch prompt accumulation into the cross-attention ring is not
   yet implemented; `llama-server` with a long cached prompt may produce a
   ring-length mismatch. CLI (single-batch prompt) is unaffected and is what

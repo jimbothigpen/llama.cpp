@@ -125,11 +125,11 @@ End-to-end on **Qwen3.5-2B** (sm_75):
 - **MMQ batched path** asserts `ne12 == 1 && ne13 == 1` (batched src1 not implemented).
 - **CUDA get_rows** does not cover WQ3 (nor WHT3/4_0) — these weight quants aren't used with get_rows;
   `test-backend-ops` therefore can't sweep them (it also lacks the model-load codebook upload).
-- Vulkan dequant pending Phase 4.
+- Vulkan dequant landed (Phase 4).
 
 ## Port plan
 
-Multi-backend roadmap (Ph3 HIP/ROCm done, Ph4 Vulkan pending).
+Multi-backend roadmap (Ph3 HIP/ROCm done, Ph4 Vulkan done).
 Phase 2 delivered the quantizer + CPU dequant + imatrix decision and ran the
 deferred Ph1 smoke (quantize + dual-backend coherent decode + dequant parity), plus a minimal Ph1 CUDA
 dispatch fix (WHT-only `mul_mat_vec_tq` branch; WQ3 multi-token now uses dequant→cuBLAS).

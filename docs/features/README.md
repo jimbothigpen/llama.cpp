@@ -81,7 +81,7 @@ Faster inference via draft-and-verify strategies. Each entry describes its own t
 | [Qwen3.5/3.6 MTP converter](qwen35-mtp-converter.md) | Stable | Qwen3.5/3.6 dense + MoE | Three converter modes (bundled / `--no-mtp` / `--mtp` split-export); 75.6% draft accept; `--spec-type draft-mtp`; upstream mainline PR #22673 |
 | [PHANTOM-X self-speculative n-gram drafter](phantom-x.md) | Stable | Any causal-LM GGUF | Bloom-filtered n-gram tables; no separate draft model; `--spec-type phantom`; +34% on repetitive code (86.6% accept); flat on prose; ported from carlosfundora 1-bit-turbo |
 | [Cascade Ensemble](spec-decode-ensemble.md) | Stable | Any | Prioritized cascade of n-gram and MTP drafters; `--spec-type ngram-map-k` |
-| [DFlash drafter spec-decode](dflash.md) | Preview — correct, **no speedup yet** | Any target + z-lab DFlash drafter | Cross-attention-ring drafter; 25.1% solo accept (gfx1150, Qwen3.6); S2 CPU path is net slowdown (~0.4×); `--spec-type dflash`; S3 GPU ring in progress |
+| [DFlash drafter spec-decode](dflash.md) | Preview — correct, **no speedup yet** | Any target + z-lab DFlash drafter | Cross-attention-ring drafter; 28.7% solo accept (gfx1150, Qwen3.6); `--spec-type dflash`; S3 GPU ring complete (BUUN port retained) |
 
 ## Prompt Compression
 
