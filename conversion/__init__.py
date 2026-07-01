@@ -55,10 +55,12 @@ TEXT_MODEL_MAP: dict[str, str] = {
     # (conversion/qwen.py DFlashModel). architectures-string dispatch is single-valued (see
     # get_model_class), so only one of the two can own this key. We keep ours (dflash_draft ->
     # LLM_ARCH_DFLASH_DRAFT, our production cross-attention-ring drafters, recon-measured 25.1%
-    # accept) as the default; mainline's class is registered under a disambiguated string in
-    # qwen.py (search "DFlashDraftModel-mainline-native") since it is not reachable via a real
-    # checkpoint's architectures field. See HEAD-TO-HEAD-PLAN.md for the disambiguation plan.
+    # accept) as the default. mainline's class is registered under the disambiguated string
+    # "DFlashDraftModel-mainline-native" in qwen.py; to convert a real checkpoint through it,
+    # copy/edit that checkpoint's config.json to set architectures=["DFlashDraftModel-mainline-native"]
+    # (see HEAD-TO-HEAD-PLAN.md — this is exactly how the head-to-head draft GGUF was produced).
     "DFlashDraftModel": "dflash_draft",
+    "DFlashDraftModel-mainline-native": "qwen",
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
