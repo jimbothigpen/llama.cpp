@@ -11,6 +11,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <thread>
@@ -41,6 +42,18 @@ struct Stats {
     std::vector<int64_t> counts;
 };
 
+// TODO 253: per-block 32x32 activation second-moment accumulator (block-diagonal
+// covariance, one 32x32 block per contiguous group of 32 input channels). Only
+// populated when IMATRIX_BLOCK_COV=1 is set in the environment; orthogonal to the
+// normal diagonal `Stats` collection above (kept untouched for compatibility).
+// cov layout: [mat_id][block][32*32] flattened, mat_id matches Stats::counts indexing.
+struct BlockCovStats {
+    std::vector<float> cov;
+    int64_t            n_blocks = 0; // per mat_id
+};
+
+static constexpr int64_t TQ_COV_BLOCK = 32; // must match WHT3_0/WHT4_0 QK_TQ3_0/QK_WHT4_0
+
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
@@ -65,15 +78,77 @@ public:
     void save_imatrix(int32_t n_chunk = -1) const;
     bool load_imatrix(const char * file_name);
     const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
+    // TODO 253: when IMATRIX_BLOCK_COV=1, rewrite m_stats[*].values in-place with
+    // diag(H * Sigma_block * H^T) per 32-block, replacing the raw diagonal E[x_j^2].
+    // Must be called after collection completes and before save_imatrix().
+    void rotate_block_cov_into_stats();
 private:
-    std::unordered_map<std::string, Stats> m_stats;
-    common_params                          m_params;
-    std::mutex                             m_mutex;
-    std::vector<std::string>               m_datasets;
-    int32_t                                m_last_chunk = 0;
-    std::vector<char>                      m_src1_data;
-    std::vector<char>                      m_ids; // the expert ids from ggml_mul_mat_id
+    std::unordered_map<std::string, Stats>         m_stats;
+    common_params                                  m_params;
+    std::mutex                                     m_mutex;
+    std::vector<std::string>                       m_datasets;
+    int32_t                                         m_last_chunk = 0;
+    std::vector<char>                              m_src1_data;
+    std::vector<char>                              m_ids; // the expert ids from ggml_mul_mat_id
+    std::unordered_map<std::string, BlockCovStats> m_blockcov; // TODO 253, dense MUL_MAT tensors only
 };
+
+// TODO 253: returns true once per process and caches the result; gates both the
+// collection-side covariance accumulation and the save-side rotation/overwrite.
+static bool imatrix_block_cov_enabled() {
+    static const bool enabled = (std::getenv("IMATRIX_BLOCK_COV") != nullptr) &&
+        std::string(std::getenv("IMATRIX_BLOCK_COV")) == "1";
+    return enabled;
+}
+
+// TODO 253: byte-for-byte copy of ggml-turbo-quant.c's TQ3_0_SIGNS — the WHT3_0/WHT4_0
+// sign-flip applied before the Hadamard butterfly. MUST stay in sync with that file;
+// any drift here silently misaligns the rotated covariance with the real encoder basis.
+static const float TQ_COV_SIGNS[32] = {
+    +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+};
+
+// TODO 253: sign-flip + in-place radix-2 fast Walsh-Hadamard transform + 1/sqrt(32)
+// normalization, mirroring ggml-turbo-quant.c's tq3_0_rht_forward() exactly (same
+// signs, same butterfly order, same normalization) so that H here IS the encoder's H.
+static void tq_cov_rht_forward(float * buf /* len 32 */) {
+    for (int i = 0; i < 32; ++i) {
+        buf[i] *= TQ_COV_SIGNS[i];
+    }
+    for (int len = 1; len < 32; len <<= 1) {
+        for (int i = 0; i < 32; i += (len << 1)) {
+            for (int j = i; j < i + len; ++j) {
+                float a = buf[j];
+                float b = buf[j + len];
+                buf[j]       = a + b;
+                buf[j + len] = a - b;
+            }
+        }
+    }
+    const float inv_sqrt32 = 0.17677669529663688f;
+    for (int i = 0; i < 32; ++i) {
+        buf[i] *= inv_sqrt32;
+    }
+}
+
+// TODO 253: build the 32x32 Hadamard-with-signs matrix H by applying the forward
+// transform to each standard basis vector (column-by-column), guaranteeing exact
+// correspondence with the encoder rather than risking a hand-derived construction.
+static void tq_cov_build_H(float * H /* 32*32, row-major, H[r*32+c] */) {
+    float col[32];
+    for (int c = 0; c < 32; ++c) {
+        for (int r = 0; r < 32; ++r) {
+            col[r] = (r == c) ? 1.0f : 0.0f;
+        }
+        tq_cov_rht_forward(col);
+        for (int r = 0; r < 32; ++r) {
+            H[r * 32 + c] = col[r];
+        }
+    }
+}
 
 // remove any prefix and suffixes from the name
 // CUDA0#blk.0.attn_k.weight#0 => blk.0.attn_k.weight
@@ -367,6 +442,22 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         }
         LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d x %5d, %d\n", __func__, m_last_chunk, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2], (int)src1->type);
 
+        // TODO 253: per-block 32x32 covariance, dense MUL_MAT tensors only, opt-in.
+        const bool cov_active = imatrix_block_cov_enabled() && (src1->ne[0] % TQ_COV_BLOCK == 0);
+        const int64_t n_blk_per_row = cov_active ? (src1->ne[0] / TQ_COV_BLOCK) : 0;
+        BlockCovStats * ecov = nullptr;
+        if (cov_active) {
+            ecov = &m_blockcov[wname];
+            const size_t need = (size_t)n_mat * n_blk_per_row * TQ_COV_BLOCK * TQ_COV_BLOCK;
+            if (ecov->cov.empty()) {
+                ecov->cov.assign(need, 0.0f);
+                ecov->n_blocks = n_blk_per_row;
+            } else if (ecov->cov.size() != need) {
+                LOG_ERR("%s: inconsistent block-cov size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)ecov->cov.size(), (int)need);
+                exit(1);
+            }
+        }
+
         for (int64_t i3 = 0; i3 < src1->ne[3]; ++i3) {
             for (int64_t i2 = 0; i2 < src1->ne[2]; ++i2) {
                 // handle 3D+ tensors, but flatten 3D+ activations when model tensor is 2D
@@ -380,6 +471,19 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
                             exit(1);
+                        }
+                    }
+                    if (cov_active) {
+                        float * cov_mat = ecov->cov.data() + (size_t)mat_id * n_blk_per_row * TQ_COV_BLOCK * TQ_COV_BLOCK;
+                        for (int64_t blk = 0; blk < n_blk_per_row; ++blk) {
+                            const float * xb = x + blk * TQ_COV_BLOCK;
+                            float * cov_blk = cov_mat + blk * TQ_COV_BLOCK * TQ_COV_BLOCK;
+                            for (int64_t a = 0; a < TQ_COV_BLOCK; ++a) {
+                                const float xa = xb[a];
+                                for (int64_t c = 0; c < TQ_COV_BLOCK; ++c) {
+                                    cov_blk[a * TQ_COV_BLOCK + c] += xa * xb[c];
+                                }
+                            }
                         }
                     }
                 }
@@ -619,6 +723,75 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
     gguf_free(ctx_gguf);
     ggml_free(ctx);
+}
+
+// TODO 253: overwrite m_stats[*].values with diag(H * Sigma_block * H^T) per 32-block,
+// computed from the raw (unnormalized) accumulated block covariance. Linear in Sigma,
+// so applying H/H^T to the RAW sum (instead of count-normalized E[xx^T]) and writing
+// the result straight back into the RAW `values` slot is exact: the count-normalization
+// that downstream consumers (tools/quantize/quantize.cpp::load_imatrix) apply via
+// sums[j]/count commutes with the rotation, so no extra count bookkeeping is needed here.
+void IMatrixCollector::rotate_block_cov_into_stats() {
+    if (m_blockcov.empty()) {
+        return;
+    }
+
+    float H[32 * 32];
+    tq_cov_build_H(H);
+
+    int n_replaced = 0;
+    for (auto & kv : m_blockcov) {
+        const std::string & name = kv.first;
+        BlockCovStats & bc = kv.second;
+
+        auto it = m_stats.find(name);
+        if (it == m_stats.end() || bc.n_blocks <= 0 || bc.cov.empty()) {
+            continue;
+        }
+        Stats & st = it->second;
+
+        const int64_t n_blk = bc.n_blocks;
+        const int64_t n_mat = (int64_t) bc.cov.size() / (n_blk * TQ_COV_BLOCK * TQ_COV_BLOCK);
+        const int64_t expected_values = n_mat * n_blk * TQ_COV_BLOCK;
+        if ((int64_t) st.values.size() != expected_values) {
+            LOG_ERR("%s: block-cov / stats size mismatch for %s (%d vs %d) - skipping rotation\n",
+                __func__, name.c_str(), (int) st.values.size(), (int) expected_values);
+            continue;
+        }
+
+        for (int64_t mat_id = 0; mat_id < n_mat; ++mat_id) {
+            for (int64_t blk = 0; blk < n_blk; ++blk) {
+                const float * cov_blk = bc.cov.data() + ((size_t) mat_id * n_blk + blk) * TQ_COV_BLOCK * TQ_COV_BLOCK;
+                const size_t  val_base = (size_t) mat_id * n_blk * TQ_COV_BLOCK + blk * TQ_COV_BLOCK;
+
+                float tmp[32];
+                for (int r = 0; r < 32; ++r) {
+                    // tmp = row r of (H * Sigma_block)
+                    for (int c = 0; c < 32; ++c) {
+                        double s = 0.0;
+                        for (int a = 0; a < 32; ++a) {
+                            s += (double) H[r * 32 + a] * (double) cov_blk[a * 32 + c];
+                        }
+                        tmp[c] = (float) s;
+                    }
+                    // diag(H * Sigma_block * H^T)[r] = (row r of H*Sigma) dot (row r of H)
+                    double diag_r = 0.0;
+                    for (int c = 0; c < 32; ++c) {
+                        diag_r += (double) tmp[c] * (double) H[r * 32 + c];
+                    }
+                    st.values[val_base + r] = (float) diag_r;
+                    if (!std::isfinite(st.values[val_base + r])) {
+                        LOG_ERR("%s: non-finite rotated block-cov value for %s, block %d, coord %d\n",
+                            __func__, name.c_str(), (int) blk, r);
+                        exit(1);
+                    }
+                }
+            }
+        }
+        n_replaced++;
+    }
+
+    LOG_INF("%s: replaced diagonal imatrix values with rotated block-covariance for %d tensor(s)\n", __func__, n_replaced);
 }
 
 bool IMatrixCollector::load_imatrix(const char * file_name) {
@@ -1279,6 +1452,10 @@ int main(int argc, char ** argv) {
     if (!compute_imatrix(ctx, ctx_mtp, params, n_ctx)) {
         if (ctx_mtp) llama_free(ctx_mtp);
         return 1;
+    }
+
+    if (imatrix_block_cov_enabled()) {
+        g_collector.rotate_block_cov_into_stats();
     }
 
     g_collector.save_imatrix();

@@ -1237,25 +1237,26 @@ static int tq4_0_choose_index(float val) {
 /* ---------- WHT3_0 quantization ---------- */
 
 /* Per-block quantize helper. iw is optional per-element importance weights
- * (NULL = unweighted). When set, the scale search uses weighted error and
- * the WLS refinement weights the inner products — ADR-016 imatrix integration.
- * Note: iw is applied to post-RHT positions directly (per recon/08 §720
- * TheTom pattern). This is approximate (RHT mixes positions) but
- * empirically effective. */
+ * (NULL = unweighted).
+ *
+ * NOTE (TODO 253, WHT rotated-cov imatrix): an EARLIER attempt (WHT imatrix
+ * audit, 2026-06-04) weighted buf[j] (the post-RHT, rotated-basis coefficient)
+ * directly by a diagonal imatrix collected in the ORIGINAL, un-rotated basis.
+ * That misaligned importance with the rotated coefficient and HURT PPL (9B
+ * WHT3_0: 8.89 vs the unweighted TheTom reference 7.6776, +16%) — see
+ * tensor_requires_imatrix() in llama-quant.cpp, which still hard-disables the
+ * legacy diagonal-imatrix requirement for this type.
+ *
+ * `iw` here is a DIFFERENT, rotation-aware signal: when produced via
+ * `IMATRIX_BLOCK_COV=1` (tools/imatrix/imatrix.cpp), iw[j] = diag(H * Sigma_block
+ * * H^T)[j], i.e. the full 32x32 block covariance Sigma rotated by the SAME
+ * Hadamard transform H applied below (tq3_0_rht_forward). Because buf[j] is
+ * already H applied to the original block, iw[j] IS aligned with buf[j] in the
+ * rotated basis, so weighting buf[j] by iw[j] directly is mathematically valid
+ * (unlike the diagonal-imatrix case above). */
 static void quantize_block_wht3_0(const float * GGML_RESTRICT src_blk,
                                   block_wht3_0 * GGML_RESTRICT blk,
                                   const float * iw) {
-    /* NOTE (WHT imatrix audit, 2026-06-04): the importance vector `iw` is a
-     * per-INPUT-COLUMN quantity in the ORIGINAL weight basis. The forward RHT
-     * below rotates/mixes all 32 columns of the block, so post-RHT coefficient
-     * buf[j] no longer corresponds to original column j. Weighting the post-RHT
-     * residual by iw[j] (the ADR-016 port did this) misaligns importance with
-     * the rotated coefficient and measurably HURT PPL (9B WHT3_0: 8.89 vs the
-     * unweighted TheTom reference 7.6776, +16%). We therefore quantize the
-     * rotated coefficients UNWEIGHTED, byte-for-byte matching TheTom's proven
-     * quantize_row_tq3_1s_ref. iw is intentionally ignored. */
-    (void) iw;
-
     /* 1. Forward RHT */
     float buf[TQ_BLOCK_SIZE];
     memcpy(buf, src_blk, TQ_BLOCK_SIZE * sizeof(float));
@@ -1283,12 +1284,14 @@ static void quantize_block_wht3_0(const float * GGML_RESTRICT src_blk,
         for (int j = 0; j < 16; j++) {
             int idx = tq3_0_choose_index(buf[j] * inv0);
             float diff = buf[j] - TQ3_0_CENTROIDS[idx] * d0;
-            err += diff * diff;
+            float w = iw ? iw[j] : 1.0f;
+            err += w * diff * diff;
         }
         for (int j = 16; j < 32; j++) {
             int idx = tq3_0_choose_index(buf[j] * inv1);
             float diff = buf[j] - TQ3_0_CENTROIDS[idx] * d1;
-            err += diff * diff;
+            float w = iw ? iw[j] : 1.0f;
+            err += w * diff * diff;
         }
         if (err < best_err) {
             best_err = err;
@@ -1297,7 +1300,7 @@ static void quantize_block_wht3_0(const float * GGML_RESTRICT src_blk,
         }
     }
 
-    /* 4. Iterative LS refinement (6 iterations) in rotated space. */
+    /* 4. Iterative WLS refinement (6 iterations) in rotated space. */
     for (int iter = 0; iter < 6; iter++) {
         float inv0 = (best_d0 > 1e-10f) ? 1.0f / best_d0 : 0.0f;
         float inv1 = (best_d1 > 1e-10f) ? 1.0f / best_d1 : 0.0f;
@@ -1307,14 +1310,16 @@ static void quantize_block_wht3_0(const float * GGML_RESTRICT src_blk,
         for (int j = 0; j < 16; j++) {
             int idx = tq3_0_choose_index(buf[j] * inv0);
             float c = TQ3_0_CENTROIDS[idx];
-            num0 += buf[j] * c;
-            den0 += c * c;
+            float w = iw ? iw[j] : 1.0f;
+            num0 += w * buf[j] * c;
+            den0 += w * c * c;
         }
         for (int j = 16; j < 32; j++) {
             int idx = tq3_0_choose_index(buf[j] * inv1);
             float c = TQ3_0_CENTROIDS[idx];
-            num1 += buf[j] * c;
-            den1 += c * c;
+            float w = iw ? iw[j] : 1.0f;
+            num1 += w * buf[j] * c;
+            den1 += w * c * c;
         }
         if (den0 > 1e-10f) best_d0 = num0 / den0;
         if (den1 > 1e-10f) best_d1 = num1 / den1;
@@ -1408,16 +1413,12 @@ size_t quantize_wht3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 /* ---------- WHT4_0 quantization ---------- */
 
 /* Per-block quantize helper. iw is optional per-element importance weights
- * (NULL = unweighted). See quantize_block_wht3_0 for the rationale. */
+ * (NULL = unweighted). See quantize_block_wht3_0 for the TODO 253 rotated-cov
+ * rationale: iw[j], when produced via IMATRIX_BLOCK_COV=1, is rotation-aligned
+ * (diag(H*Sigma_block*H^T)) and so is valid to apply directly to buf[j]. */
 static void quantize_block_wht4_0(const float * GGML_RESTRICT src_blk,
                                   block_wht4_0 * GGML_RESTRICT blk,
                                   const float * iw) {
-    /* NOTE (WHT imatrix audit, 2026-06-04): see quantize_block_wht3_0 — iw is a
-     * per-INPUT-COLUMN importance in the ORIGINAL basis and does not align with
-     * the post-RHT rotated coefficients, so weighting by it hurt PPL. Quantize
-     * UNWEIGHTED to match TheTom's proven quantize_row_tq4_1s_ref. */
-    (void) iw;
-
     /* 1. Forward RHT */
     float buf[TQ_BLOCK_SIZE];
     memcpy(buf, src_blk, TQ_BLOCK_SIZE * sizeof(float));
@@ -1445,12 +1446,14 @@ static void quantize_block_wht4_0(const float * GGML_RESTRICT src_blk,
         for (int j = 0; j < 16; j++) {
             int idx = tq4_0_choose_index(buf[j] * inv0);
             float diff = buf[j] - TQ4_0_CENTROIDS[idx] * d0;
-            err += diff * diff;
+            float w = iw ? iw[j] : 1.0f;
+            err += w * diff * diff;
         }
         for (int j = 16; j < 32; j++) {
             int idx = tq4_0_choose_index(buf[j] * inv1);
             float diff = buf[j] - TQ4_0_CENTROIDS[idx] * d1;
-            err += diff * diff;
+            float w = iw ? iw[j] : 1.0f;
+            err += w * diff * diff;
         }
         if (err < best_err) {
             best_err = err;
@@ -1459,7 +1462,7 @@ static void quantize_block_wht4_0(const float * GGML_RESTRICT src_blk,
         }
     }
 
-    /* 4. Iterative LS refinement (6 iterations) in rotated space. */
+    /* 4. Iterative WLS refinement (6 iterations) in rotated space. */
     for (int iter = 0; iter < 6; iter++) {
         float inv0 = (best_d0 > 1e-10f) ? 1.0f / best_d0 : 0.0f;
         float inv1 = (best_d1 > 1e-10f) ? 1.0f / best_d1 : 0.0f;
@@ -1469,14 +1472,16 @@ static void quantize_block_wht4_0(const float * GGML_RESTRICT src_blk,
         for (int j = 0; j < 16; j++) {
             int idx = tq4_0_choose_index(buf[j] * inv0);
             float c = TQ4_0_CENTROIDS[idx];
-            num0 += buf[j] * c;
-            den0 += c * c;
+            float w = iw ? iw[j] : 1.0f;
+            num0 += w * buf[j] * c;
+            den0 += w * c * c;
         }
         for (int j = 16; j < 32; j++) {
             int idx = tq4_0_choose_index(buf[j] * inv1);
             float c = TQ4_0_CENTROIDS[idx];
-            num1 += buf[j] * c;
-            den1 += c * c;
+            float w = iw ? iw[j] : 1.0f;
+            num1 += w * buf[j] * c;
+            den1 += w * c * c;
         }
         if (den0 > 1e-10f) best_d0 = num0 / den0;
         if (den1 > 1e-10f) best_d1 = num1 / den1;
