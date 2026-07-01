@@ -468,15 +468,15 @@ static __device__ __forceinline__ void flash_attn_ext_turbo4_load_tile(
         const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
         const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    const int tid = threadIdx.y * warp_size + threadIdx.x;
+    const int nwarps = nthreads / warp_size;
 #pragma unroll
-    for (int row = tid; row < nbatch_fa; row += nthreads) {
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
         if (oob_check && row >= i_sup) {
-            for (int c = 0; c < D2; ++c) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
             continue;
         }
         const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
-        for (int c = 0; c < D2; ++c) {
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
             const int col     = col_offset + c;
             const int blk_idx = col / (QK_TURBOQ4 / 2);
             const int in_blk  = col % (QK_TURBOQ4 / 2);
@@ -500,15 +500,15 @@ static __device__ __forceinline__ void flash_attn_ext_turbo3_load_tile(
         const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
         const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    const int tid = threadIdx.y * warp_size + threadIdx.x;
+    const int nwarps = nthreads / warp_size;
 #pragma unroll
-    for (int row = tid; row < nbatch_fa; row += nthreads) {
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
         if (oob_check && row >= i_sup) {
-            for (int c = 0; c < D2; ++c) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
             continue;
         }
         const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
-        for (int c = 0; c < D2; ++c) {
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
             const int col   = col_offset + c;
             const int elem0 = col * 2;
             const int ib    = elem0 / QK_TURBOQ3;
@@ -536,15 +536,15 @@ static __device__ __forceinline__ void flash_attn_ext_turbo2_load_tile(
         const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
         const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    const int tid = threadIdx.y * warp_size + threadIdx.x;
+    const int nwarps = nthreads / warp_size;
 #pragma unroll
-    for (int row = tid; row < nbatch_fa; row += nthreads) {
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
         if (oob_check && row >= i_sup) {
-            for (int c = 0; c < D2; ++c) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
             continue;
         }
         const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
-        for (int c = 0; c < D2; ++c) {
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
             const int col   = col_offset + c;
             const int elem0 = col * 2;
             const int ib    = elem0 / QK_TURBOQ2;
@@ -1467,7 +1467,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         constexpr int  k_VKQ_sup = nbatch_fa;
         flash_attn_ext_f16_iter
             <DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, needs_fixup, is_fixup, last_iter, oob_check,
-             T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ>
+             T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, type_K, type_V>
             (Q_f2, K_h2, V_h2, mask_h, dstk, dstk_fixup, scale, slope, logit_softcap,
              ne01, ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C,
              KQ_max, KQ_rowsum, jt, kb0, k_VKQ_sup);
@@ -2046,7 +2046,7 @@ static __global__ void flash_attn_ext_f16(
 
     constexpr bool is_fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     constexpr bool needs_fixup = false;
-    flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, needs_fixup, is_fixup>
+    flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, needs_fixup, is_fixup, type_K, type_V>
         (Q_f2, K_h2, V_h2, mask_h, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
          ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
 #else
