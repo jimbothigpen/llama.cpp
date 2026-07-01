@@ -52,10 +52,17 @@ llama-server \
 
 ## §1 Provenance
 
-EAGLE3 is a speculative-decode architecture from the carlosfundora / 1-bit-turbo upstream. The
-drafter is a small separate transformer that consumes **hidden-state features extracted from 3
-auxiliary target layers** (`eagle3.extract_layers` GGUF key, typically layers 1, 15, 28 for a
-28-layer target) rather than tokens alone.
+EAGLE3 is a speculative-decode architecture originally ported from the carlosfundora / 1-bit-turbo
+upstream. The drafter is a small separate transformer that consumes **hidden-state features
+extracted from 3 auxiliary target layers** (`eagle3.extract_layers` GGUF key, typically layers 1,
+15, 28 for a 28-layer target) rather than tokens alone.
+
+**Native-vs-fork reconciled 2026-06-13.** Mainline (ggml-org) landed its own EAGLE3 loader in
+PR #18039 (`88a39274e`); rather than maintain two parallel implementations, this fork adopted
+mainline's version wholesale via a Path-A merge (`9d0602368`) and retired its own arch file. The
+fork's original converter, `conversion/eagle3.py`, is now dead code (conversion is handled by
+`conversion/llama.py`; see `d487cece8`) — fork-specific behavior (`fc_norm`, GGUF-key back-compat)
+is layered on top of mainline's `src/models/eagle3.cpp` as additive patches.
 
 Three correctness bugs were fixed in `380c93384` (2026-05-30) before the current accept numbers
 were reached:
@@ -165,7 +172,7 @@ speculative driver.
 `GGML_TYPE_I64`, but `llama_model_eagle3_get_d2t()` (commit `87b5b3d8d`, already on main)
 requires `GGML_TYPE_I32` → the host-side fast path returns empty and the log prints `d2t=none`.
 The graph-side remap path is active and correct; output is coherent. Optional future fix: widen
-the getter to accept I64, or export d2t as I32 in `conversion/eagle3.py`.
+the getter to accept I64, or export d2t as I32 in `conversion/llama.py`.
 
 ---
 

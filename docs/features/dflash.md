@@ -69,6 +69,14 @@ attends to **hidden states** from the target model (via a learned cross-attentio
 ring) rather than to tokens alone. The drafter does not share the target's
 vocabulary projection; it produces a single drafted token per step.
 
+**Native-vs-buun reconciled 2026-07-01 — KEEP-DIVERGED.** Mainline (ggml-org) separately ships its
+own native DFlash support (`LLM_ARCH_DFLASH`, arch string `"dflash"`, PR #22105/#25110), built
+around a KV-injection mechanism rather than this feature's cross-attention ring. The two are
+distinct techniques with zero identifier collision (different arch enum, different runtime path)
+and mainline's native DFlash is not an ancestor of this fork's buun-sourced implementation —
+ik_llama.cpp independently carries the same buun-family cross-attention-ring architecture,
+corroborating that no merge/collision applies here. No action needed; both may coexist.
+
 ---
 
 ## §2 Phase status
