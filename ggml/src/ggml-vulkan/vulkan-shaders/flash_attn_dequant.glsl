@@ -37,6 +37,10 @@ layout (binding = 1) readonly buffer K_PACKED_TURBOQ3_0 { block_turboq3_0 data[]
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ3_0 { block_turboq3_0 data[]; } v_packed_turboq3_0;
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } k_packed_turboq4_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ4_0 { block_turboq4_0 data[]; } v_packed_turboq4_0;
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ5_0 { block_turboq5_0 data[]; } k_packed_turboq5_0;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ5_0 { block_turboq5_0 data[]; } v_packed_turboq5_0;
+layout (binding = 1) readonly buffer K_PACKED_TURBOQ6_0 { block_turboq6_0 data[]; } k_packed_turboq6_0;
+layout (binding = 2) readonly buffer V_PACKED_TURBOQ6_0 { block_turboq6_0 data[]; } v_packed_turboq6_0;
 // turboq8_0: 130-byte block (2-byte norm + 128 single-byte uniform-grid indices).
 layout (binding = 1) readonly buffer K_PACKED_TURBOQ8_0 { block_turboq8_0 data[]; } k_packed_turboq8_0;
 layout (binding = 2) readonly buffer V_PACKED_TURBOQ8_0 { block_turboq8_0 data[]; } v_packed_turboq8_0;
@@ -230,6 +234,34 @@ const float T4C[16] = float[16](
                         T4C[(qb1)      & 0xFu], T4C[(qb1 >> 4) & 0xFu]);                          \
 }
 
+// turboq5_0: 5-bit uniform 32-level grid. centroid = (idx - 15.5)/15.5; recon = norm * centroid.
+#define FA_DEQUANT4_TURBOQ5_0(BUF) {                                                              \
+    const FLOAT_TYPE nm = FLOAT_TYPE(BUF.data[a_offset + ib].norm) * FLOAT_TYPE(1.0 / 15.5);      \
+    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 2    ]);                               \
+    const uint qb1 = uint(BUF.data[a_offset + ib].qs[iqs / 2 + 1]);                               \
+    const uint hb  = (uint(BUF.data[a_offset + ib].qh[iqs / 8]) >> (iqs % 8)) & 0xFu;             \
+    return nm * FLOAT_TYPEV4(                                                                     \
+        FLOAT_TYPE( ((qb0)      & 0xFu) | (((hb)      & 1u) << 4) ) - FLOAT_TYPE(15.5),           \
+        FLOAT_TYPE( ((qb0 >> 4) & 0xFu) | (((hb >> 1) & 1u) << 4) ) - FLOAT_TYPE(15.5),           \
+        FLOAT_TYPE( ((qb1)      & 0xFu) | (((hb >> 2) & 1u) << 4) ) - FLOAT_TYPE(15.5),           \
+        FLOAT_TYPE( ((qb1 >> 4) & 0xFu) | (((hb >> 3) & 1u) << 4) ) - FLOAT_TYPE(15.5)            \
+    );                                                                                            \
+}
+
+// turboq6_0: 6-bit uniform 64-level grid. centroid = (idx - 31.5)/31.5; recon = norm * centroid.
+#define FA_DEQUANT4_TURBOQ6_0(BUF) {                                                              \
+    const FLOAT_TYPE nm = FLOAT_TYPE(BUF.data[a_offset + ib].norm) * FLOAT_TYPE(1.0 / 31.5);      \
+    const uint qb0 = uint(BUF.data[a_offset + ib].qs[iqs / 2    ]);                               \
+    const uint qb1 = uint(BUF.data[a_offset + ib].qs[iqs / 2 + 1]);                               \
+    const uint hb  = uint(BUF.data[a_offset + ib].qh[iqs / 4]);                                   \
+    return nm * FLOAT_TYPEV4(                                                                     \
+        FLOAT_TYPE( ((qb0)      & 0xFu) | (((hb)      & 3u) << 4) ) - FLOAT_TYPE(31.5),           \
+        FLOAT_TYPE( ((qb0 >> 4) & 0xFu) | (((hb >> 2) & 3u) << 4) ) - FLOAT_TYPE(31.5),           \
+        FLOAT_TYPE( ((qb1)      & 0xFu) | (((hb >> 4) & 3u) << 4) ) - FLOAT_TYPE(31.5),           \
+        FLOAT_TYPE( ((qb1 >> 4) & 0xFu) | (((hb >> 6) & 3u) << 4) ) - FLOAT_TYPE(31.5)            \
+    );                                                                                            \
+}
+
 // turboq8_0: 8-bit uniform 256-level grid in the WHT-rotated domain. One byte per
 // value: centroid = (qs - 127.5)/127.5; recon = norm * centroid. The per-block
 // absmax scale is already folded into the stored norm. Stays rotated (no inverse
@@ -260,6 +292,8 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(k_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(k_packed_turboq3_0)
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(k_packed_turboq4_0)
+            case FA_TYPE_TURBOQ5_0: FA_DEQUANT4_TURBOQ5_0(k_packed_turboq5_0)
+            case FA_TYPE_TURBOQ6_0: FA_DEQUANT4_TURBOQ6_0(k_packed_turboq6_0)
             case FA_TYPE_TURBOQ8_0: FA_DEQUANT4_TURBOQ8_0(k_packed_turboq8_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (k_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (k_packed_turboq3_tcq)
@@ -277,6 +311,8 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_TURBOQ2_0: FA_DEQUANT4_TURBOQ2_0(v_packed_turboq2_0)
             case FA_TYPE_TURBOQ3_0: FA_DEQUANT4_TURBOQ3_0(v_packed_turboq3_0)
             case FA_TYPE_TURBOQ4_0: FA_DEQUANT4_TURBOQ4_0(v_packed_turboq4_0)
+            case FA_TYPE_TURBOQ5_0: FA_DEQUANT4_TURBOQ5_0(v_packed_turboq5_0)
+            case FA_TYPE_TURBOQ6_0: FA_DEQUANT4_TURBOQ6_0(v_packed_turboq6_0)
             case FA_TYPE_TURBOQ8_0: FA_DEQUANT4_TURBOQ8_0(v_packed_turboq8_0)
             case FA_TYPE_TURBOQ2_TCQ:  FA_DEQUANT4_TURBOQ2_TCQ  (v_packed_turboq2_tcq)
             case FA_TYPE_TURBOQ3_TCQ:  FA_DEQUANT4_TURBOQ3_TCQ  (v_packed_turboq3_tcq)
