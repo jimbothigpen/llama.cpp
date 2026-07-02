@@ -2620,9 +2620,18 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_PHANTOM:
                 n_max = std::max(n_max, std::max(0, spec->ngram_mod.n_max));
                 break;
-            case COMMON_SPECULATIVE_TYPE_DFLASH:
-                n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+            case COMMON_SPECULATIVE_TYPE_DFLASH: {
+                // DFlash always block-verifies the full trained block (dflash.block_size
+                // tokens) on the target side regardless of draft.n_max, so output buffers
+                // must be sized for the block or output_reserve() trips
+                // GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max).
+                int32_t dflash_n = std::max(0, spec->draft.n_max);
+                if (spec->draft.ctx_dft != nullptr) {
+                    dflash_n = std::max(dflash_n, llama_model_dflash_block_size(llama_get_model(spec->draft.ctx_dft)));
+                }
+                n_max = std::max(n_max, dflash_n);
                 break;
+            }
             case COMMON_SPECULATIVE_TYPE_NONE:
             case COMMON_SPECULATIVE_TYPE_COUNT:
                 break;
@@ -2704,11 +2713,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
                 has_draft_simple = false;
             }
-        } else if (has_draft_model_path && !(has_dflash || has_mtp || has_draft_eagle3) &&
-                   !(requested_mtp || requested_eagle3 || requested_dflash)) {
+        } else if (has_draft_model_path && !(has_dflash || has_mtp || has_draft_eagle3 || has_draft_dflash) &&
+                   !(requested_mtp || requested_eagle3 || requested_dflash || requested_draft_dflash)) {
             // Only auto-enable draft-simple when the user did NOT explicitly request a
-            // draft-context speculator. If they requested mtp/eagle3/dflash but its context
-            // failed to build (has_* collapsed to false), do NOT silently fall back to
+            // draft-context speculator. If they requested mtp/eagle3/dflash/draft-dflash but its
+            // context failed to build (has_* collapsed to false), do NOT silently fall back to
             // draft-simple — fall through and fail loudly rather than running the wrong speculator.
             LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
             has_draft_simple = true;
