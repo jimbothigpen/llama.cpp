@@ -3,7 +3,7 @@ import os
 import sys
 
 def main():
-    types = [
+    turbo_types = [
         "GGML_TYPE_TURBOQ8_0",
         "GGML_TYPE_TURBOQ6_0",
         "GGML_TYPE_TURBOQ5_0",
@@ -13,9 +13,21 @@ def main():
     ]
     
     pairs = []
-    for i in range(len(types)):
-        for j in range(i, len(types)):
-            pairs.append((types[i], types[j]))
+    for i in range(len(turbo_types)):
+        for j in range(i, len(turbo_types)):
+            pairs.append((turbo_types[i], turbo_types[j]))
+
+    # Add pruned standard quant pairs
+    standard_pairs = [
+        ("GGML_TYPE_Q8_0", "GGML_TYPE_Q8_0"),
+        ("GGML_TYPE_Q5_0", "GGML_TYPE_Q5_0"),
+        ("GGML_TYPE_Q4_0", "GGML_TYPE_Q4_0"),
+        ("GGML_TYPE_IQ4_NL", "GGML_TYPE_IQ4_NL"),
+        ("GGML_TYPE_Q8_0", "GGML_TYPE_Q4_0"),
+        ("GGML_TYPE_Q8_0", "GGML_TYPE_Q5_0"),
+        ("GGML_TYPE_Q5_1", "GGML_TYPE_Q5_0"),
+    ]
+    pairs.extend(standard_pairs)
 
     dims = [128, 256]
     ncols_set = [(1,8), (2,8), (4,8), (2,4), (4,4), (4,2), (8,1)]

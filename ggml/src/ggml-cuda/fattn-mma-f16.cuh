@@ -659,6 +659,158 @@ static __device__ __forceinline__ void flash_attn_ext_turbo2_load_tile(
     }
 }
 
+
+template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
+static __device__ __forceinline__ void flash_attn_ext_q8_0_load_tile(
+        const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
+        const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int nwarps = nthreads / warp_size;
+#pragma unroll
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
+        if (oob_check && row >= i_sup) {
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            continue;
+        }
+        const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
+            const int col     = col_offset + c;
+            const int blk_idx = col / (QK8_0 / 2);
+            const int in_blk  = col % (QK8_0 / 2);
+            const block_q8_0 * blk = (const block_q8_0 *)(row_ptr) + blk_idx;
+            const float d = __half2float(blk->d);
+            const int j0 = in_blk * 2;
+            const half lo = __float2half( (float)blk->qs[j0]   * d );
+            const half hi = __float2half( (float)blk->qs[j0+1] * d );
+            tile_KV[row*stride_tile + c] = __halves2half2(lo, hi);
+        }
+    }
+}
+
+template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
+static __device__ __forceinline__ void flash_attn_ext_q4_0_load_tile(
+        const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
+        const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int nwarps = nthreads / warp_size;
+#pragma unroll
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
+        if (oob_check && row >= i_sup) {
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            continue;
+        }
+        const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
+            const int col     = col_offset + c;
+            const int blk_idx = col / (QK4_0 / 2);
+            const int in_blk  = col % (QK4_0 / 2);
+            const block_q4_0 * blk = (const block_q4_0 *)(row_ptr) + blk_idx;
+            const float d = __half2float(blk->d);
+            const uint8_t byte = blk->qs[in_blk];
+            const half lo = __float2half( (((byte & 0xF) - 8)) * d );
+            const half hi = __float2half( (((byte >>  4) - 8)) * d );
+            tile_KV[row*stride_tile + c] = __halves2half2(lo, hi);
+        }
+    }
+}
+
+template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
+static __device__ __forceinline__ void flash_attn_ext_q5_0_load_tile(
+        const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
+        const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int nwarps = nthreads / warp_size;
+#pragma unroll
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
+        if (oob_check && row >= i_sup) {
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            continue;
+        }
+        const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
+            const int col     = col_offset + c;
+            const int blk_idx = col / (QK5_0 / 2);
+            const int in_blk  = col % (QK5_0 / 2);
+            const block_q5_0 * blk = (const block_q5_0 *)(row_ptr) + blk_idx;
+            const float d = __half2float(blk->d);
+            
+            uint32_t qh;
+            memcpy(&qh, blk->qh, sizeof(qh));
+            const int xh_0 = ((qh >> (in_blk +  0)) << 4) & 0x10;
+            const int xh_1 = ((qh >> (in_blk + 12))     ) & 0x10;
+            
+            const uint8_t byte = blk->qs[in_blk];
+            const half lo = __float2half( ( ((byte & 0xF) | xh_0) - 16 ) * d );
+            const half hi = __float2half( ( ((byte >>  4) | xh_1) - 16 ) * d );
+            tile_KV[row*stride_tile + c] = __halves2half2(lo, hi);
+        }
+    }
+}
+
+template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
+static __device__ __forceinline__ void flash_attn_ext_q5_1_load_tile(
+        const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
+        const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int nwarps = nthreads / warp_size;
+#pragma unroll
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
+        if (oob_check && row >= i_sup) {
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            continue;
+        }
+        const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
+            const int col     = col_offset + c;
+            const int blk_idx = col / (QK5_1 / 2);
+            const int in_blk  = col % (QK5_1 / 2);
+            const block_q5_1 * blk = (const block_q5_1 *)(row_ptr) + blk_idx;
+            
+            ggml_half2 dm;
+            memcpy(&dm, &blk->dm, sizeof(dm));
+            const float d = __half2float(dm.x);
+            const float m = __half2float(dm.y);
+            
+            uint32_t qh;
+            memcpy(&qh, blk->qh, sizeof(qh));
+            const int xh_0 = ((qh >> (in_blk +  0)) << 4) & 0x10;
+            const int xh_1 = ((qh >> (in_blk + 12))     ) & 0x10;
+            
+            const uint8_t byte = blk->qs[in_blk];
+            const half lo = __float2half( ( ((byte & 0xF) | xh_0) * d ) + m );
+            const half hi = __float2half( ( ((byte >>  4) | xh_1) * d ) + m );
+            tile_KV[row*stride_tile + c] = __halves2half2(lo, hi);
+        }
+    }
+}
+
+template<int stride_tile, int nbatch_fa, int nthreads, bool oob_check>
+static __device__ __forceinline__ void flash_attn_ext_iq4_nl_load_tile(
+        const char * const __restrict__ KV_raw, half2 * const __restrict__ tile_KV,
+        const int D2, const int stride_bytes, const int col_offset, const int i_sup) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int nwarps = nthreads / warp_size;
+#pragma unroll
+    for (int row = threadIdx.y; row < nbatch_fa; row += nwarps) {
+        if (oob_check && row >= i_sup) {
+            for (int c = threadIdx.x; c < D2; c += warp_size) tile_KV[row*stride_tile + c] = make_half2(0.0f, 0.0f);
+            continue;
+        }
+        const char * row_ptr = KV_raw + (int64_t)row * stride_bytes;
+        for (int c = threadIdx.x; c < D2; c += warp_size) {
+            const int col     = col_offset + c;
+            const int blk_idx = col / (QK4_NL / 2);
+            const int in_blk  = col % (QK4_NL / 2);
+            const block_iq4_nl * blk = (const block_iq4_nl *)(row_ptr) + blk_idx;
+            const float d = __half2float(blk->d);
+            const uint8_t byte = blk->qs[in_blk];
+            const half lo = __float2half( (float)kvalues_iq4nl[byte & 0xF] * d );
+            const half hi = __float2half( (float)kvalues_iq4nl[byte >>  4] * d );
+            tile_KV[row*stride_tile + c] = __halves2half2(lo, hi);
+        }
+    }
+}
+
 template<int ncols1, int nwarps, int nbatch_fa, bool use_cp_async, bool oob_check>
 static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
         const half * const __restrict__ mask_h, half * const __restrict__ tile_mask,
@@ -822,8 +974,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 
         if constexpr (is_turbo_kv) {
             const int k0_diff = k0_stop - k0_start;
-            static_assert(type_K == GGML_TYPE_TURBOQ8_0 || type_K == GGML_TYPE_TURBOQ6_0 || type_K == GGML_TYPE_TURBOQ5_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ2_0,
-                          "only turbo2/3/4/5/6/8 K supported on the MMA turbo path");
+            static_assert(
+                type_K == GGML_TYPE_TURBOQ8_0 || type_K == GGML_TYPE_TURBOQ6_0 || type_K == GGML_TYPE_TURBOQ5_0 || type_K == GGML_TYPE_TURBOQ4_0 || type_K == GGML_TYPE_TURBOQ3_0 || type_K == GGML_TYPE_TURBOQ2_0 ||
+                type_K == GGML_TYPE_Q8_0 || type_K == GGML_TYPE_Q5_0 || type_K == GGML_TYPE_Q5_1 || type_K == GGML_TYPE_Q4_0 || type_K == GGML_TYPE_IQ4_NL,
+                "only turbo and selected standard quants supported on the MMA quant path");
             static_assert(nbatch_K2 == DKQ/2, "turbo MMA load assumes full-row K tiles (nbatch_K2==DKQ/2)");
             constexpr int nthreads_turbo = nwarps * ggml_cuda_get_physical_warp_size();
             const char * K_raw = (const char *) K_h2 + int64_t(k_VKQ_0) * stride_K;
@@ -842,8 +996,23 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             } else if constexpr (type_K == GGML_TYPE_TURBOQ3_0) {
                 flash_attn_ext_turbo3_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
                     (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
-            } else {
+            } else if constexpr (type_K == GGML_TYPE_TURBOQ2_0) {
                 flash_attn_ext_turbo2_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
+                    (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
+            } else if constexpr (type_K == GGML_TYPE_Q8_0) {
+                flash_attn_ext_q8_0_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
+                    (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
+            } else if constexpr (type_K == GGML_TYPE_Q5_0) {
+                flash_attn_ext_q5_0_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
+                    (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
+            } else if constexpr (type_K == GGML_TYPE_Q5_1) {
+                flash_attn_ext_q5_1_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
+                    (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
+            } else if constexpr (type_K == GGML_TYPE_Q4_0) {
+                flash_attn_ext_q4_0_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
+                    (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
+            } else if constexpr (type_K == GGML_TYPE_IQ4_NL) {
+                flash_attn_ext_iq4_nl_load_tile<stride_tile_K, nbatch_fa, nthreads_turbo, oob_check>
                     (K_raw, tile_K, k0_diff, stride_K, k0_start, k_VKQ_sup);
             }
             __syncthreads();
@@ -1200,8 +1369,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 
         if constexpr (is_turbo_kv) {
             const int i0_diff = i0_stop - i0_start;
-            static_assert(type_V == GGML_TYPE_TURBOQ8_0 || type_V == GGML_TYPE_TURBOQ6_0 || type_V == GGML_TYPE_TURBOQ5_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ2_0,
-                          "only turbo2/3/4/5/6/8 V supported on the MMA turbo path");
+            static_assert(
+                type_V == GGML_TYPE_TURBOQ8_0 || type_V == GGML_TYPE_TURBOQ6_0 || type_V == GGML_TYPE_TURBOQ5_0 || type_V == GGML_TYPE_TURBOQ4_0 || type_V == GGML_TYPE_TURBOQ3_0 || type_V == GGML_TYPE_TURBOQ2_0 ||
+                type_V == GGML_TYPE_Q8_0 || type_V == GGML_TYPE_Q5_0 || type_V == GGML_TYPE_Q5_1 || type_V == GGML_TYPE_Q4_0 || type_V == GGML_TYPE_IQ4_NL,
+                "only turbo and selected standard quants supported on the MMA quant path");
             static_assert(!V_is_K_view, "turbo MMA path never uses V_is_K_view");
             static_assert(nbatch_V2 == DV/2, "turbo MMA load assumes full-row V tiles (nbatch_V2==DV/2)");
             constexpr int nthreads_turbo = nwarps * ggml_cuda_get_physical_warp_size();
@@ -1221,8 +1392,23 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             } else if constexpr (type_V == GGML_TYPE_TURBOQ3_0) {
                 flash_attn_ext_turbo3_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
                     (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
-            } else {
+            } else if constexpr (type_V == GGML_TYPE_TURBOQ2_0) {
                 flash_attn_ext_turbo2_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
+                    (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
+            } else if constexpr (type_V == GGML_TYPE_Q8_0) {
+                flash_attn_ext_q8_0_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
+                    (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
+            } else if constexpr (type_V == GGML_TYPE_Q5_0) {
+                flash_attn_ext_q5_0_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
+                    (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
+            } else if constexpr (type_V == GGML_TYPE_Q5_1) {
+                flash_attn_ext_q5_1_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
+                    (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
+            } else if constexpr (type_V == GGML_TYPE_Q4_0) {
+                flash_attn_ext_q4_0_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
+                    (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
+            } else if constexpr (type_V == GGML_TYPE_IQ4_NL) {
+                flash_attn_ext_iq4_nl_load_tile<stride_tile_V, nbatch_fa, nthreads_turbo, oob_check>
                     (V_raw, tile_V, i0_diff/2, stride_V, i0_start/2, k_VKQ_sup);
             }
             __syncthreads();

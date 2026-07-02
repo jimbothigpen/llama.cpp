@@ -987,10 +987,13 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         const ggml_tensor * V = dst->src[2];
         const int cc = ggml_cuda_info().devices[ctx.device].cc;
         const bool turbo_sym = (K->type == V->type &&
-            (K->type == GGML_TYPE_TURBOQ4_0 || K->type == GGML_TYPE_TURBOQ3_0 || K->type == GGML_TYPE_TURBOQ2_0));
+            (K->type == GGML_TYPE_TURBOQ4_0 || K->type == GGML_TYPE_TURBOQ3_0 || K->type == GGML_TYPE_TURBOQ2_0 ||
+             K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q5_0 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_IQ4_NL || K->type == GGML_TYPE_Q5_1));
         const bool turbo_asym = (
             (K->type == GGML_TYPE_TURBOQ4_0 && (V->type == GGML_TYPE_TURBOQ3_0 || V->type == GGML_TYPE_TURBOQ2_0)) ||
-            (K->type == GGML_TYPE_TURBOQ3_0 && V->type == GGML_TYPE_TURBOQ2_0)
+            (K->type == GGML_TYPE_TURBOQ3_0 && V->type == GGML_TYPE_TURBOQ2_0) ||
+            (K->type == GGML_TYPE_Q8_0 && (V->type == GGML_TYPE_Q4_0 || V->type == GGML_TYPE_Q5_0)) ||
+            (K->type == GGML_TYPE_Q5_1 && V->type == GGML_TYPE_Q5_0)
         );
         const bool turbo_matched = turbo_sym || turbo_asym;
         if (ggml_cuda_turbo_mma_fused() && turbo_matched
@@ -1002,6 +1005,13 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 if (K->type == GGML_TYPE_TURBOQ4_0 && V->type == GGML_TYPE_TURBOQ3_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ3_0>(ctx, dst); return; }
                 if (K->type == GGML_TYPE_TURBOQ4_0 && V->type == GGML_TYPE_TURBOQ2_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ2_0>(ctx, dst); return; }
                 if (K->type == GGML_TYPE_TURBOQ3_0 && V->type == GGML_TYPE_TURBOQ2_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q8_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q5_0 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q4_0 && V->type == GGML_TYPE_Q4_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_IQ4_NL && V->type == GGML_TYPE_IQ4_NL) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q4_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q5_1 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<128, 128, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return; }
             }
             if (Q->ne[0] == 256) {
                 if (K->type == GGML_TYPE_TURBOQ4_0 && V->type == GGML_TYPE_TURBOQ4_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ4_0>(ctx, dst); return; }
@@ -1010,6 +1020,13 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 if (K->type == GGML_TYPE_TURBOQ4_0 && V->type == GGML_TYPE_TURBOQ3_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ3_0>(ctx, dst); return; }
                 if (K->type == GGML_TYPE_TURBOQ4_0 && V->type == GGML_TYPE_TURBOQ2_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_TURBOQ4_0, GGML_TYPE_TURBOQ2_0>(ctx, dst); return; }
                 if (K->type == GGML_TYPE_TURBOQ3_0 && V->type == GGML_TYPE_TURBOQ2_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_TURBOQ3_0, GGML_TYPE_TURBOQ2_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q8_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q5_0 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q4_0 && V->type == GGML_TYPE_Q4_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_IQ4_NL && V->type == GGML_TYPE_IQ4_NL) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q4_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q8_0 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0>(ctx, dst); return; }
+                if (K->type == GGML_TYPE_Q5_1 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return; }
             }
         }
     }
