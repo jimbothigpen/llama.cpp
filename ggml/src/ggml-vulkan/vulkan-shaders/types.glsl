@@ -282,6 +282,46 @@ struct block_turboq4_0
 #define A_TYPE block_turboq4_0
 #endif
 
+// TurboQuant 5-bit uniform-grid KV cache (yggdrasil Phase 1).
+// Block layout matches ggml-common.h block_turboq5_0: 2-byte norm + 64-byte
+// qs + 16-byte qh = 82 bytes per 128 values.
+#define QUANT_K_TURBOQ5_0 128
+#define QUANT_R_TURBOQ5_0 1
+
+struct block_turboq5_0
+{
+    float16_t norm;
+    uint8_t qs[QUANT_K_TURBOQ5_0 / 2];
+    uint8_t qh[QUANT_K_TURBOQ5_0 / 8];
+};
+
+#if defined(DATA_A_TURBOQ5_0)
+#define QUANT_K QUANT_K_TURBOQ5_0
+#define QUANT_R QUANT_R_TURBOQ5_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq5_0
+#endif
+
+// TurboQuant 6-bit uniform-grid KV cache (yggdrasil Phase 1).
+// Block layout matches ggml-common.h block_turboq6_0: 2-byte norm + 64-byte
+// qs + 32-byte qh = 98 bytes per 128 values.
+#define QUANT_K_TURBOQ6_0 128
+#define QUANT_R_TURBOQ6_0 1
+
+struct block_turboq6_0
+{
+    float16_t norm;
+    uint8_t qs[QUANT_K_TURBOQ6_0 / 2];
+    uint8_t qh[QUANT_K_TURBOQ6_0 / 4];
+};
+
+#if defined(DATA_A_TURBOQ6_0)
+#define QUANT_K QUANT_K_TURBOQ6_0
+#define QUANT_R QUANT_R_TURBOQ6_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turboq6_0
+#endif
+
 // TurboQuant 8-bit uniform-grid KV cache (yggdrasil Phase 1).
 // Block layout matches ggml-common.h block_turboq8_0: 2-byte norm + 128-byte
 // 8-bit uniform-grid indices (1 per byte) = 130 bytes per 128 values.

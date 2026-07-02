@@ -5,7 +5,7 @@
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #include "types.glsl"
 
-#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ2_0) || defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0) || defined(DATA_A_TURBOQ8_0))
+#if defined(SET_ROWS) && (defined(DATA_A_TURBOQ2_0) || defined(DATA_A_TURBOQ3_0) || defined(DATA_A_TURBOQ4_0) || defined(DATA_A_TURBOQ5_0) || defined(DATA_A_TURBOQ6_0) || defined(DATA_A_TURBOQ8_0))
 // TurboQuant SET_ROWS shaders run the full forward WHT (128 elements per
 // block) inside one workgroup, with subgroup-wide reductions for the
 // pre/post norm and a barrier-driven butterfly.
@@ -798,6 +798,243 @@ void main() {
     // Stored norm folds in the absmax scale (decode = (idx-127.5)/127.5 * norm).
     if (t == 0u) {
         data_q[db].norm = float16_t(gnrm_t8 * absmax_t8);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ5_0)
+// TurboQuant 5-bit SET_ROWS
+const float TS1_T5[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T5[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T5 = 0.08838834764831845;  // 1 / sqrt(128)
+
+shared float wht_t5[128];
+shared float sg_acc_t5[16];
+shared float gnrm_t5;
+shared float absmax_t5;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t5[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t5[t] * wht_t5[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t5[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t5[w];
+        gnrm_t5 = sqrt(total);
+    }
+    barrier();
+
+    wht_t5[t] *= (gnrm_t5 > 1e-10) ? (1.0 / gnrm_t5) : 0.0;
+    barrier();
+
+    wht_t5[t] *= TS1_T5[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t5[t];
+            float b    = wht_t5[t + h];
+            wht_t5[t]     = a + b;
+            wht_t5[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t5[t] * TINV_T5 * TS2_T5[t];
+
+    float am = subgroupMax(abs(rv));
+    if (gl_SubgroupInvocationID == 0) sg_acc_t5[gl_SubgroupID] = am;
+    barrier();
+    if (t == 0) {
+        float m = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) m = max(m, sg_acc_t5[w]);
+        absmax_t5 = max(m, 1e-10);
+    }
+    barrier();
+
+    int idx = int(round(rv / absmax_t5 * 15.5 + 15.5));
+    idx = clamp(idx, 0, 31);
+
+    uint sg_lane = gl_SubgroupInvocationID;
+
+    // Pack qs: 2 elements per byte (4 bits each)
+    uint qs_low  = subgroupShuffle(uint(idx) & 0xFu, sg_lane & ~1u);
+    uint qs_high = subgroupShuffle(uint(idx) & 0xFu, (sg_lane & ~1u) + 1u);
+    uint qs_byte = qs_low | (qs_high << 4u);
+    if (sg_lane % 2u == 0u) {
+        data_q[db].qs[t / 2u] = uint8_t(qs_byte);
+    }
+
+    // Pack qh: 8 elements per byte (1 bit each)
+    uint h0 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 0u);
+    uint h1 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 1u);
+    uint h2 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 2u);
+    uint h3 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 3u);
+    uint h4 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 4u);
+    uint h5 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 5u);
+    uint h6 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 6u);
+    uint h7 = subgroupShuffle((uint(idx) >> 4) & 1u, (sg_lane & ~7u) + 7u);
+    uint qh_byte = h0 | (h1 << 1u) | (h2 << 2u) | (h3 << 3u) |
+                   (h4 << 4u) | (h5 << 5u) | (h6 << 6u) | (h7 << 7u);
+    if (sg_lane % 8u == 0u) {
+        data_q[db].qh[t / 8u] = uint8_t(qh_byte);
+    }
+
+    if (t == 0u) {
+        data_q[db].norm = float16_t(gnrm_t5 * absmax_t5);
+    }
+}
+#elif defined(SET_ROWS) && defined(DATA_A_TURBOQ6_0)
+// TurboQuant 6-bit SET_ROWS
+const float TS1_T6[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+const float TS2_T6[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+const float TINV_T6 = 0.08838834764831845;  // 1 / sqrt(128)
+
+shared float wht_t6[128];
+shared float sg_acc_t6[16];
+shared float gnrm_t6;
+shared float absmax_t6;
+
+void main() {
+    const uint t   = gl_LocalInvocationID.x;
+    const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint gpr = p.ne00 / 128;
+
+    if (gpr == 0) return;
+    if (g >= p.ne / 128) return;
+
+    uint tmp = g;
+    const uint ig  = tmp % gpr; tmp /= gpr;
+    const uint i01 = tmp % p.ne01; tmp /= p.ne01;
+    const uint i02 = tmp % p.ne02;
+    const uint i03 = tmp / p.ne02;
+
+    const uint sb  = src0_idx(ig * 128, i01, i02, i03) + get_aoffset();
+    const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
+    const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
+
+    wht_t6[t] = data_s[sb + t];
+    barrier();
+
+    float v2 = wht_t6[t] * wht_t6[t];
+    v2 = subgroupAdd(v2);
+    if (gl_SubgroupInvocationID == 0) sg_acc_t6[gl_SubgroupID] = v2;
+    barrier();
+    if (t == 0) {
+        float total = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) total += sg_acc_t6[w];
+        gnrm_t6 = sqrt(total);
+    }
+    barrier();
+
+    wht_t6[t] *= (gnrm_t6 > 1e-10) ? (1.0 / gnrm_t6) : 0.0;
+    barrier();
+
+    wht_t6[t] *= TS1_T6[t];
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((t % (2 * h)) < h) {
+            float a    = wht_t6[t];
+            float b    = wht_t6[t + h];
+            wht_t6[t]     = a + b;
+            wht_t6[t + h] = a - b;
+        }
+        barrier();
+    }
+
+    float rv = wht_t6[t] * TINV_T6 * TS2_T6[t];
+
+    float am = subgroupMax(abs(rv));
+    if (gl_SubgroupInvocationID == 0) sg_acc_t6[gl_SubgroupID] = am;
+    barrier();
+    if (t == 0) {
+        float m = 0.0;
+        for (uint w = 0; w < gl_NumSubgroups; w++) m = max(m, sg_acc_t6[w]);
+        absmax_t6 = max(m, 1e-10);
+    }
+    barrier();
+
+    int idx = int(round(rv / absmax_t6 * 31.5 + 31.5));
+    idx = clamp(idx, 0, 63);
+
+    uint sg_lane = gl_SubgroupInvocationID;
+
+    // Pack qs: 2 elements per byte (4 bits each)
+    uint qs_low  = subgroupShuffle(uint(idx) & 0xFu, sg_lane & ~1u);
+    uint qs_high = subgroupShuffle(uint(idx) & 0xFu, (sg_lane & ~1u) + 1u);
+    uint qs_byte = qs_low | (qs_high << 4u);
+    if (sg_lane % 2u == 0u) {
+        data_q[db].qs[t / 2u] = uint8_t(qs_byte);
+    }
+
+    // Pack qh: 4 elements per byte (2 bits each)
+    uint h0 = subgroupShuffle((uint(idx) >> 4) & 3u, (sg_lane & ~3u) + 0u);
+    uint h1 = subgroupShuffle((uint(idx) >> 4) & 3u, (sg_lane & ~3u) + 1u);
+    uint h2 = subgroupShuffle((uint(idx) >> 4) & 3u, (sg_lane & ~3u) + 2u);
+    uint h3 = subgroupShuffle((uint(idx) >> 4) & 3u, (sg_lane & ~3u) + 3u);
+    uint qh_byte = h0 | (h1 << 2u) | (h2 << 4u) | (h3 << 6u);
+    if (sg_lane % 4u == 0u) {
+        data_q[db].qh[t / 4u] = uint8_t(qh_byte);
+    }
+
+    if (t == 0u) {
+        data_q[db].norm = float16_t(gnrm_t6 * absmax_t6);
     }
 }
 #elif defined(SET_ROWS) && defined(DATA_A_KV_OSCAR_INT2)
