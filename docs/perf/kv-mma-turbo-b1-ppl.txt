@@ -1,0 +1,13 @@
+PPL-parity result (native vs VEC vs f16)
+Model: Qwen3.5-0.8B-Q4_K_M.gguf
+Corpus: wikitext-2-raw/wiki.test.raw
+Params: -c 4096 -b 4096 --chunks 12 -fa on --no-mmap
+
+f16/f16:
+PPL = 15.6011 +/- 0.30105
+
+VEC (-ctk turboq4 -ctv turboq2, GGML_TURBO_MMA_FUSED=0):
+PPL = 18.1281 +/- 0.35838
+
+NATIVE (-ctk turboq4 -ctv turboq2, GGML_TURBO_MMA_FUSED=1):
+PPL = 18.1281 +/- 0.35838
