@@ -960,3 +960,63 @@ vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].norm), 0);
 }
 #endif
+
+#if defined(DATA_A_TURBOQ5_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const float norm = float(data_a[a_offset + ib].norm) * (1.0 / 15.5);
+
+    const uint lo0 = (uint(data_a[a_offset + ib].qs[j0 / 2]) >> ((j0 % 2) * 4)) & 0xF;
+    const uint hi0 = (uint(data_a[a_offset + ib].qh[j0 / 8]) >> (j0 % 8)) & 0x1;
+    const uint idx0 = lo0 | (hi0 << 4);
+
+    const uint lo1 = (uint(data_a[a_offset + ib].qs[j1 / 2]) >> ((j1 % 2) * 4)) & 0xF;
+    const uint hi1 = (uint(data_a[a_offset + ib].qh[j1 / 8]) >> (j1 % 8)) & 0x1;
+    const uint idx1 = lo1 | (hi1 << 4);
+
+    const float c0 = float(idx0) - 15.5;
+    const float c1 = float(idx1) - 15.5;
+
+    return vec2(c0 * norm, c1 * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].norm), 0);
+}
+#endif
+
+#if defined(DATA_A_TURBOQ6_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const float norm = float(data_a[a_offset + ib].norm) * (1.0 / 31.5);
+
+    const uint lo0 = (uint(data_a[a_offset + ib].qs[j0 / 2]) >> ((j0 % 2) * 4)) & 0xF;
+    const uint hi0 = (uint(data_a[a_offset + ib].qh[j0 / 4]) >> ((j0 % 4) * 2)) & 0x3;
+    const uint idx0 = lo0 | (hi0 << 4);
+
+    const uint lo1 = (uint(data_a[a_offset + ib].qs[j1 / 2]) >> ((j1 % 2) * 4)) & 0xF;
+    const uint hi1 = (uint(data_a[a_offset + ib].qh[j1 / 4]) >> ((j1 % 4) * 2)) & 0x3;
+    const uint idx1 = lo1 | (hi1 << 4);
+
+    const float c0 = float(idx0) - 31.5;
+    const float c1 = float(idx1) - 31.5;
+
+    return vec2(c0 * norm, c1 * norm);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].norm), 0);
+}
+#endif

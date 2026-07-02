@@ -1,0 +1,29 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+// 128 elements per block (QUANT_K_TURBOQ5_0 = 128).
+// Each workgroup processes one block. 128 threads, 1 element per thread.
+// 5-bit uniform 32-level grid: centroid = (idx - 15.5)/15.5; recon = norm * centroid.
+// Stays in the WHT-rotated domain (no inverse rotation).
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_turboq5_0 data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    const uint ib  = gl_WorkGroupID.x;
+    const uint j   = gl_LocalInvocationID.x;
+
+    if (ib >= p.nel / 128) return;
+
+    const float norm = float(data_a[ib].norm) * (1.0 / 15.5);
+
+    const uint lo = (uint(data_a[ib].qs[j / 2]) >> ((j % 2) * 4)) & 0xF;
+    const uint hi = (uint(data_a[ib].qh[j / 8]) >> (j % 8)) & 0x1;
+    const uint idx = lo | (hi << 4);
+
+    const float c = float(idx) - 15.5;
+
+    data_b[ib * 128 + j] = D_TYPE(c * norm);
+}
