@@ -346,17 +346,20 @@ class LlamaModel(TextModel):
 
         super().prepare_tensors()
 
-        # eagle3: write d2t as absolute target token ids
+        # eagle3: write d2t as raw draft->target deltas (TODO-268-d2t-raw). Runtime
+        # (llama-context.cpp) computes target_id = j + d2t[j] itself, so d2t must hold the raw
+        # delta here, not the pre-added absolute target id — writing absolute caused the offset
+        # to be applied twice at inference (double-offset -> GGML_ASSERT / wrong-row scatter).
         if getattr(self, 'is_eagle3', False) and hasattr(self, '_eagle3_int_tensors'):
             for name, data_torch in self._eagle3_int_tensors.items():
                 old_dtype = eagle3_original_dtypes.get(name, data_torch.dtype)
                 data = data_torch.to(torch.int64).cpu().numpy()
                 if name == "d2t":
                     data = data.reshape(-1)
-                    data = data + np.arange(data.size, dtype=np.int64)
-                    if np.any((data < 0) | (data >= self.target_vocab_size)):
+                    target_ids = data + np.arange(data.size, dtype=np.int64)
+                    if np.any((target_ids < 0) | (target_ids >= self.target_vocab_size)):
                         raise ValueError(f"EAGLE-3 d2t target ids out of range for target vocab size {self.target_vocab_size}")
-                    if np.unique(data).size != data.size:
+                    if np.unique(target_ids).size != target_ids.size:
                         raise ValueError("EAGLE-3 d2t contains duplicate target ids")
                 data_qtype = gguf.GGMLQuantizationType.I64
 
