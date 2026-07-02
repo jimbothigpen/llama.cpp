@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "ngram-cache.h"
@@ -2591,6 +2592,38 @@ static uint32_t common_get_enabled_speculative_configs(const std::vector<common_
     return result;
 }
 
+// common_speculative_n_max() is also called by the server BEFORE the draft context
+// exists (to size its output buffers ahead of load_model()), so the DFLASH case can't
+// rely on spec->draft.ctx_dft. Peek dflash.block_size straight out of the draft GGUF's
+// metadata (no tensor data, no full model/context load) as a fallback for that case.
+static int32_t common_speculative_dflash_block_size_from_path(const std::string & path) {
+    if (path.empty()) {
+        return 0;
+    }
+
+    struct gguf_init_params meta_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+    struct gguf_context * meta = gguf_init_from_file(path.c_str(), meta_params);
+    if (!meta) {
+        return 0;
+    }
+
+    int32_t block_size = 0;
+    const int64_t arch_key = gguf_find_key(meta, "general.architecture");
+    if (arch_key >= 0) {
+        const std::string key = std::string(gguf_get_val_str(meta, arch_key)) + ".dflash.block_size";
+        const int64_t bs_key = gguf_find_key(meta, key.c_str());
+        if (bs_key >= 0) {
+            block_size = (int32_t) gguf_get_val_u32(meta, bs_key);
+        }
+    }
+
+    gguf_free(meta);
+    return block_size;
+}
+
 int32_t common_speculative_n_max(const common_params_speculative * spec) {
     int32_t n_max = 0;
 
@@ -2624,10 +2657,14 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
                 // DFlash always block-verifies the full trained block (dflash.block_size
                 // tokens) on the target side regardless of draft.n_max, so output buffers
                 // must be sized for the block or output_reserve() trips
-                // GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max).
+                // GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max). This is called by
+                // the server BEFORE ctx_dft exists (to size buffers ahead of load_model()),
+                // so fall back to peeking the draft GGUF's metadata directly in that case.
                 int32_t dflash_n = std::max(0, spec->draft.n_max);
                 if (spec->draft.ctx_dft != nullptr) {
                     dflash_n = std::max(dflash_n, llama_model_dflash_block_size(llama_get_model(spec->draft.ctx_dft)));
+                } else {
+                    dflash_n = std::max(dflash_n, common_speculative_dflash_block_size_from_path(spec->draft.mparams.path));
                 }
                 n_max = std::max(n_max, dflash_n);
                 break;

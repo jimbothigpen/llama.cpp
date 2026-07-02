@@ -52,6 +52,17 @@ static uint32_t server_n_outputs_max(const common_params & params) {
         return n_batch;
     }
 
+    // DFlash (cross-attention-ring) captures target hidden states via need_embd(), which
+    // marks logits=1 on EVERY prompt position during prefill (not just n_max/block_size
+    // draft positions per decode) -- so the reserve must cover a full batch, same as the
+    // embedding case above, or output_reserve() trips GGML_ASSERT(n_outputs_max <=
+    // cparams.n_outputs_max) on the first prompt >~n_parallel*(1+block_size) tokens.
+    for (const auto type : params.speculative.types) {
+        if (type == COMMON_SPECULATIVE_TYPE_DFLASH) {
+            return n_batch;
+        }
+    }
+
     const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
 
     const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
