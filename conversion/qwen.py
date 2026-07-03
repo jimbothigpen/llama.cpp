@@ -662,6 +662,9 @@ class DFlashModel(Qwen3Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
+        # DFlash is architecturally non-causal (block-masked)
+        self.gguf_writer.add_causal_attention(False)
+
         block_size = self.hparams.get("block_size", 16)
         self.gguf_writer.add_block_size(block_size)
         dflash_config = self.hparams.get("dflash_config", {})
