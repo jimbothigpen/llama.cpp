@@ -639,6 +639,9 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         if (tname == "iq3_ks" || tname == "iq2_ks" || tname == "iq5_ks" || tname == "iq4_kss" || tname == "iq1_kt" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
+        if (coopmat2 && tname == "iq4_ks") {
+            continue;
+        }
 
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
         // For aligned matmul loads
