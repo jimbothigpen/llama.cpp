@@ -194,6 +194,52 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx] = FLOAT_TYPEV2(dl * (qs.x - hm.x),
                                           dl * (qs.y - hm.y));
+#elif defined(DATA_A_IQ4_KS)
+            const int iq4k_values_const[32] = int[32](
+                -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+                -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 4;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u32 = 1 + nb * 34;
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+
+            const uint row_u32 = row_a * row_size_u32;
+            const uint block_u32 = row_u32 + 1 + ib_in_row * 34;
+
+            const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+            const uint sub_block = k_in_block >> 5;
+            const uint sc_word = (sub_block < 4) ? data_a[block_u32 + 0] : data_a[block_u32 + 1];
+            const uint sc_byte = (sc_word >> ((sub_block & 3) * 8)) & 0xff;
+
+            const float dl = d_row * float(int(sc_byte & 254) - 127);
+            const uint codebook_off = (sc_byte & 1) << 4;
+
+            const uint qs_byte_idx_base = sub_block * 16 + (k_in_block & 15);
+            const uint qs_u32 = data_a[block_u32 + 2 + (qs_byte_idx_base >> 2)];
+
+            const bool high_nibble = (k_in_block & 16) != 0;
+
+            FLOAT_TYPEV4 v;
+            [[unroll]] for (uint r = 0; r < 4; ++r) {
+                const uint qs_byte = (qs_u32 >> (r * 8)) & 0xff;
+                const uint nibble = high_nibble ? (qs_byte >> 4) : (qs_byte & 0xf);
+                const int val = iq4k_values_const[codebook_off + nibble];
+                v[r] = FLOAT_TYPE(dl * float(val));
+            }
+
+            buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
