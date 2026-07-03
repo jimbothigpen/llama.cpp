@@ -1040,8 +1040,10 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_all) {
+            bool embd_all,
+            llama_mtp_op_type mtp_op_type) {
     GGML_UNUSED(embd_all);
+    GGML_UNUSED(mtp_op_type);
 
     const bool raw_per_seq  = kv_raw->get_base()->get_n_stream() != 1;
     const bool comp_per_seq = csa_state->get_n_stream() > 1;
