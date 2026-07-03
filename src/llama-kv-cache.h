@@ -263,6 +263,9 @@ public:
     // Returns true on success; false if unsupported (multi-stream) or invalid input.
     bool triattention_compact(const std::vector<uint32_t> & keep_positions);
 
+    std::vector<uint32_t> get_layer_ids() const;
+    ggml_tensor * get_k_storage(int32_t il) const;
+
     //
     // graph_build API
     //

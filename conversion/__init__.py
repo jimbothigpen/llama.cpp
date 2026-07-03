@@ -61,6 +61,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     # (see HEAD-TO-HEAD-PLAN.md — this is exactly how the head-to-head draft GGUF was produced).
     "DFlashDraftModel": "dflash_draft",
     "DFlashDraftModel-mainline-native": "qwen",
+    "DeepseekV4ForCausalLM": "deepseek",
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
