@@ -63,7 +63,8 @@ int main(int argc, char ** argv) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP    ||
-                   t == COMMON_SPECULATIVE_TYPE_DFLASH;
+                   t == COMMON_SPECULATIVE_TYPE_DFLASH       ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
         });
 
     if (want_mtp && params.speculative.draft.mparams.path.empty()) {
