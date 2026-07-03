@@ -1,0 +1,178 @@
+Validation Results for Turbo-Linear Tier (Batch 1)
+==================================================
+
+--- 1. Coherence Smoke Tests ---
+Running smoke test: -ctk turboq8 -ctv turboq8
+=== [2026-07-02T16:56:38-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+
+Loading model... |-\|/-\|/-\|/-\|/-\|/- 
+
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1405-9af2e7a85
+model      : /mnt/cephfs/0/Container/models/Qwen/Qwen3.5-0.8B/Qwen3.5-0.8B-Q4_K_M.gguf
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+> The capital of France is
+
+| [Start thinking]
+Thinking Process:
+
+1.  **Analyze the Request:** The user is asking for the capital
+
+[ Prompt: 440.0 t/s | Generation: 193.4 t/s ]
+
+Exiting...
+=== [2026-07-02T16:56:41-04:00] END LEASE_CLASS=ppl RC=0 ===
+
+Running smoke test: -ctk turboq8 -ctv turboq2
+=== [2026-07-02T16:56:41-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+
+Loading model... |-\|/-\|/-\|/-\|/-\|/-\| 
+
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1405-9af2e7a85
+model      : /mnt/cephfs/0/Container/models/Qwen/Qwen3.5-0.8B/Qwen3.5-0.8B-Q4_K_M.gguf
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+> The capital of France is
+
+| [Start thinking]
+Thinking Process:
+
+1.  **Analyze the Request:** The user is asking for the capital
+
+[ Prompt: 442.0 t/s | Generation: 183.6 t/s ]
+
+Exiting...
+=== [2026-07-02T16:56:44-04:00] END LEASE_CLASS=ppl RC=0 ===
+
+Running smoke test: -ctk turboq6 -ctv turboq4
+=== [2026-07-02T16:56:44-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+
+Loading model... |-\|/-\|/-\|/-\|/-\|/- 
+
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1405-9af2e7a85
+model      : /mnt/cephfs/0/Container/models/Qwen/Qwen3.5-0.8B/Qwen3.5-0.8B-Q4_K_M.gguf
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+> The capital of France is
+
+| [Start thinking]
+Thinking Process:
+
+1.  **Analyze the Request:** The user is asking for the capital
+
+[ Prompt: 447.8 t/s | Generation: 183.2 t/s ]
+
+Exiting...
+=== [2026-07-02T16:56:47-04:00] END LEASE_CLASS=ppl RC=0 ===
+
+Running smoke test: -ctk turboq5 -ctv turboq3
+=== [2026-07-02T16:56:47-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+
+Loading model... |-\|/-\|/-\|/-\|/-\|/- 
+
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1405-9af2e7a85
+model      : /mnt/cephfs/0/Container/models/Qwen/Qwen3.5-0.8B/Qwen3.5-0.8B-Q4_K_M.gguf
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+> The capital of France is
+
+| [Start thinking]
+Thinking Process:
+
+1.  **Analyze the Request:** The user is asking for information about
+
+[ Prompt: 519.8 t/s | Generation: 232.7 t/s ]
+
+Exiting...
+=== [2026-07-02T16:56:50-04:00] END LEASE_CLASS=ppl RC=0 ===
+
+--- 2. Speed Spot-check (turboq8 x turboq2, pp4096) ---
+Native (GGML_TURBO_MMA_FUSED=1):
+=== [2026-07-02T16:56:50-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 7967 MiB):
+  Device 0: NVIDIA GeForce RTX 2070 Super, compute capability 7.5, VMM: yes, VRAM: 7967 MiB
+| model                          |       size |     params | backend    | ngl | type_k | type_v |  fa | mmap |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | -----: | --: | ---: | --------------: | -------------------: |
+| qwen35 0.8B Q4_K - Medium      | 506.34 MiB |   772.85 M | CUDA       |  -1 | turboq8 | turboq2 |   1 |    0 |          pp4096 |      1322.48 ± 10.79 |
+
+build: 9af2e7a85 (1405)
+=== [2026-07-02T16:57:11-04:00] END LEASE_CLASS=ppl RC=0 ===
+
+VEC (GGML_TURBO_MMA_FUSED=0):
+=== [2026-07-02T16:57:11-04:00] START LEASE_CLASS=ppl on ai02 (GPU lock held) ===
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 7967 MiB):
+  Device 0: NVIDIA GeForce RTX 2070 Super, compute capability 7.5, VMM: yes, VRAM: 7967 MiB
+| model                          |       size |     params | backend    | ngl | type_k | type_v |  fa | mmap |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | -----: | --: | ---: | --------------: | -------------------: |
+| qwen35 0.8B Q4_K - Medium      | 506.34 MiB |   772.85 M | CUDA       |  -1 | turboq8 | turboq2 |   1 |    0 |          pp4096 |      1165.63 ± 42.46 |
+
+build: 9af2e7a85 (1405)
+=== [2026-07-02T16:57:34-04:00] END LEASE_CLASS=ppl RC=0 ===

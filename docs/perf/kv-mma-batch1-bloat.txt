@@ -1,0 +1,7 @@
+Batch 1 - Turbo-Linear Tier Bloat Tracking
+==========================================
+Baseline (ph1b): 690M
+Current (batch1): 771M (807,411,752 bytes)
+Delta: +81MB
+
+Build wall time: ~10 minutes
