@@ -240,6 +240,60 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
+#elif defined(DATA_A_IQ5_KS)
+            const int iq5nl_values_const[64] = int[64](
+                -126,-114,-103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6,
+                  -1,   5,  11,  17,  23,  29,  36,  43,  51,  59,  68,  77,  87,  97, 109, 121,
+                -124,-112,-101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10,  -4,
+                   1,   7,  13,  19,  25,  31,  38,  45,  53,  61,  70,  79,  89,  99, 111, 123
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 4;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u32 = 1 + nb * 42;
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+
+            const uint row_u32 = row_a * row_size_u32;
+            const uint block_u32 = row_u32 + 1 + ib_in_row * 42;
+
+            const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+            const uint ib = k_in_block >> 5;
+            const uint j  = k_in_block & 31;
+
+            const uint sc_word = (ib < 4) ? data_a[block_u32 + 0] : data_a[block_u32 + 1];
+            const uint sc_byte = (sc_word >> ((ib & 3) * 8)) & 0xff;
+
+            const float dl = d_row * float(int(sc_byte & 254) - 127);
+            const uint codebook_off = (sc_byte & 1) << 5;
+
+            const uint qs_byte_idx = 32 * (ib >> 1) + j;
+            const uint qs_u32 = data_a[block_u32 + 2 + (qs_byte_idx >> 2)];
+            const uint qh_u32 = data_a[block_u32 + 34 + (j >> 2)];
+
+            const bool high_nibble = (ib & 1) != 0;
+
+            FLOAT_TYPEV4 v;
+            [[unroll]] for (uint r = 0; r < 4; ++r) {
+                const uint qs_byte = (qs_u32 >> (r * 8)) & 0xff;
+                const uint qh_byte = (qh_u32 >> (r * 8)) & 0xff;
+                const uint nibble = high_nibble ? (qs_byte >> 4) : (qs_byte & 0xf);
+                const uint qhbit = (qh_byte >> ib) & 1;
+                const uint idx5 = nibble | (qhbit << 4);
+                const int val = iq5nl_values_const[codebook_off + idx5];
+                v[r] = FLOAT_TYPE(dl * float(val));
+            }
+
+            buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;

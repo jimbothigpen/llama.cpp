@@ -609,7 +609,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         std::string load_vec_quant = "2";
         if ((tname == "q1_0") || (tname == "q4_0") || (tname == "q4_1") || (tname == "q5_1") || (tname == "iq1_s") || (tname == "iq1_m") || (tname == "iq2_xxs") || (tname == "iq2_xs") || (tname == "iq2_s"))
             load_vec_quant = "8";
-        else if ((tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "iq4_ks") || (tname == "mxfp4") || (tname == "nvfp4"))
+        else if ((tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "iq4_ks") || (tname == "iq5_ks") || (tname == "mxfp4") || (tname == "nvfp4"))
             load_vec_quant = "4";
 
         if (tname == "bf16") {
@@ -636,10 +636,10 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         }
         // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
         // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
-        if (tname == "iq3_ks" || tname == "iq2_ks" || tname == "iq5_ks" || tname == "iq4_kss" || tname == "iq1_kt" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
+        if (tname == "iq3_ks" || tname == "iq2_ks" || tname == "iq4_kss" || tname == "iq1_kt" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
-        if (coopmat2 && tname == "iq4_ks") {
+        if (coopmat2 && (tname == "iq4_ks" || tname == "iq5_ks")) {
             continue;
         }
 
