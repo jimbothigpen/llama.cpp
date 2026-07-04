@@ -604,6 +604,40 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
+#elif defined(DATA_A_IQ2_KT)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 8;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u32 = 1 + nb * 16;  // 1 float row scale + 16 u32 per block
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+            const uint jj = k_in_block / 8; // group index 0..31
+
+            const uint row_u32 = row_a * row_size_u32;
+            const uint block_u32 = row_u32 + 1 + ib_in_row * 16;
+            const float d = uintBitsToFloat(data_a[row_u32]);
+
+            const uint word = data_a[block_u32 + (jj >> 1)];
+            const uint idx_val = (jj & 1u) == 0u ? (word & 0xffffu) : (word >> 16u);
+
+            uint x = idx_val;
+            float gv[8];
+            [[unroll]] for (int r = 0; r < 8; r++) {
+                x = 0xCBAC1FEDu * x;
+                const uint s = x & 0x3f3f3f3fu;
+                const int sum = int(s & 0xffu) + int((s >> 8) & 0xffu) + int((s >> 16) & 0xffu) + int((s >> 24) & 0xffu);
+                gv[r] = float(sum - 126) * d;
+            }
+            buf_a[buf_idx    ] = FLOAT_TYPEV2(gv[0], gv[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(gv[2], gv[3]);
+            buf_a[buf_idx + 2] = FLOAT_TYPEV2(gv[4], gv[5]);
+            buf_a[buf_idx + 3] = FLOAT_TYPEV2(gv[6], gv[7]);
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
