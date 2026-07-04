@@ -550,6 +550,60 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const vec2 v = dl * vec2(iq2nl_values_const[values_off + nibble0],
                                      iq2nl_values_const[values_off + nibble1]);
             buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
+#elif defined(DATA_A_IQ3_KS)
+            const int iq3nl_values_const[16] = int[16](
+                -63, -40, -23, -10,   1,  13,  28,  47,
+                -59, -36, -19,  -6,   5,  17,  32,  51
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 4;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u16 = 1 + nb * 51;
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+
+            const uint row_u16 = row_a * row_size_u16;
+            const float d_row = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+            const uint block_u16 = row_u16 + 1 + ib_in_row * 51;
+
+            const uint extra = uint(data_a[block_u16]);
+
+            const uint i128  = k_in_block >> 7;
+            const uint ib     = (k_in_block >> 5) & 3;
+            const uint j_base = k_in_block & 31;
+
+            const uint sc_u16  = uint(data_a[block_u16 + 1 + (ib >> 1)]);
+            const uint sc_byte = (sc_u16 >> ((ib & 1) * 8)) & 0xff;
+            const uint nibble  = (i128 == 0) ? (sc_byte & 0xf) : (sc_byte >> 4);
+            const int  ls      = int(nibble) | (int((extra >> (ib + 4 * i128)) & 1) << 4);
+            const float dl     = d_row * float(ls - 16);
+
+            const uint shift      = (extra >> (8 + 4 * i128 + ib)) & 1;
+            const uint values_off = shift << 3;
+
+            FLOAT_TYPEV4 v;
+            [[unroll]] for (uint r = 0; r < 4; ++r) {
+                const uint j = j_base + r;
+
+                const uint qs_byte_idx = i128 * 32 + j;
+                const uint qs_byte = (uint(data_a[block_u16 + 3  + qs_byte_idx / 2]) >> ((qs_byte_idx & 1) * 8)) & 0xff;
+                const uint qh_byte = (uint(data_a[block_u16 + 35 + j           / 2]) >> ((j           & 1) * 8)) & 0xff;
+
+                const uint idxq = ((qs_byte >> (2 * ib)) & 3) | (((qh_byte >> (4 * i128 + ib)) & 1) << 2);
+                const int  val  = iq3nl_values_const[values_off + idxq];
+                v[r] = FLOAT_TYPE(dl * float(val));
+            }
+
+            buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
