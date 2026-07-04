@@ -604,6 +604,60 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
+#elif defined(DATA_A_IQ2_KL)
+            const int iq2kl_v0_const[32] = int[32](
+                -63, -63, -40, -40, -40, -40, -23, -23, -23, -23, -23,
+                -10, -10, -10, -10,   1,   1,   1,   1,   1,
+                 13,  13,  13,  13,  13,  28,  28,  28,  28,  28,  47,  47
+            );
+            const int iq2kl_v1_const[32] = int[32](
+                -23,  13, -63, -10,  13,  47, -40, -23,   1,  13,  28,
+                -63,   1,  13,  47, -23, -10,   1,  13,  28,
+                -40, -23, -10,   1,  13, -63, -23,   1,  28,  47, -23,  13
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem0 = idx * 2;
+            const uint row_a = elem0 / p.stride_a;
+            const uint k_in_row = elem0 - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u16 = 1 + nb * 43;
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+
+            const uint row_u16 = row_a * row_size_u16;
+            const float d_row = float(unpackHalf2x16(uint(data_a[row_u16])).x);
+
+            const uint block_u16 = row_u16 + 1 + ib_in_row * 43;
+
+            const uint sb   = k_in_block / 32;        // 0..7 sub-block (32 elements each)
+            const uint j    = (k_in_block % 32) / 2;  // 0..15 pair index within sub-block
+            const uint ib64 = sb / 2;                 // 0..3
+            const uint subh = sb & 1;                 // 0 -> dl1 (1st sub of ib64), 1 -> dl2 (2nd)
+
+            const uint scales_h = uint(data_a[block_u16]);
+            const uint sl_idx   = (2 * ib64 + subh) & 3;
+            const uint sl_u16   = uint(data_a[block_u16 + 1 + (sl_idx >> 1)]);
+            const uint sl_byte  = (sl_u16 >> ((sl_idx & 1) * 8)) & 0xff;
+            const uint sl_shift = 4 * (ib64 >> 1);
+            const uint lo       = (sl_byte >> sl_shift) & 0xf;
+            const uint hi       = (scales_h >> (4 * ib64 + 2 * subh)) & 3;
+            const float dl      = d_row * float(int(lo | (hi << 4)) - 32);
+
+            const uint qs_byte_idx = ib64 * 16 + j;
+            const uint qs_byte = (uint(data_a[block_u16 + 3  + (qs_byte_idx >> 1)]) >> ((qs_byte_idx & 1) * 8)) & 0xff;
+            const uint qh_byte = (uint(data_a[block_u16 + 35 + (j           >> 1)]) >> ((j           & 1) * 8)) & 0xff;
+
+            const uint qbits  = (subh == 0u) ? (qs_byte & 0xf) : (qs_byte >> 4);
+            const uint hbit   = (qh_byte >> (2 * ib64 + subh)) & 1;
+            const uint cb_idx = qbits | (hbit << 4);
+
+            const vec2 v = dl * vec2(iq2kl_v0_const[cb_idx], iq2kl_v1_const[cb_idx]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
 #elif defined(DATA_A_IQ2_KT)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;

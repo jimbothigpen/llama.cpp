@@ -629,15 +629,16 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
             continue;
         }
         // KS family use per-type standalone matvec shaders only. No generic mul_mm
-        // or mul_mmq backing. IQ2_K/IQ3_K/IQ4_K/IQ5_K/IQ6_K/IQ2_KT/IQ4_KT/IQ3_KT/IQ1_KT have a native
-        // mul_mm path (see mul_mm_funcs.glsl) and fall through instead of being skipped here.
-        // IQ4_KSS / IQ2_KL: row-meta weight-only types.
-        // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
-        if (tname == "iq4_kss" || tname == "iq2_kl") {
+        // or mul_mmq backing. IQ2_K/IQ3_K/IQ4_K/IQ5_K/IQ6_K/IQ2_KT/IQ4_KT/IQ3_KT/IQ1_KT/IQ2_KL have a
+        // native mul_mm path (see mul_mm_funcs.glsl) and fall through instead of being skipped here.
+        // IQ4_KSS: Gray-code row-meta weight-only type.
+        // Standalone mul_mat_vec_iq4_kss.comp shader handles it; no mul_mm backing.
+        if (tname == "iq4_kss") {
             continue;
         }
         if (coopmat2 && (tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq2_ks" || tname == "iq3_ks" || tname == "iq2_k" || tname == "iq3_k" ||
-                          tname == "iq4_k" || tname == "iq5_k" || tname == "iq6_k" || tname == "iq2_kt" || tname == "iq4_kt" || tname == "iq3_kt" || tname == "iq1_kt")) {
+                          tname == "iq4_k" || tname == "iq5_k" || tname == "iq6_k" || tname == "iq2_kt" || tname == "iq4_kt" || tname == "iq3_kt" || tname == "iq1_kt" ||
+                          tname == "iq2_kl")) {
             continue;
         }
 
