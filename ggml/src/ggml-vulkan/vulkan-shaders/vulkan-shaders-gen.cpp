@@ -628,19 +628,16 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
             tname == "turboq2_tcq" || tname == "turboq3_tcq") {
             continue;
         }
-        // IQ{4,5,6}_K and KS family use per-type standalone matvec shaders only.
-        // No generic mul_mm or mul_mmq backing.
-        // IQ2_K / IQ3_K have a native mul_mm path (see mul_mm_funcs.glsl) and
-        // fall through instead of being skipped here.
-        if (tname == "iq4_k" || tname == "iq5_k" || tname == "iq6_k") {
-            continue;
-        }
+        // KS family use per-type standalone matvec shaders only. No generic mul_mm
+        // or mul_mmq backing. IQ2_K/IQ3_K/IQ4_K/IQ5_K/IQ6_K have a native mul_mm
+        // path (see mul_mm_funcs.glsl) and fall through instead of being skipped here.
         // IQ3_KS / IQ4_KS / IQ4_KSS / IQ4_KT / IQ2_KL: row-meta weight-only types.
         // Standalone mul_mat_vec_iq*_k*.comp shaders handle them; no mul_mm backing.
         if (tname == "iq3_ks" || tname == "iq2_ks" || tname == "iq4_kss" || tname == "iq1_kt" || tname == "iq2_kt" || tname == "iq3_kt" || tname == "iq4_kt" || tname == "iq2_kl") {
             continue;
         }
-        if (coopmat2 && (tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq2_k" || tname == "iq3_k")) {
+        if (coopmat2 && (tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq2_k" || tname == "iq3_k" ||
+                          tname == "iq4_k" || tname == "iq5_k" || tname == "iq6_k")) {
             continue;
         }
 
@@ -666,7 +663,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         // Integer dot mmq performs better with f32 accumulators (different shader, skip for dot2)
-        if (!f16acc && !coopmat && !coopmat2 && !dot2 && (is_legacy_quant(tname) || (is_k_quant(tname) && tname != "iq2_k" && tname != "iq3_k") || tname == "mxfp4")) {
+        if (!f16acc && !coopmat && !coopmat2 && !dot2 && (is_legacy_quant(tname) || (is_k_quant(tname) && tname != "iq2_k" && tname != "iq3_k" && tname != "iq4_k" && tname != "iq5_k" && tname != "iq6_k") || tname == "mxfp4")) {
             string_to_spv(shader_name + "_" + tname + "_q8_1", "mul_mmq.comp", merge_maps(merge_maps(base_dict, float_type_dict), {{data_a_key, "1"}, {"D_TYPE", "float"},}), fp16, coopmat, coopmat2, f16acc);
         }
 #endif

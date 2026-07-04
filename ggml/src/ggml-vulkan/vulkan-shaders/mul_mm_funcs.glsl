@@ -269,6 +269,132 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const vec2 v = dl * vec2(iq3nl_values_const[codebook_off + val_idx0],
                                      iq3nl_values_const[codebook_off + val_idx1]);
             buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
+#elif defined(DATA_A_IQ4_K)
+            const int iq4k_values_const[32] = int[32](
+                -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+                -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib  = idx / 128;                      // 2 values per idx
+            const uint iqs = idx % 128;                      // 0..127 (element-pair index)
+
+            const uint ib32      = iqs / 16;                 // 0..7 (32-elem sub-block)
+            const uint jel       = (iqs % 16) * 2;           // 0,2,..30 (low elem of pair within ib32)
+            const uint half_idx  = jel >> 4;                 // 0,1
+            const uint j_in_half = jel & 0xf;                // 0,2,..14 (low elem of pair within half)
+
+            const uint byte_idx0 = ib32 * 16 + j_in_half;
+            const uint byte_idx1 = byte_idx0 + 1;
+            const uint nibble0 = (uint(data_a[ib].qs[byte_idx0]) >> (4 * half_idx)) & 0xf;
+            const uint nibble1 = (uint(data_a[ib].qs[byte_idx1]) >> (4 * half_idx)) & 0xf;
+
+            const uint sh = (uint(data_a[ib].scales_h[ib32 >> 1]) >> (4 * (ib32 & 1))) & 0xf;
+            const uint sl = uint(data_a[ib].scales_l[ib32]);
+            const uint scale_low  = (half_idx == 0) ? (sl & 0xf) : (sl >> 4);
+            const uint scale_high = (half_idx == 0) ? ((sh << 4) & 0x30) : ((sh << 2) & 0x30);
+            const int  ls = int(scale_low | scale_high) - 32;
+            const float dl = float(data_a[ib].d) * float(ls);
+
+            const uint codebook_off = ((uint(data_a[ib].extra) >> (2 * ib32 + half_idx)) & 1) << 4;
+
+            const vec2 v = dl * vec2(iq4k_values_const[codebook_off + nibble0],
+                                     iq4k_values_const[codebook_off + nibble1]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
+#elif defined(DATA_A_IQ5_K)
+            const int iq5k_values_const[64] = int[64](
+                -126,-114,-103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6,
+                  -1,   5,  11,  17,  23,  29,  36,  43,  51,  59,  68,  77,  87,  97, 109, 121,
+                -124,-112,-101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10,  -4,
+                   1,   7,  13,  19,  25,  31,  38,  45,  53,  61,  70,  79,  89,  99, 111, 123
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib  = idx / 128;                      // 2 values per idx
+            const uint iqs = idx % 128;                      // 0..127
+
+            const uint k0        = iqs * 2;                   // 0,2,..254 (low elem of the pair)
+            const uint ib64      = k0 >> 6;                   // 0..3
+            const uint pos       = k0 & 63;
+            const uint pos_quad  = pos >> 4;                  // 0..3
+            const uint j0        = pos & 0xf;                 // 0,2,..14
+
+            const uint sl_idx = 2 * ib64 + (pos_quad >> 1);
+            const uint sl_nib = pos_quad & 1;
+            const uint low4   = (uint(data_a[ib].scales_l[sl_idx]) >> (4 * sl_nib)) & 0xf;
+            const uint high2  = ((uint(data_a[ib].scales_h[ib64]) >> (2 * pos_quad)) & 0x3) << 4;
+            const float dl = float(data_a[ib].d) * float(int(low4 | high2) - 32);
+
+            const uint qs_idx0 = 32 * ib64 + (pos_quad & 1) * 16 + j0;
+            const uint qs_idx1 = qs_idx0 + 1;
+            const uint nib_sh  = (pos_quad >> 1) * 4;
+            const uint nibble0 = (uint(data_a[ib].qs[qs_idx0]) >> nib_sh) & 0xf;
+            const uint nibble1 = (uint(data_a[ib].qs[qs_idx1]) >> nib_sh) & 0xf;
+
+            const uint qh_idx0  = (pos_quad & 1) * 16 + j0;
+            const uint qh_idx1  = qh_idx0 + 1;
+            const uint qh_shift = 2 * ib64 + (pos_quad >> 1);
+            const uint qh_bit0  = (uint(data_a[ib].qh[qh_idx0]) >> qh_shift) & 1;
+            const uint qh_bit1  = (uint(data_a[ib].qh[qh_idx1]) >> qh_shift) & 1;
+
+            const uint idx5_0 = nibble0 | (qh_bit0 << 4);
+            const uint idx5_1 = nibble1 | (qh_bit1 << 4);
+
+            const uint codebook_off = ((uint(data_a[ib].extra) >> (4 * ib64 + pos_quad)) & 1) << 5;
+
+            const vec2 v = dl * vec2(iq5k_values_const[codebook_off + idx5_0],
+                                     iq5k_values_const[codebook_off + idx5_1]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
+#elif defined(DATA_A_IQ6_K)
+            const int iq6k_values_const[128] = int[128](
+                -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
+                 -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
+                  -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
+                  47,   51,   55,   59,   63,   68,   72,   77,   82,   87,   92,   98,  103,  109,  115,  121,
+                -126, -120, -114, -108, -103,  -97,  -92,  -87,  -83,  -78,  -73,  -69,  -65,  -61,  -57,  -53,
+                 -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
+                  -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
+                  48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib  = idx / 128;                      // 2 values per idx
+            const uint iqs = idx % 128;                      // 0..127
+
+            const uint k0        = iqs * 2;                   // 0,2,..254
+            const uint g         = k0 >> 4;                   // 0..15 (16-elem group)
+            const uint j0        = k0 & 0xf;                  // 0,2,..14
+            const uint ib64      = g >> 2;                    // 0..3
+            const uint pos_quad  = g & 3;                     // 0..3
+
+            const float dl = float(data_a[ib].d) * float(int(data_a[ib].scales[g]));
+
+            const uint qs_idx0 = 32 * ib64 + (pos_quad & 1) * 16 + j0;
+            const uint qs_idx1 = qs_idx0 + 1;
+            const uint nib_sh  = (pos_quad >> 1) * 4;
+            const uint nibble0 = (uint(data_a[ib].qs[qs_idx0]) >> nib_sh) & 0xf;
+            const uint nibble1 = (uint(data_a[ib].qs[qs_idx1]) >> nib_sh) & 0xf;
+
+            const uint qh_idx0  = (ib64 >> 1) * 32 + (pos_quad & 1) * 16 + j0;
+            const uint qh_idx1  = qh_idx0 + 1;
+            const uint qh_shift = (ib64 & 1) * 4 + (pos_quad >> 1) * 2;
+            const uint high2_0  = ((uint(data_a[ib].qh[qh_idx0]) >> qh_shift) & 0x3) << 4;
+            const uint high2_1  = ((uint(data_a[ib].qh[qh_idx1]) >> qh_shift) & 0x3) << 4;
+
+            const uint idx6_0 = nibble0 | high2_0;
+            const uint idx6_1 = nibble1 | high2_1;
+
+            const uint codebook_off = ((uint(data_a[ib].extra) >> g) & 1) << 6;
+
+            const vec2 v = dl * vec2(iq6k_values_const[codebook_off + idx6_0],
+                                     iq6k_values_const[codebook_off + idx6_1]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
 #elif defined(DATA_A_IQ4_KS)
             const int iq4k_values_const[32] = int[32](
                 -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,

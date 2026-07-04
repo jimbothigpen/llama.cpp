@@ -2113,7 +2113,7 @@ struct block_iq5_k {
 #if defined(DATA_A_IQ5_K)
 #define QUANT_K QUANT_K_IQ5_K
 #define QUANT_R QUANT_R_IQ5_K
-#define A_TYPE uint32_t
+#define A_TYPE block_iq5_k
 #define DATA_A_QUANT_K
 #endif
 
@@ -2136,7 +2136,7 @@ struct block_iq6_k {
 #if defined(DATA_A_IQ6_K)
 #define QUANT_K QUANT_K_IQ6_K
 #define QUANT_R QUANT_R_IQ6_K
-#define A_TYPE uint32_t
+#define A_TYPE block_iq6_k
 #define DATA_A_QUANT_K
 #endif
 
