@@ -638,6 +638,54 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(gv[2], gv[3]);
             buf_a[buf_idx + 2] = FLOAT_TYPEV2(gv[4], gv[5]);
             buf_a[buf_idx + 3] = FLOAT_TYPEV2(gv[6], gv[7]);
+#elif defined(DATA_A_IQ4_KT)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 4;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u32 = 1 + nb * 32;  // 1 float row scale + 32 u32 per block
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+            const uint jj = k_in_block / 4;  // group index 0..63
+            const uint ib = jj >> 3;         // sub-block 0..7
+            const uint g  = jj & 7u;         // group within sub-block 0..7
+
+            const uint row_u32 = row_a * row_size_u32;
+            const uint block_u32 = row_u32 + 1 + ib_in_row * 32;
+            const float d = uintBitsToFloat(data_a[row_u32]);
+
+            const uint shb    = data_a[block_u32 + ib];
+            const uint offset = ((shb & 1u) != 0u) ? 36864u : 4096u;
+            const int  ls     = int((shb & 0xffu) >> 1) - 64;
+            const float sl    = d * float(ls);
+
+            const uint ql_word = data_a[block_u32 + 8u + (jj >> 2)];
+            const uint ql_byte = (ql_word >> ((jj & 3u) * 8u)) & 0xffu;
+
+            const uint qh_byte_idx = jj & 31u;
+            const uint qh_nibble   = jj >> 5;
+            const uint qh_word     = data_a[block_u32 + 24u + (qh_byte_idx >> 2)];
+            const uint qh_byte_val = (qh_word >> ((qh_byte_idx & 3u) * 8u)) & 0xffu;
+            const uint qh_nib_val  = (qh_byte_val >> (4u * qh_nibble)) & 0xfu;
+
+            const uint shb_3bits = (shb >> (8u + 3u * g)) & 7u;
+            const uint idx_val   = ql_byte | (qh_nib_val << 8u) | (shb_3bits << 12u);
+
+            uint x = idx_val + offset;
+            float gv[4];
+            [[unroll]] for (int r = 0; r < 4; r++) {
+                x = 0xCBAC1FEDu * x;
+                const uint s = x & 0x3f3f3f3fu;
+                const int sum = int(s & 0xffu) + int((s >> 8) & 0xffu) + int((s >> 16) & 0xffu) + int((s >> 24) & 0xffu);
+                gv[r] = float(sum - 126) * sl;
+            }
+            buf_a[buf_idx    ] = FLOAT_TYPEV2(gv[0], gv[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(gv[2], gv[3]);
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
