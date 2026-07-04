@@ -309,14 +309,23 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
 
     cur = inpL;
 
-    // Output prenorm state (for next token's g_embeddings in autoregressive generation)
-    ggml_set_output(cur);
-    res->t_h_nextn = cur;
+    bool eagle3_norm_output = getenv("EAGLE3_NORM_OUTPUT") != nullptr;
+
+    if (!eagle3_norm_output) {
+        // Output prenorm state (for next token's g_embeddings in autoregressive generation)
+        ggml_set_output(cur);
+        res->t_h_nextn = cur;
+    }
 
     cur = build_norm(cur,
             model.output_norm, NULL,
             LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
+
+    if (eagle3_norm_output) {
+        ggml_set_output(cur);
+        res->t_h_nextn = cur;
+    }
 
     // lm_head - projects to draft vocabulary
     // if the draft has no own output projection, inherit the target model's lm_head
@@ -335,13 +344,19 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
         const int64_t n_outputs     = cur->ne[1];
         const int64_t n_vocab       = (int64_t) model.vocab.n_tokens();
 
-        GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
+        GGML_ASSERT(model.d2t->type == GGML_TYPE_I64 || model.d2t->type == GGML_TYPE_I32);
         GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
+
+        // Convert d2t from raw delta to absolute target id: target_id = j + d2t[j]
+        ggml_tensor * d2t_f32 = ggml_cast(ctx0, model.d2t, GGML_TYPE_F32);
+        ggml_tensor * arange  = ggml_arange(ctx0, 0.0f, (float)n_draft_vocab, 1.0f);
+        ggml_tensor * d2t_abs_f32 = ggml_add(ctx0, d2t_f32, arange);
+        ggml_tensor * d2t_abs = ggml_cast(ctx0, d2t_abs_f32, GGML_TYPE_I32);
 
         ggml_tensor * logits = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
         cur = ggml_set_rows(ctx0, logits,
                 ggml_reshape_3d(ctx0, cur,       1,             n_draft_vocab, n_outputs),
-                ggml_reshape_3d(ctx0, model.d2t, n_draft_vocab, 1,             1));
+                ggml_reshape_3d(ctx0, d2t_abs,   n_draft_vocab, 1,             1));
         cur = ggml_reshape_2d(ctx0, cur, n_vocab, n_outputs);
     }
 

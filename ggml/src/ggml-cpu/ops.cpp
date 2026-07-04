@@ -567,13 +567,19 @@ void ggml_compute_forward_dup(
                 if (dst->type == GGML_TYPE_F32) ggml_compute_forward_dup_flt<int32_t, float>(params, dst);
                 else GGML_ABORT("not implemented");
             } break;
+        case GGML_TYPE_I64:
+            {
+                if (dst->type == GGML_TYPE_F32) ggml_compute_forward_dup_flt<int64_t, float>(params, dst);
+                else if (dst->type == GGML_TYPE_I64) ggml_compute_forward_dup_flt<int64_t, int64_t>(params, dst);
+                else GGML_ABORT("not implemented");
+            } break;
         default:
             {
                 if (ggml_is_quantized(src0->type) && dst->type == GGML_TYPE_F32) {
                     ggml_compute_forward_dup_from_q(params, dst);
                     break;
                 }
-                GGML_ABORT("fatal error");
+                GGML_ABORT("fatal error in DUP: src0 %s, dst %s\n", ggml_type_name(src0->type), ggml_type_name(dst->type));
             }
     }
 }

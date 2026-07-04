@@ -39,7 +39,23 @@ static inline int32_t f32_to_i32(float x) {
     return x;
 }
 
+static inline float i64_to_f32(int64_t x) {
+    return x;
+}
+
+static inline int64_t f32_to_i64(float x) {
+    return x;
+}
+
 static inline float f32_to_f32(float x) {
+    return x;
+}
+
+static inline float i16_to_f32(int16_t x) {
+    return x;
+}
+
+static inline int16_t f32_to_i16(float x) {
     return x;
 }
 
@@ -66,9 +82,21 @@ struct type_conversion_table<ggml_bf16_t> {
 };
 
 template <>
+struct type_conversion_table<int16_t> {
+    static constexpr float (*to_f32)(int16_t) = i16_to_f32;
+    static constexpr int16_t (*from_f32)(float) = f32_to_i16;
+};
+
+template <>
 struct type_conversion_table<int32_t> {
     static constexpr float (*to_f32)(int32_t) = i32_to_f32;
     static constexpr int32_t (*from_f32)(float) = f32_to_i32;
+};
+
+template <>
+struct type_conversion_table<int64_t> {
+    static constexpr float (*to_f32)(int64_t) = i64_to_f32;
+    static constexpr int64_t (*from_f32)(float) = f32_to_i64;
 };
 
 static std::pair<int64_t, int64_t> get_thread_range(const struct ggml_compute_params * params, const struct ggml_tensor * src0) {
