@@ -609,7 +609,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         std::string load_vec_quant = "2";
         if ((tname == "q1_0") || (tname == "q4_0") || (tname == "q4_1") || (tname == "q5_1") || (tname == "iq1_s") || (tname == "iq1_m") || (tname == "iq2_xxs") || (tname == "iq2_xs") || (tname == "iq2_s") || (tname == "iq2_kt") || (tname == "iq3_kt") || (tname == "iq1_kt"))
             load_vec_quant = "8";
-        else if ((tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "iq4_ks") || (tname == "iq5_ks") || (tname == "iq3_ks") || (tname == "mxfp4") || (tname == "nvfp4") || (tname == "iq4_kt"))
+        else if ((tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "iq4_ks") || (tname == "iq5_ks") || (tname == "iq3_ks") || (tname == "mxfp4") || (tname == "nvfp4") || (tname == "iq4_kt") || (tname == "iq4_kss"))
             load_vec_quant = "4";
 
         if (tname == "bf16") {
@@ -629,16 +629,11 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
             continue;
         }
         // KS family use per-type standalone matvec shaders only. No generic mul_mm
-        // or mul_mmq backing. IQ2_K/IQ3_K/IQ4_K/IQ5_K/IQ6_K/IQ2_KT/IQ4_KT/IQ3_KT/IQ1_KT/IQ2_KL have a
-        // native mul_mm path (see mul_mm_funcs.glsl) and fall through instead of being skipped here.
-        // IQ4_KSS: Gray-code row-meta weight-only type.
-        // Standalone mul_mat_vec_iq4_kss.comp shader handles it; no mul_mm backing.
-        if (tname == "iq4_kss") {
-            continue;
-        }
+        // or mul_mmq backing. IQ2_K/IQ3_K/IQ4_K/IQ5_K/IQ6_K/IQ2_KT/IQ4_KT/IQ3_KT/IQ1_KT/IQ2_KL/IQ4_KSS
+        // have a native mul_mm path (see mul_mm_funcs.glsl) and fall through instead of being skipped here.
         if (coopmat2 && (tname == "iq4_ks" || tname == "iq5_ks" || tname == "iq2_ks" || tname == "iq3_ks" || tname == "iq2_k" || tname == "iq3_k" ||
                           tname == "iq4_k" || tname == "iq5_k" || tname == "iq6_k" || tname == "iq2_kt" || tname == "iq4_kt" || tname == "iq3_kt" || tname == "iq1_kt" ||
-                          tname == "iq2_kl")) {
+                          tname == "iq2_kl" || tname == "iq4_kss")) {
             continue;
         }
 

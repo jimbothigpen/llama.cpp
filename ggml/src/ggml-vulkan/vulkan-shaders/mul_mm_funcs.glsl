@@ -604,6 +604,77 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
+#elif defined(DATA_A_IQ4_KSS)
+            const int iq4k_values_const[32] = int[32](
+                -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
+                -123, -100, -79, -61, -45, -31, -18,  -6,    5,  17,  29,  42,  57,  73,  93, 117
+            );
+
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint elem_idx = idx * 4;
+            const uint row_a = elem_idx / p.stride_a;
+            const uint k_in_row = elem_idx - row_a * p.stride_a;
+
+            const uint nb = p.stride_a / 256;
+            const uint row_size_u32 = 1 + nb * 32;
+
+            const uint ib_in_row = k_in_row / 256;
+            const uint k_in_block = k_in_row % 256;
+
+            const uint row_u32 = row_a * row_size_u32;
+            const uint block_u32 = row_u32 + 1 + ib_in_row * 32;
+
+            const float d_row = uintBitsToFloat(data_a[row_u32]);
+
+            // 8 sub-blocks of 32 elements (4 u32 = 8 u16 each). elem_idx is
+            // always 4-aligned (LOAD_VEC_A == 4), so k_in_sub never crosses a
+            // half (0..15 / 16..31) or quarter (per-u32) boundary.
+            const uint sub_block = k_in_block >> 5;
+            const uint k_in_sub   = k_in_block & 31;
+
+            const uint qs_u32_base = block_u32 + sub_block * 4;
+            const uint qs0 = data_a[qs_u32_base + 0];
+            const uint qs1 = data_a[qs_u32_base + 1];
+            const uint qs2 = data_a[qs_u32_base + 2];
+            const uint qs3 = data_a[qs_u32_base + 3];
+
+            // ls assembled from bit-0 of each of the 8 u16 in the sub-block.
+            const int ls = int(
+                ( qs0        & 1u)        |
+                ((qs0 >> 16) & 1u) <<  1  |
+                ( qs1        & 1u) <<  2  |
+                ((qs1 >> 16) & 1u) <<  3  |
+                ( qs2        & 1u) <<  4  |
+                ((qs2 >> 16) & 1u) <<  5  |
+                ( qs3        & 1u) <<  6  |
+                ((qs3 >> 16) & 1u) <<  7);
+
+            const float dl           = d_row * float((ls & 254) - 127);
+            const uint  codebook_off = uint(ls & 1) << 4;
+
+            const uint half_idx     = k_in_sub >> 4;         // 0 = low (0..15), 1 = high (16..31)
+            const uint quarter      = (k_in_sub & 15) >> 2;  // which of the 4 u32 (0..3)
+            const uint nibble_shift = half_idx * 4;
+
+            const uint qs_my = (quarter == 0) ? qs0
+                             : (quarter == 1) ? qs1
+                             : (quarter == 2) ? qs2 : qs3;
+            const uint mask  = 0xfffefffeu;
+            const uint a32   = qs_my & mask;
+            const uint aux32 = a32 ^ (a32 >> 1);
+
+            FLOAT_TYPEV4 v;
+            [[unroll]] for (uint r = 0; r < 4; ++r) {
+                const uint byte_r = (aux32 >> (r * 8)) & 0xff;
+                const uint nibble = (byte_r >> nibble_shift) & 0xf;
+                const int  val    = iq4k_values_const[codebook_off + nibble];
+                v[r] = FLOAT_TYPE(dl * float(val));
+            }
+
+            buf_a[buf_idx + 0] = FLOAT_TYPEV2(v[0], v[1]);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v[2], v[3]);
 #elif defined(DATA_A_IQ2_KL)
             const int iq2kl_v0_const[32] = int[32](
                 -63, -63, -40, -40, -40, -40, -23, -23, -23, -23, -23,
