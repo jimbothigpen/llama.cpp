@@ -194,6 +194,81 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx] = FLOAT_TYPEV2(dl * (qs.x - hm.x),
                                           dl * (qs.y - hm.y));
+#elif defined(DATA_A_IQ2_K)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib  = idx / 128;                      // 2 values per idx
+            const uint iqs = idx % 128;                      // 0..127 (element-pair index)
+
+            const uint ib32     = iqs / 16;                  // 0..7
+            const uint jel      = (iqs % 16) * 2;             // 0,2,..30 (low element of the pair)
+            const uint half_idx = jel >> 4;                   // 0,1
+            const uint shift    = (ib32 & 3) << 1;            // 0,2,4,6
+
+            const uint qs_byte_idx = (ib32 >> 2) * 32 + jel;  // even, 0..62
+            const uint qs16 = uint(data_a_packed16[ib].qs[qs_byte_idx / 2]);
+            const uint nibble0 = (qs16 >> shift) & 3;
+            const uint nibble1 = (qs16 >> (shift + 8)) & 3;
+
+            const uint sc_byte = uint(data_a[ib].scales[ib32]);
+            const int  sc_nib  = int((sc_byte >> (half_idx * 4)) & 0xf);
+            const float dl = float(data_a[ib].d) * float(sc_nib - 8);
+
+            const uint extra = uint(data_a[ib].extra);
+            const uint codebook_off = ((extra >> (2 * ib32 + half_idx)) & 1) << 2;
+
+            const int iq2nl_values_const[8] = int[8](
+                -31, -13,  1, 17,
+                -26,  -8,  6, 22
+            );
+
+            const vec2 v = dl * vec2(iq2nl_values_const[codebook_off + nibble0],
+                                     iq2nl_values_const[codebook_off + nibble1]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
+#elif defined(DATA_A_IQ3_K)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib  = idx / 128;                      // 2 values per idx
+            const uint iqs = idx % 128;                      // 0..127 (element-pair index)
+
+            const uint ib32     = iqs / 16;                  // 0..7
+            const uint jel      = (iqs % 16) * 2;             // 0,2,..30 (low element of the pair)
+            const uint half_idx = jel >> 4;                   // 0,1
+            const uint shift_l  = (ib32 & 3) << 1;            // 0,2,4,6
+            const uint shift_h  = ib32;                       // 0..7
+
+            const uint qs_byte_idx = (ib32 >> 2) * 32 + jel;  // even, 0..62
+            const uint qs16 = uint(data_a_packed16[ib].qs[qs_byte_idx / 2]);
+            const uint qs_lo = qs16 & 0xFF;
+            const uint qs_hi = (qs16 >> 8) & 0xFF;
+
+            const uint qh16 = uint(data_a_packed16[ib].qh[jel / 2]);
+            const uint qh_lo = qh16 & 0xFF;
+            const uint qh_hi = (qh16 >> 8) & 0xFF;
+
+            const uint val_idx0 = ((qs_lo >> shift_l) & 3) | (((qh_lo >> shift_h) & 1) << 2);
+            const uint val_idx1 = ((qs_hi >> shift_l) & 3) | (((qh_hi >> shift_h) & 1) << 2);
+
+            const uint sl_byte   = uint(data_a[ib].scales_l[ib32]);
+            const int  magnitude = int((sl_byte >> (4 * half_idx)) & 0xf);
+            const uint sh        = uint(data_a[ib].scales_h);
+            const int  sh_bit    = int((sh >> (2 * ib32 + half_idx)) & 1);
+            const int  ls        = (2 * magnitude + 1) * (sh_bit != 0 ? -1 : 1);
+            const float dl = float(data_a[ib].d) * float(ls);
+
+            const uint extra = uint(data_a[ib].extra);
+            const uint codebook_off = ((extra >> (2 * ib32 + half_idx)) & 1) << 3;
+
+            const int iq3nl_values_const[16] = int[16](
+                -63, -40, -23, -10, 1, 13, 28,  47,
+                -59, -36, -19,  -6, 5, 17, 32,  51
+            );
+
+            const vec2 v = dl * vec2(iq3nl_values_const[codebook_off + val_idx0],
+                                     iq3nl_values_const[codebook_off + val_idx1]);
+            buf_a[buf_idx] = FLOAT_TYPEV2(v.x, v.y);
 #elif defined(DATA_A_IQ4_KS)
             const int iq4k_values_const[32] = int[32](
                 -127, -104, -83, -65, -49, -35, -22, -10,    1,  13,  25,  38,  53,  69,  89, 113,
