@@ -16,6 +16,10 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#if defined(__AVX__)
+#include <immintrin.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -144,6 +148,20 @@ static void turbo_init_qjl(void) {
 
 static void matvec(const float * M, const float * x, float * y, int d) {
     /* y = M @ x, M is row-major d×d */
+#if defined(__AVX__)
+    for (int i = 0; i < d; i++) {
+        __m256 sum256 = _mm256_setzero_ps();
+        for (int j = 0; j < d; j += 8) {
+            __m256 mv = _mm256_loadu_ps(&M[i * d + j]);
+            __m256 xv = _mm256_loadu_ps(&x[j]);
+            sum256 = _mm256_add_ps(sum256, _mm256_mul_ps(mv, xv));
+        }
+        __m256 t1 = _mm256_hadd_ps(sum256, sum256);
+        __m256 t2 = _mm256_hadd_ps(t1, t1);
+        float sum = _mm_cvtss_f32(_mm256_castps256_ps128(t2)) + _mm_cvtss_f32(_mm256_extractf128_ps(t2, 1));
+        y[i] = sum;
+    }
+#else
     for (int i = 0; i < d; i++) {
         float sum = 0.0f;
         for (int j = 0; j < d; j++) {
@@ -151,6 +169,7 @@ static void matvec(const float * M, const float * x, float * y, int d) {
         }
         y[i] = sum;
     }
+#endif
 }
 
 /* ---------- nearest centroid ---------- */

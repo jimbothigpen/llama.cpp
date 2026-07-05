@@ -3696,7 +3696,7 @@ static void ggml_vec_dot_turboq2_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ2_0)->to_float(vx, tmp, n);
 
@@ -3705,7 +3705,7 @@ static void ggml_vec_dot_turboq2_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3718,7 +3718,7 @@ static void ggml_vec_dot_turboq3_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ3_0)->to_float(vx, tmp, n);
 
@@ -3727,7 +3727,7 @@ static void ggml_vec_dot_turboq3_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3738,7 +3738,7 @@ static void ggml_vec_dot_wq3_tcq_f32(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WQ3_TCQ)->to_float(vx, tmp, n);
 
@@ -3747,7 +3747,7 @@ static void ggml_vec_dot_wq3_tcq_f32(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3758,7 +3758,7 @@ static void ggml_vec_dot_turboq4_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ4_0)->to_float(vx, tmp, n);
 
@@ -3767,7 +3767,7 @@ static void ggml_vec_dot_turboq4_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3778,7 +3778,7 @@ static void ggml_vec_dot_turboq8_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ8_0)->to_float(vx, tmp, n);
 
@@ -3787,7 +3787,7 @@ static void ggml_vec_dot_turboq8_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3798,7 +3798,7 @@ static void ggml_vec_dot_turboq5_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ5_0)->to_float(vx, tmp, n);
 
@@ -3807,7 +3807,7 @@ static void ggml_vec_dot_turboq5_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3818,7 +3818,7 @@ static void ggml_vec_dot_turboq6_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_TURBOQ6_0)->to_float(vx, tmp, n);
 
@@ -3827,7 +3827,7 @@ static void ggml_vec_dot_turboq6_0_f32(int n, float * GGML_RESTRICT s, size_t bs
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * y[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
 
@@ -3841,7 +3841,7 @@ static void ggml_vec_dot_wht3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
 
     // Dim n can exceed 4096 (e.g. Qwen3.5-9B ffn_down = 12288); heap-alloc to match
     // ik_llama + TheTom canonical impls.
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT3_0)->to_float(vx, tmp, n);
 
@@ -3854,7 +3854,7 @@ static void ggml_vec_dot_wht3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     free(tmp2);
     *s = sum;
 }
@@ -3867,7 +3867,7 @@ static void ggml_vec_dot_wht4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT4_0)->to_float(vx, tmp, n);
 
@@ -3879,7 +3879,7 @@ static void ggml_vec_dot_wht4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     free(tmp2);
     *s = sum;
 }
@@ -3892,7 +3892,7 @@ static void ggml_vec_dot_wht5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT5_0)->to_float(vx, tmp, n);
 
@@ -3904,7 +3904,7 @@ static void ggml_vec_dot_wht5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     free(tmp2);
     *s = sum;
 }
@@ -3917,7 +3917,7 @@ static void ggml_vec_dot_wht6_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT6_0)->to_float(vx, tmp, n);
 
@@ -3929,7 +3929,7 @@ static void ggml_vec_dot_wht6_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     free(tmp2);
     *s = sum;
 }
@@ -3942,7 +3942,7 @@ static void ggml_vec_dot_wht8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
 
-    float * tmp = (float *)malloc(n * sizeof(float));
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
     GGML_ASSERT(tmp != NULL);
     ggml_get_type_traits(GGML_TYPE_WHT8_0)->to_float(vx, tmp, n);
 
@@ -3954,7 +3954,7 @@ static void ggml_vec_dot_wht8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < n; i++) {
         sum += tmp[i] * tmp2[i];
     }
-    free(tmp);
+    if (tmp != tmp_stack) free(tmp);
     free(tmp2);
     *s = sum;
 }
