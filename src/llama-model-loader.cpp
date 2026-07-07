@@ -62,6 +62,9 @@ const char * llama_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_WHT6_0:    name = LLAMA_FTYPE_PREFIX "WHT6_0 - 7.0 bpw WHT-rotated 6-bit"; break;
         case LLAMA_FTYPE_MOSTLY_WHT8_0:    name = LLAMA_FTYPE_PREFIX "WHT8_0 - 9.0 bpw WHT-rotated 8-bit"; break;
         case LLAMA_FTYPE_MOSTLY_WQ3_TCQ:   name = LLAMA_FTYPE_PREFIX "WQ3_TCQ - 3.25 bpw TCQ weight (k=3 L=10) + FWHT"; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_AGENT: name = LLAMA_FTYPE_PREFIX "Q4_K_AGENT - Q4_K bulk, agentic-tensor protected"; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_AGENT: name = LLAMA_FTYPE_PREFIX "Q5_K_AGENT - Q5_K bulk, agentic-tensor protected"; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_AGENT: name = LLAMA_FTYPE_PREFIX "Q6_K_AGENT - Q6_K bulk, agentic-tensor protected"; break;
         // ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import). Source: charlie12345/ROCmFPX (MIT).
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4:      name = LLAMA_FTYPE_PREFIX "Q4_0_ROCMFP4 - 4.50 bpw ROCmFP4 dual-scale (E2M1 + 2 UE4M3)"; break;
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST: name = LLAMA_FTYPE_PREFIX "Q4_0_ROCMFP4_FAST - 4.25 bpw ROCmFP4 fast (E2M1 + 1 UE4M3)"; break;

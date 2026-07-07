@@ -4779,6 +4779,10 @@ class LlamaFileType(IntEnum):
     MOSTLY_NVFP4         = 39  # except 1d tensors
     MOSTLY_Q1_0          = 40  # except 1d tensors
     MOSTLY_WQ3_TCQ       = 59  # except 1d tensors (TCQ 3-bit weight, k=3 L=10 + FWHT)
+    # AGENT routing preset aliases: base K-quant + --routing-profile agent (concept: charlie12345/ROCmFPX)
+    MOSTLY_Q4_K_AGENT    = 63  # except 1d tensors
+    MOSTLY_Q5_K_AGENT    = 64  # except 1d tensors
+    MOSTLY_Q6_K_AGENT    = 65  # except 1d tensors
 
     # ROCmFPX AMD-native FP weight quant family (Phase 1). Source: charlie12345/ROCmFPX (MIT).
     # Slots match GGML_TYPE_*/LLAMA_FTYPE_MOSTLY_* on the C side 1:1 (100-104).
@@ -4789,6 +4793,17 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q3_0_ROCMFPX      = 104  # except 1d tensors (3.50 bpw)
 
     GUESSED              = 1024  # not specified in the model file
+
+
+class RoutingProfile(IntEnum):
+    # Orthogonal per-tensor routing profile for quantization (mirrors C `enum llama_routing_profile`).
+    # Concept adapted from charlie12345/ROCmFPX.
+    DEFAULT    = 0
+    AGENT      = 1
+    LEAN       = 2
+    COHERENT   = 3
+    STRIX      = 4
+    STRIX_LEAN = 5
 
 
 class GGUFEndian(IntEnum):

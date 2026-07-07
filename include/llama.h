@@ -181,6 +181,11 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_WHT6_0        = 60, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WHT8_0        = 61, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WQ3_TCQ       = 62, // except 1d tensors (re-slotted 59→62: WHT5/6/8 claimed 59-61 in the same reship wave)
+        // AGENT routing presets: backward-compat aliases for base K-quant + --routing-profile agent.
+        // Concept adapted from charlie12345/ROCmFPX. Prefer `Q6_K --routing-profile agent` going forward.
+        LLAMA_FTYPE_MOSTLY_Q4_K_AGENT    = 63, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q5_K_AGENT    = 64, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q6_K_AGENT    = 65, // except 1d tensors
 
         // ROCmFPX AMD-native FP weight quant family (CPU path, Phase 1). Source: charlie12345/ROCmFPX (MIT).
         // Slots match the GGML_TYPE_* slots (100-104) 1:1, matching upstream ROCmFPX numbering.
@@ -463,6 +468,20 @@ extern "C" {
         size_t size;
     };
 
+    // Orthogonal per-tensor routing profile for quantization. Combines with any ftype base type
+    // and biases per-`tensor_category` decisions (protect embeddings/output/attn_v/ffn_down).
+    // Every quant type our fork ships (mainline IQ, ik_llama IQ-K/KS/KT/KL/KSS, WHT, TCQ, ROCmFP)
+    // supports every profile — the tier-up decision is table-driven in `routing_boost_one_tier`.
+    // Concept adapted from charlie12345/ROCmFPX (MIT).
+    enum llama_routing_profile {
+        LLAMA_ROUTING_PROFILE_DEFAULT    = 0, // current behavior (per-ftype _impl mixture)
+        LLAMA_ROUTING_PROFILE_AGENT      = 1, // token_embd/output → Q8_0, attn_v/attn_qkv/ffn_down boosted on early+use_more_bits layers
+        LLAMA_ROUTING_PROFILE_LEAN       = 2, // token_embd → Q5_K (size-biased)
+        LLAMA_ROUTING_PROFILE_COHERENT   = 3, // token_embd → Q6_K (quality-biased)
+        LLAMA_ROUTING_PROFILE_STRIX      = 4, // gfx1150-tuned attn-K/V dual-scale recipe (requires ROCmFP4 base)
+        LLAMA_ROUTING_PROFILE_STRIX_LEAN = 5, // STRIX + Q5_K embeddings
+    };
+
     // model quantization parameters
     typedef struct llama_model_quantize_params {
         int32_t nthread;                                            // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
@@ -479,6 +498,7 @@ extern "C" {
         const struct llama_model_kv_override * kv_overrides;        // pointer to kv overrides
         const struct llama_model_tensor_override * tt_overrides;    // pointer to tensor overrides
         const int32_t * prune_layers;                               // pointer to layer indices to prune
+        enum llama_routing_profile routing_profile;                 // orthogonal per-tensor routing profile (default = current behavior)
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {

@@ -92,6 +92,9 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q5_K_S",   LLAMA_FTYPE_MOSTLY_Q5_K_S,   " 5.21G, +0.1049 ppl @ Llama-3-8B",  },
     { "Q5_K_M",   LLAMA_FTYPE_MOSTLY_Q5_K_M,   " 5.33G, +0.0569 ppl @ Llama-3-8B",  },
     { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 6.14G, +0.0217 ppl @ Llama-3-8B",  },
+    { "Q4_K_AGENT", LLAMA_FTYPE_MOSTLY_Q4_K_AGENT, " Q4_K_M bulk, agentic-tensor protected (alias: Q4_K --routing-profile agent)", },
+    { "Q5_K_AGENT", LLAMA_FTYPE_MOSTLY_Q5_K_AGENT, " Q5_K_M bulk, agentic-tensor protected (alias: Q5_K --routing-profile agent)", },
+    { "Q6_K_AGENT", LLAMA_FTYPE_MOSTLY_Q6_K_AGENT, " Q6_K bulk, agentic-tensor protected (alias: Q6_K --routing-profile agent)", },
     { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 7.96G, +0.0026 ppl @ Llama-3-8B",  },
     { "F16",      LLAMA_FTYPE_MOSTLY_F16,      "14.00G, +0.0020 ppl @ Mistral-7B",  },
     { "BF16",     LLAMA_FTYPE_MOSTLY_BF16,     "14.00G, -0.0050 ppl @ Mistral-7B",  },
@@ -159,6 +162,13 @@ static void usage(const char * executable) {
     printf("                                      increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure\n");
     printf("                                      disable k-quant mixtures and quantize all tensors to the same type\n");
+    printf("  --routing-profile {default,agent,lean,coherent,strix,strix-lean}\n");
+    printf("                                      per-tensor routing profile (orthogonal to ftype):\n");
+    printf("                                        agent      — protect agentic-critical tensors (embd/output Q8_0, attn_v/ffn_down boosted)\n");
+    printf("                                        lean       — Q5_K token embeddings (size-biased)\n");
+    printf("                                        coherent   — Q6_K token embeddings (quality-biased)\n");
+    printf("                                        strix      — gfx1150-tuned attn-K/V dual-scale recipe\n");
+    printf("                                        strix-lean — strix + Q5_K embeddings\n");
     printf("  --imatrix file_name\n");
     printf("                                      use data in file_name as importance matrix for quant optimizations\n");
     printf("  --include-weights tensor_name\n");
@@ -473,6 +483,22 @@ int llama_quantize(int argc, char ** argv) {
             params.allow_requantize = true;
         } else if (strcmp(argv[arg_idx], "--pure") == 0) {
             params.pure = true;
+        } else if (strcmp(argv[arg_idx], "--routing-profile") == 0) {
+            if (arg_idx < argc-1) {
+                const std::string prof = argv[++arg_idx];
+                if      (prof == "default")    params.routing_profile = LLAMA_ROUTING_PROFILE_DEFAULT;
+                else if (prof == "agent")      params.routing_profile = LLAMA_ROUTING_PROFILE_AGENT;
+                else if (prof == "lean")       params.routing_profile = LLAMA_ROUTING_PROFILE_LEAN;
+                else if (prof == "coherent")   params.routing_profile = LLAMA_ROUTING_PROFILE_COHERENT;
+                else if (prof == "strix")      params.routing_profile = LLAMA_ROUTING_PROFILE_STRIX;
+                else if (prof == "strix-lean") params.routing_profile = LLAMA_ROUTING_PROFILE_STRIX_LEAN;
+                else {
+                    fprintf(stderr, "error: invalid --routing-profile '%s' (valid: default, agent, lean, coherent, strix, strix-lean)\n", prof.c_str());
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--imatrix") == 0) {
             if (arg_idx < argc-1) {
                 imatrix_file = argv[++arg_idx];

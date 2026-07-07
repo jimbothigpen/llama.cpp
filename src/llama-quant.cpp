@@ -413,6 +413,69 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
     return return_type;
 }
 
+// Universal routing profile boost table: one tier up per base ggml_type. Used by AGENT/STRIX
+// routing profiles to protect sensitive tensors (attn_v/attn_qkv/ffn_down) at slightly higher
+// precision than the bulk base type. Returns the same base type if no tier-up is defined
+// (already at the top of the family, or a non-quantized type). Concept: charlie12345/ROCmFPX.
+static ggml_type routing_boost_one_tier(ggml_type base) {
+    switch (base) {
+        // Legacy K-quants
+        case GGML_TYPE_Q2_K:  return GGML_TYPE_Q4_K;
+        case GGML_TYPE_Q3_K:  return GGML_TYPE_Q4_K;
+        case GGML_TYPE_Q4_K:  return GGML_TYPE_Q6_K;
+        case GGML_TYPE_Q5_K:  return GGML_TYPE_Q6_K;
+        case GGML_TYPE_Q6_K:  return GGML_TYPE_Q8_0;
+        // Legacy Q4_0/Q5_0/Q8_0
+        case GGML_TYPE_Q4_0:  return GGML_TYPE_Q5_0;
+        case GGML_TYPE_Q4_1:  return GGML_TYPE_Q5_1;
+        case GGML_TYPE_Q5_0:  return GGML_TYPE_Q6_K;
+        case GGML_TYPE_Q5_1:  return GGML_TYPE_Q6_K;
+        // Mainline IQ
+        case GGML_TYPE_IQ1_S:  return GGML_TYPE_IQ2_S;
+        case GGML_TYPE_IQ2_XXS: return GGML_TYPE_IQ2_XS;
+        case GGML_TYPE_IQ2_XS: return GGML_TYPE_IQ2_S;
+        case GGML_TYPE_IQ2_S:  return GGML_TYPE_IQ3_S;
+        case GGML_TYPE_IQ3_XXS: return GGML_TYPE_IQ3_S;
+        case GGML_TYPE_IQ3_S:  return GGML_TYPE_IQ4_XS;
+        case GGML_TYPE_IQ4_XS: return GGML_TYPE_Q5_K;
+        case GGML_TYPE_IQ4_NL: return GGML_TYPE_Q5_K;
+        // ik_llama IQ-K
+        case GGML_TYPE_IQ2_K:  return GGML_TYPE_IQ3_K;
+        case GGML_TYPE_IQ3_K:  return GGML_TYPE_IQ4_K;
+        case GGML_TYPE_IQ4_K:  return GGML_TYPE_IQ5_K;
+        case GGML_TYPE_IQ5_K:  return GGML_TYPE_IQ6_K;
+        case GGML_TYPE_IQ6_K:  return GGML_TYPE_Q8_0;
+        // ik_llama IQ-KS (row-meta small)
+        case GGML_TYPE_IQ2_KS: return GGML_TYPE_IQ3_KS;
+        case GGML_TYPE_IQ3_KS: return GGML_TYPE_IQ4_KS;
+        case GGML_TYPE_IQ4_KS: return GGML_TYPE_IQ5_KS;
+        case GGML_TYPE_IQ5_KS: return GGML_TYPE_Q6_K;
+        // ik_llama IQ-KT (trellis)
+        case GGML_TYPE_IQ1_KT: return GGML_TYPE_IQ2_KT;
+        case GGML_TYPE_IQ2_KT: return GGML_TYPE_IQ3_KT;
+        case GGML_TYPE_IQ3_KT: return GGML_TYPE_IQ4_KT;
+        case GGML_TYPE_IQ4_KT: return GGML_TYPE_Q6_K;
+        // ik_llama IQ-KL/KSS
+        case GGML_TYPE_IQ2_KL:  return GGML_TYPE_IQ3_K;
+        case GGML_TYPE_IQ4_KSS: return GGML_TYPE_Q5_K;
+        // WHT family
+        case GGML_TYPE_WHT3_0: return GGML_TYPE_WHT4_0;
+        case GGML_TYPE_WHT4_0: return GGML_TYPE_WHT5_0;
+        case GGML_TYPE_WHT5_0: return GGML_TYPE_WHT6_0;
+        case GGML_TYPE_WHT6_0: return GGML_TYPE_WHT8_0;
+        case GGML_TYPE_WHT8_0: return GGML_TYPE_Q8_0;
+        // TCQ 3-bit weight (low-bit; boost to Q4_K for coherence)
+        case GGML_TYPE_WQ3_TCQ: return GGML_TYPE_Q4_K;
+        // ROCmFP weight-quant family
+        case GGML_TYPE_Q4_0_ROCMFP4:      return GGML_TYPE_Q6_0_ROCMFPX;
+        case GGML_TYPE_Q4_0_ROCMFP4_FAST: return GGML_TYPE_Q4_0_ROCMFP4;
+        case GGML_TYPE_Q3_0_ROCMFPX:      return GGML_TYPE_Q6_0_ROCMFPX;
+        case GGML_TYPE_Q6_0_ROCMFPX:      return GGML_TYPE_Q8_0_ROCMFPX;
+        case GGML_TYPE_Q8_0_ROCMFPX:      return GGML_TYPE_Q8_0;
+        default: return base; // no boost; leave as base (already top-of-family or non-quantized)
+    }
+}
+
 // internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
@@ -660,6 +723,52 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         ++qs.i_ffn_up;
     }
 
+    // Apply the universal orthogonal routing profile (if any). The per-category branches above
+    // determined the `new_type` based purely on the ftype mixture. Here we apply the cross-cutting
+    // profile bias (e.g. protecting agentic tensors or token embeddings).
+    const llama_routing_profile profile = qs.params->routing_profile;
+    if (profile == LLAMA_ROUTING_PROFILE_AGENT) {
+        // AGENT: protect agentic-critical tensors (token_embd/output -> Q8_0, sensitive attn + early ffn_down -> one tier up).
+        // Bulk categories are intentionally NOT boosted (leave at base type).
+        if (category == tensor_category::TOKEN_EMBD || category == tensor_category::OUTPUT) {
+            new_type = GGML_TYPE_Q8_0;
+        } else if (category_is_attn_v(category)) {
+            // NB: qs.i_attention_wv was already incremented before we get here; use i-1 for the current tensor.
+            const int i_layer = std::max(0, qs.i_attention_wv - 1);
+            if (i_layer < qs.n_attention_wv/8 || use_more_bits(i_layer, qs.n_attention_wv)) {
+                new_type = routing_boost_one_tier(new_type);
+            }
+        } else if (category == tensor_category::FFN_DOWN) {
+            const int i_layer = std::max(0, qs.i_ffn_down - 1);
+            if (i_layer < qs.n_ffn_down/8 || use_more_bits(i_layer, qs.n_ffn_down)) {
+                new_type = routing_boost_one_tier(new_type);
+            }
+        }
+    } else if (profile == LLAMA_ROUTING_PROFILE_LEAN) {
+        // LEAN: size-biased; token embeddings to Q5_K, otherwise base type.
+        if (category == tensor_category::TOKEN_EMBD) {
+            new_type = GGML_TYPE_Q5_K;
+        }
+    } else if (profile == LLAMA_ROUTING_PROFILE_COHERENT) {
+        // COHERENT: quality-biased; token embeddings to Q6_K, otherwise base type.
+        if (category == tensor_category::TOKEN_EMBD) {
+            new_type = GGML_TYPE_Q6_K;
+        }
+    } else if (profile == LLAMA_ROUTING_PROFILE_STRIX || profile == LLAMA_ROUTING_PROFILE_STRIX_LEAN) {
+        // STRIX / STRIX_LEAN: gfx1150-tuned attention K/V dual-scale recipe.
+        if (profile == LLAMA_ROUTING_PROFILE_STRIX_LEAN && category == tensor_category::TOKEN_EMBD) {
+            new_type = GGML_TYPE_Q5_K;
+        } else if (category == tensor_category::ATTENTION_K || category == tensor_category::ATTENTION_V) {
+            // Matching K/V in dual-scale ROCmFP4 improves PPL while keeping large tensors on faster single-scale ROCmFP4_FAST.
+            // If the base type isn't ROCmFP4_FAST, fall back to a generic one-tier boost.
+            if (new_type == GGML_TYPE_Q4_0_ROCMFP4_FAST) {
+                new_type = GGML_TYPE_Q4_0_ROCMFP4;
+            } else {
+                new_type = routing_boost_one_tier(new_type);
+            }
+        }
+    }
+
     return new_type;
 }
 
@@ -872,6 +981,12 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX:      return GGML_TYPE_Q6_0_ROCMFPX;
         case LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX:      return GGML_TYPE_Q8_0_ROCMFPX;
         case LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX:      return GGML_TYPE_Q3_0_ROCMFPX;
+        // AGENT routing preset aliases: resolve to the base K-quant type; the AGENT profile is applied
+        // orthogonally in the routing pass. These exist for backward compatibility with the ftype enum
+        // names; the canonical way is `--routing-profile agent` + any ftype.
+        case LLAMA_FTYPE_MOSTLY_Q4_K_AGENT: return GGML_TYPE_Q4_K;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_AGENT: return GGML_TYPE_Q5_K;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_AGENT: return GGML_TYPE_Q6_K;
         case LLAMA_FTYPE_MOSTLY_IQ4_K:   return GGML_TYPE_IQ4_K;
         case LLAMA_FTYPE_MOSTLY_IQ3_K:   return GGML_TYPE_IQ3_K;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   return GGML_TYPE_IQ2_K;
@@ -925,6 +1040,22 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
 //
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
+    // Resolve AGENT ftype aliases: Q{4,5,6}_K_AGENT → base K-quant + routing_profile=AGENT.
+    // This makes `llama-quantize model Q6_K_AGENT` equivalent to `llama-quantize --routing-profile agent model Q6_K`.
+    llama_model_quantize_params local_params_storage;
+    if (params->ftype == LLAMA_FTYPE_MOSTLY_Q4_K_AGENT ||
+        params->ftype == LLAMA_FTYPE_MOSTLY_Q5_K_AGENT ||
+        params->ftype == LLAMA_FTYPE_MOSTLY_Q6_K_AGENT) {
+        local_params_storage = *params;
+        switch (params->ftype) {
+            case LLAMA_FTYPE_MOSTLY_Q4_K_AGENT: local_params_storage.ftype = LLAMA_FTYPE_MOSTLY_Q4_K_M; break;
+            case LLAMA_FTYPE_MOSTLY_Q5_K_AGENT: local_params_storage.ftype = LLAMA_FTYPE_MOSTLY_Q5_K_M; break;
+            case LLAMA_FTYPE_MOSTLY_Q6_K_AGENT: local_params_storage.ftype = LLAMA_FTYPE_MOSTLY_Q6_K;   break;
+            default: break;
+        }
+        local_params_storage.routing_profile = LLAMA_ROUTING_PROFILE_AGENT;
+        params = &local_params_storage;
+    }
     llama_ftype ftype = params->ftype;
 
     int nthread = params->nthread;
@@ -1381,7 +1512,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr
+        /*.prune_layers                =*/ nullptr,
+        /*.routing_profile             =*/ LLAMA_ROUTING_PROFILE_DEFAULT,
     };
 
     return result;
