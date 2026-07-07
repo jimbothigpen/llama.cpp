@@ -1166,6 +1166,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 if (K->type == GGML_TYPE_Q5_1 && V->type == GGML_TYPE_Q5_0) { ggml_cuda_flash_attn_ext_mma_turbo_switch_ncols2<256, 256, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return; }
             }
         }
+    }
     if (ggml_cuda_turbo_prefill_try(ctx, dst)) {
         return;
     }
