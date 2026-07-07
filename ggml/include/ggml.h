@@ -455,6 +455,12 @@ extern "C" {
         // slots 86–91 reserved for RaBitQ weight family — see docs/TYPE_ASSIGNMENTS.md
         GGML_TYPE_WQ3_TCQ = 92, // TurboQuant 3-bit WEIGHT quant: TCQ (k=3, L=10, 1024 states) + FWHT rotation; CPU+CUDA dequant. Source: buun feat/tcq-wq3-ffn-fusion (re-slotted 46→92 to avoid mid-enum renumber; reuses block_turboq3_tcq 52-byte layout)
         // slots 93–95 reserved for yggdrasil future weight quant extensions — see docs/TYPE_ASSIGNMENTS.md
+        // ROCmFPX AMD-native FP weight quant family (CPU path Phase 1). Source: charlie12345/ROCmFPX experimental-rocmfpx-branch (MIT). Slots 100–104 match upstream.
+        GGML_TYPE_Q4_0_ROCMFP4      = 100, // ROCmFP4 dual-scale 4.50 bpw: 16 packed E2M1-derived nibbles + 2 UE4M3 scales (block_rocmfp4). Source: ROCmFPX
+        GGML_TYPE_Q4_0_ROCMFP4_FAST = 101, // ROCmFP4 fast 4.25 bpw: 16 packed nibbles + 1 UE4M3 scale (block_rocmfp4_fast). Source: ROCmFPX
+        GGML_TYPE_Q6_0_ROCMFPX      = 102, // ROCmFP6 6.50 bpw: 24 packed bytes + 2 UE4M3 scales (block_rocmfp6). Source: ROCmFPX
+        GGML_TYPE_Q8_0_ROCMFPX      = 103, // ROCmFP8 8.25 bpw: 32 signed int8 + 1 UE4M3 scale (block_rocmfp8). Source: ROCmFPX
+        GGML_TYPE_Q3_0_ROCMFPX      = 104, // ROCmFP3 3.50 bpw: 12 packed bytes + 2 UE4M3 scales (block_rocmfp3). Source: ROCmFPX
         // ik_llama compatibility zone: slots 96–199 (see docs/TYPE_ASSIGNMENTS.md)
         // Phase 5b-1a: base IK weight quant family (no row_meta required)
         // IDs match ik_llama's enum order (ascending) to preserve existing ik_llama GGUF compat.

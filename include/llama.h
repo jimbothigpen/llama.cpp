@@ -182,6 +182,14 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_WHT8_0        = 61, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_WQ3_TCQ       = 62, // except 1d tensors (re-slotted 59→62: WHT5/6/8 claimed 59-61 in the same reship wave)
 
+        // ROCmFPX AMD-native FP weight quant family (CPU path, Phase 1). Source: charlie12345/ROCmFPX (MIT).
+        // Slots match the GGML_TYPE_* slots (100-104) 1:1, matching upstream ROCmFPX numbering.
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4      = 100, // except 1d tensors (4.50 bpw)
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST = 101, // except 1d tensors (4.25 bpw)
+        LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX      = 102, // except 1d tensors (6.50 bpw)
+        LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX      = 103, // except 1d tensors (8.25 bpw)
+        LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX      = 104, // except 1d tensors (3.50 bpw)
+
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 

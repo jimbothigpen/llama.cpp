@@ -10,6 +10,10 @@
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
 
+// ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import)
+#include "../rocmfp4/rocmfp4.h"
+#include "../rocmfpx/rocmfpx.h"
+
 #ifdef GGML_USE_CPU_HBM
 #include <hbwmalloc.h>
 #endif
@@ -870,6 +874,47 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_wq3_tcq,      // Ph2: CPU dequant (parity oracle)
         .from_float_ref           = (ggml_from_float_t) quantize_row_wq3_tcq_ref,  // Ph2: CPU Viterbi encoder
+    },
+    // ROCmFPX AMD-native FP weight quant family (CPU path, Phase 1). Source: charlie12345/ROCmFPX (MIT).
+    [GGML_TYPE_Q4_0_ROCMFP4] = {
+        .type_name                = "q4_0_rocmfp4",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_rocmfp4),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfp4_dequantize_row_q4_0,
+        .from_float_ref           = (ggml_from_float_t) rocmfp4_quantize_row_q4_0_ref,
+    },
+    [GGML_TYPE_Q4_0_ROCMFP4_FAST] = {
+        .type_name                = "q4_0_rocmfp4_fast",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_rocmfp4_fast),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfp4_dequantize_row_q4_0_fast,
+        .from_float_ref           = (ggml_from_float_t) rocmfp4_quantize_row_q4_0_fast_ref,
+    },
+    [GGML_TYPE_Q6_0_ROCMFPX] = {
+        .type_name                = "q6_0_rocmfpx",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_rocmfp6),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfpx_dequantize_row_fp6,
+        .from_float_ref           = (ggml_from_float_t) rocmfpx_quantize_row_fp6_ref,
+    },
+    [GGML_TYPE_Q8_0_ROCMFPX] = {
+        .type_name                = "q8_0_rocmfpx",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_rocmfp8),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfpx_dequantize_row_fp8,
+        .from_float_ref           = (ggml_from_float_t) rocmfpx_quantize_row_fp8_ref,
+    },
+    [GGML_TYPE_Q3_0_ROCMFPX] = {
+        .type_name                = "q3_0_rocmfpx",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_rocmfp3),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfpx_dequantize_row_fp3,
+        .from_float_ref           = (ggml_from_float_t) rocmfpx_quantize_row_fp3_ref,
     },
     // Phase 5b-1a: ik_llama base IK weight quant family (source: ik_llama)
     [GGML_TYPE_IQ4_K] = {
@@ -8157,6 +8202,12 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_TURBOQ2_TCQ: result = quantize_turboq2_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TURBOQ3_TCQ: result = quantize_turboq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WQ3_TCQ: result = quantize_wq3_tcq(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        // ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import; source: charlie12345/ROCmFPX)
+        case GGML_TYPE_Q4_0_ROCMFP4:      result = rocmfp4_quantize_q4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q4_0_ROCMFP4_FAST: result = rocmfp4_quantize_q4_0_fast(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q6_0_ROCMFPX:      result = rocmfpx_quantize_fp6(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q8_0_ROCMFPX:      result = rocmfpx_quantize_fp8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_0_ROCMFPX:      result = rocmfpx_quantize_fp3(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_KV_OSCAR_INT2: result = quantize_kv_oscar_int2(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT3_0:  result = quantize_wht3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_WHT4_0:  result = quantize_wht4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

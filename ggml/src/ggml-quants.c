@@ -6,6 +6,10 @@
 #include "ggml-cpu/ggml-cpu-impl.h"
 #include "ggml-cpu.h"
 
+// ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import) — validators
+#include "../rocmfp4/rocmfp4.h"
+#include "../rocmfpx/rocmfpx.h"
+
 #include <math.h>
 #include <string.h>
 #include <assert.h>
@@ -5599,6 +5603,12 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             // direct float scales to NaN/Inf-check here (decode validated at runtime).
             // TODO: add more thorough validation if needed
             break;
+        // ROCmFPX AMD-native FP weight quant family: delegate to per-type validators
+        case GGML_TYPE_Q4_0_ROCMFP4:      return rocmfp4_validate_row_data(data, nbytes);
+        case GGML_TYPE_Q4_0_ROCMFP4_FAST: return rocmfp4_validate_row_data_fast(data, nbytes);
+        case GGML_TYPE_Q6_0_ROCMFPX:      return rocmfpx_validate_row_data_fp6(data, nbytes);
+        case GGML_TYPE_Q8_0_ROCMFPX:      return rocmfpx_validate_row_data_fp8(data, nbytes);
+        case GGML_TYPE_Q3_0_ROCMFPX:      return rocmfpx_validate_row_data_fp3(data, nbytes);
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ1_KT:

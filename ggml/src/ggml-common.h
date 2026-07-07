@@ -304,6 +304,40 @@ typedef struct {
 } block_turboq3_tcq;                    // 52 bytes total for 128 values (3.25 bpv)
 static_assert(sizeof(block_turboq3_tcq) == sizeof(ggml_half) + 50, "wrong turboq3_tcq block size/padding");
 
+// ROCmFPX AMD-native FP weight quant family (block_size=32). Layouts imported verbatim from
+// charlie12345/ROCmFPX experimental-rocmfpx-branch (MIT). Scales are unsigned E4M3 (UE4M3) bytes.
+#define QK_ROCMFP 32
+// ROCmFP4 dual-scale (4.50 bpw): 16 packed E2M1-derived nibbles + 2 UE4M3 half-block scales.
+typedef struct {
+    uint8_t qs[QK_ROCMFP/2];            // 16 bytes: two 4-bit codes per byte
+    uint8_t e[2];                       //  2 bytes: UE4M3 scale per 16-weight half block
+} block_rocmfp4;
+static_assert(sizeof(block_rocmfp4) == QK_ROCMFP/2 + 2*sizeof(uint8_t), "wrong rocmfp4 block size/padding");
+// ROCmFP4 fast (4.25 bpw): 16 packed nibbles + 1 UE4M3 whole-block scale.
+typedef struct {
+    uint8_t qs[QK_ROCMFP/2];           // 16 bytes: two 4-bit codes per byte
+    uint8_t e;                          //  1 byte:  single UE4M3 scale for the block
+} block_rocmfp4_fast;
+static_assert(sizeof(block_rocmfp4_fast) == QK_ROCMFP/2 + sizeof(uint8_t), "wrong rocmfp4_fast block size/padding");
+// ROCmFP3 (3.50 bpw): 12 packed bytes (32×3 bits) + 2 UE4M3 scales.
+typedef struct {
+    uint8_t qs[(QK_ROCMFP * 3) / 8];   // 12 bytes
+    uint8_t e[2];                       //  2 bytes: UE4M3 scales
+} block_rocmfp3;
+static_assert(sizeof(block_rocmfp3) == (QK_ROCMFP*3)/8 + 2*sizeof(uint8_t), "wrong rocmfp3 block size/padding");
+// ROCmFP6 (6.50 bpw): 24 packed bytes (32×6 bits) + 2 UE4M3 scales.
+typedef struct {
+    uint8_t qs[(QK_ROCMFP * 6) / 8];   // 24 bytes
+    uint8_t e[2];                       //  2 bytes: UE4M3 scales
+} block_rocmfp6;
+static_assert(sizeof(block_rocmfp6) == (QK_ROCMFP*6)/8 + 2*sizeof(uint8_t), "wrong rocmfp6 block size/padding");
+// ROCmFP8 (8.25 bpw): 32 signed int8 codes + 1 UE4M3 scale.
+typedef struct {
+    int8_t  qs[QK_ROCMFP];             // 32 bytes: signed int8 codes
+    uint8_t e;                          //  1 byte:  single UE4M3 scale
+} block_rocmfp8;
+static_assert(sizeof(block_rocmfp8) == QK_ROCMFP + sizeof(uint8_t), "wrong rocmfp8 block size/padding");
+
 // TurboQuant 2-bit TCQ: Trellis-Coded Quantization (right-shift bitshift trellis, k=2, L=8)
 // One block = one 128-element rotation group. Bitstream: 6 prefix + 128×2-bit outputs = 262 bits = 33 bytes.
 // Decode: state_t = read_8_bits(qs, t*2), recon_t = codebook[state_t] * norm

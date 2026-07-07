@@ -9,6 +9,10 @@
 #include "quants.h"
 #include "ggml-quants.h"
 #include "ggml-threading.h"
+
+// ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import)
+#include "../../rocmfp4/rocmfp4.h"
+#include "../../rocmfpx/rocmfpx.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
 #include "vec.h"
@@ -250,6 +254,22 @@ static void ggml_vec_dot_wq3_tcq_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by, int nrc);
 static void ggml_vec_dot_kv_oscar_int2_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+// ROCmFPX AMD-native FP weight quant family (Phase 1 CPU fallback vec_dot)
+static void ggml_vec_dot_rocmfp4_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_rocmfp4_fast_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_rocmfp6_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_rocmfp8_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                                       const void * GGML_RESTRICT vx, size_t bx,
+                                       const void * GGML_RESTRICT vy, size_t by, int nrc);
+static void ggml_vec_dot_rocmfp3_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by, int nrc);
 
@@ -543,6 +563,38 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         // CPU mul_mat: dequantize WQ3 weight block to f32, dot f32 activation.
         .from_float               = (ggml_from_float_t) quantize_row_wq3_tcq_ref,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_wq3_tcq_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    // ROCmFPX AMD-native FP weight quant family (CPU path, Phase 1). Source: charlie12345/ROCmFPX (MIT).
+    // Phase 1 uses a dequant-to-f32 vec_dot fallback; Phase 2 adds native SIMD/GPU dot products.
+    [GGML_TYPE_Q4_0_ROCMFP4] = {
+        .from_float               = (ggml_from_float_t) rocmfp4_quantize_row_q4_0,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rocmfp4_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q4_0_ROCMFP4_FAST] = {
+        .from_float               = (ggml_from_float_t) rocmfp4_quantize_row_q4_0_fast,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rocmfp4_fast_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q6_0_ROCMFPX] = {
+        .from_float               = (ggml_from_float_t) rocmfpx_quantize_row_fp6,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rocmfp6_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q8_0_ROCMFPX] = {
+        .from_float               = (ggml_from_float_t) rocmfpx_quantize_row_fp8,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rocmfp8_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q3_0_ROCMFPX] = {
+        .from_float               = (ggml_from_float_t) rocmfpx_quantize_row_fp3,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_rocmfp3_f32,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
@@ -3750,6 +3802,37 @@ static void ggml_vec_dot_wq3_tcq_f32(int n, float * GGML_RESTRICT s, size_t bs,
     if (tmp != tmp_stack) free(tmp);
     *s = sum;
 }
+
+// ROCmFPX vec_dot (Phase 1 CPU fallback): dequantize the ROCmFP weight block to f32
+// via its registered to_float, then dot with the f32 activation. One thin wrapper per
+// type binds the correct GGML_TYPE so ggml_get_type_traits() picks the right dequant.
+// Phase 2 replaces these with native SIMD/GPU dot products (rocmfp4 has a Q8_0 vec_dot).
+static inline void ggml_vec_dot_rocmfp_f32_impl(enum ggml_type type, int n, float * GGML_RESTRICT s,
+                                                const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy) {
+    float tmp_stack[16384]; float * tmp = n <= 16384 ? tmp_stack : (float *)malloc(n * sizeof(float));
+    GGML_ASSERT(tmp != NULL);
+    ggml_get_type_traits(type)->to_float(vx, tmp, n);
+    const float * y = (const float *)vy;
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        sum += tmp[i] * y[i];
+    }
+    if (tmp != tmp_stack) free(tmp);
+    *s = sum;
+}
+#define GGML_ROCMFP_VEC_DOT_F32(NAME, TYPE)                                              \
+    static void NAME(int n, float * GGML_RESTRICT s, size_t bs,                          \
+                     const void * GGML_RESTRICT vx, size_t bx,                           \
+                     const void * GGML_RESTRICT vy, size_t by, int nrc) {                \
+        GGML_ASSERT(nrc == 1);                                                           \
+        GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);             \
+        ggml_vec_dot_rocmfp_f32_impl(TYPE, n, s, vx, vy);                                \
+    }
+GGML_ROCMFP_VEC_DOT_F32(ggml_vec_dot_rocmfp4_f32,      GGML_TYPE_Q4_0_ROCMFP4)
+GGML_ROCMFP_VEC_DOT_F32(ggml_vec_dot_rocmfp4_fast_f32, GGML_TYPE_Q4_0_ROCMFP4_FAST)
+GGML_ROCMFP_VEC_DOT_F32(ggml_vec_dot_rocmfp6_f32,      GGML_TYPE_Q6_0_ROCMFPX)
+GGML_ROCMFP_VEC_DOT_F32(ggml_vec_dot_rocmfp8_f32,      GGML_TYPE_Q8_0_ROCMFPX)
+GGML_ROCMFP_VEC_DOT_F32(ggml_vec_dot_rocmfp3_f32,      GGML_TYPE_Q3_0_ROCMFPX)
 
 // TurboQuant4 vec_dot: dequantize turboq4 block to f32, then dot with f32 operand.
 static void ggml_vec_dot_turboq4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,

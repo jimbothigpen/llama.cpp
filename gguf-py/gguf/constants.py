@@ -4717,6 +4717,12 @@ class GGMLQuantizationType(IntEnum):
     NVFP4   = 40
     Q1_0    = 41
     WQ3_TCQ = 92  # re-slotted from buun's 46 to match ggml.h (avoids mid-enum renumber)
+    # ROCmFPX AMD-native FP weight quant family (Phase 1). Source: charlie12345/ROCmFPX (MIT).
+    Q4_0_ROCMFP4      = 100
+    Q4_0_ROCMFP4_FAST = 101
+    Q6_0_ROCMFPX      = 102
+    Q8_0_ROCMFPX      = 103
+    Q3_0_ROCMFPX      = 104
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4773,6 +4779,14 @@ class LlamaFileType(IntEnum):
     MOSTLY_NVFP4         = 39  # except 1d tensors
     MOSTLY_Q1_0          = 40  # except 1d tensors
     MOSTLY_WQ3_TCQ       = 59  # except 1d tensors (TCQ 3-bit weight, k=3 L=10 + FWHT)
+
+    # ROCmFPX AMD-native FP weight quant family (Phase 1). Source: charlie12345/ROCmFPX (MIT).
+    # Slots match GGML_TYPE_*/LLAMA_FTYPE_MOSTLY_* on the C side 1:1 (100-104).
+    MOSTLY_Q4_0_ROCMFP4      = 100  # except 1d tensors (4.50 bpw)
+    MOSTLY_Q4_0_ROCMFP4_FAST = 101  # except 1d tensors (4.25 bpw)
+    MOSTLY_Q6_0_ROCMFPX      = 102  # except 1d tensors (6.50 bpw)
+    MOSTLY_Q8_0_ROCMFPX      = 103  # except 1d tensors (8.25 bpw)
+    MOSTLY_Q3_0_ROCMFPX      = 104  # except 1d tensors (3.50 bpw)
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -4899,6 +4913,12 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.WQ3_TCQ: (128, 52),
+    # ROCmFPX AMD-native FP weight quant family (Phase 1). block_size=32 for all.
+    GGMLQuantizationType.Q4_0_ROCMFP4:      (32, 16 + 2),   # 4.50 bpw: 16 packed nibbles + 2 UE4M3 scales
+    GGMLQuantizationType.Q4_0_ROCMFP4_FAST: (32, 16 + 1),   # 4.25 bpw: 16 packed nibbles + 1 UE4M3 scale
+    GGMLQuantizationType.Q6_0_ROCMFPX:      (32, 24 + 2),   # 6.50 bpw: 24 packed 6-bit bytes + 2 UE4M3 scales
+    GGMLQuantizationType.Q8_0_ROCMFPX:      (32, 32 + 1),   # 8.25 bpw: 32 signed int8 + 1 UE4M3 scale
+    GGMLQuantizationType.Q3_0_ROCMFPX:      (32, 12 + 2),   # 3.50 bpw: 12 packed 3-bit bytes + 2 UE4M3 scales
 }
 
 

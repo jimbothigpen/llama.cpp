@@ -52,6 +52,12 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "WHT6_0",   LLAMA_FTYPE_MOSTLY_WHT6_0,   " 7.00 bpw WHT-rotated",             },
     { "WHT8_0",   LLAMA_FTYPE_MOSTLY_WHT8_0,   " 9.00 bpw WHT-rotated",             },
     { "WQ3_TCQ",  LLAMA_FTYPE_MOSTLY_WQ3_TCQ,  " 3.25 bpw TCQ weight (k=3 L=10)",   },
+    // ROCmFPX AMD-native FP weight quant family (Phase 1 CPU import). Source: charlie12345/ROCmFPX (MIT).
+    { "Q4_0_ROCMFP4",      LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4,      " 4.50 bpw ROCmFP4 dual-scale",         },
+    { "Q4_0_ROCMFP4_FAST", LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST, " 4.25 bpw ROCmFP4 fast single-scale",  },
+    { "Q6_0_ROCMFPX",      LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX,      " 6.50 bpw ROCmFP6",                    },
+    { "Q8_0_ROCMFPX",      LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX,      " 8.25 bpw ROCmFP8",                    },
+    { "Q3_0_ROCMFPX",      LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX,      " 3.50 bpw ROCmFP3",                    },
     { "IQ2_K",    LLAMA_FTYPE_MOSTLY_IQ2_K,    " 2.375 bpw ik_llama 2-bit",         },
     { "IQ3_K",    LLAMA_FTYPE_MOSTLY_IQ3_K,    " 3.4375 bpw ik_llama 3-bit",        },
     { "IQ4_K",    LLAMA_FTYPE_MOSTLY_IQ4_K,    " 4.50 bpw ik_llama 4-bit",          },

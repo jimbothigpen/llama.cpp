@@ -5011,6 +5011,12 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_WHT6_0:
         case GGML_TYPE_WHT8_0:
         case GGML_TYPE_WQ3_TCQ:
+        // ROCmFPX AMD-native FP weight quant family (Phase 1 CPU)
+        case GGML_TYPE_Q4_0_ROCMFP4:
+        case GGML_TYPE_Q4_0_ROCMFP4_FAST:
+        case GGML_TYPE_Q6_0_ROCMFPX:
+        case GGML_TYPE_Q8_0_ROCMFPX:
+        case GGML_TYPE_Q3_0_ROCMFPX:
         case GGML_TYPE_TURBOQ2_0:
         case GGML_TYPE_TURBOQ3_0:
         case GGML_TYPE_TURBOQ4_0:
